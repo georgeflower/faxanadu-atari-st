@@ -112,6 +112,10 @@ Run: `make`, `make check`, `python3 tools/hatari_shot.py --tos etos512us.img` (c
 - `|` starts a comment in GNU as for m68k. Register names are `%d0`, `%a0`.
 - More in the Zelda port's `AGENTS.md`; copy what applies.
 
+## 7b. Display decision (Göran, Nov 2026)
+
+The whole NES picture on screen: **240 lines, HUD on top**, by opening the ST's borders (overscan), not by cropping. On a PAL STF/STFM the top and bottom borders give about 270 lines, so 240 fit. Opening them is cheap for the CPU (a few timed writes per frame, from timer interrupts). **Opening the left and right borders too** (lines about 416 pixels / 230 bytes wide) costs timed writes on every scanline and 230-byte lines (240 lines = 55 KB a screen), which eats much of the frame budget; Göran wants the sides filled as well, so it stays a goal, to be measured after top and bottom work. What would fill the side areas is not decided. A 320-wide screen is the safe base; overscan must be tried on the real 520 STFM and on Hatari's cycle-exact mode (`--trace video_border_v,video_border_h` logs when a border is opened).
+
 ## 8. Deliberate differences from the ROM
 
 None yet.
