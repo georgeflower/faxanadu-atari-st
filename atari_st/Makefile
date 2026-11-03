@@ -47,7 +47,7 @@ $(PRG): $(BIN) $(TOOLS_DIR)/make_prg.py
 disk: all
 	$(PYTHON) $(TOOLS_DIR)/make_disk.py $(DISK) $(PRG)
 
-check: all overscan
+check: all
 	$(PYTHON) -m unittest discover -s tests -p 'test_*.py'
 	$(PYTHON) $(TOOLS_DIR)/make_prg.py --check $(PRG)
 
