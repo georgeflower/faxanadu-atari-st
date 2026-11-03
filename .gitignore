@@ -11,3 +11,4 @@ src/SRAM.asm
 ext/
 atari_st/build/
 __pycache__/
+node_modules/
