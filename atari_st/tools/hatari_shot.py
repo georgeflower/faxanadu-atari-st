@@ -8,6 +8,9 @@ palette index and the palette), which a golden check can compare.
     hatari_shot.py --tos etos512us.img --prg build/FAXANADU.PRG --out build/screen.png [--vbls 600] [--ram 0]
 
 --ram is Hatari's --memsize: 0 is the 512 KB of a 520 STFM, 1 is 1 MB. Without --tos the TOS environment variable is used.
+The EmuTOS image decides the frequency: the German one (etos512de.img) starts at 50 Hz like a PAL machine, the US one at 60 Hz.
+--trace takes Hatari's trace flags, e.g. video_border_v (`detect remove bottom` when the bottom border opens) or video_sync (every write to
+$FF820A with its line and cycle); the log is build/shots/hatari.log.
 """
 from __future__ import annotations
 
@@ -72,12 +75,12 @@ def read_palette(log: str) -> list[int]:
     return [(values[i] << 8) | values[i + 1] for i in range(0, 32, 2)]
 
 
-def decode_screen(ram: bytes, base: int) -> list[list[int]]:
-    screen = ram[base : base + SCREEN_BYTES]
-    if len(screen) < SCREEN_BYTES:
+def decode_screen(ram: bytes, base: int, lines: int = SCREEN_HEIGHT) -> list[list[int]]:
+    screen = ram[base : base + lines * SCREEN_STRIDE]
+    if len(screen) < lines * SCREEN_STRIDE:
         raise SystemExit(f"Video base {base:#08x} is outside the RAM dump")
     rows = []
-    for y in range(SCREEN_HEIGHT):
+    for y in range(lines):
         offset = y * SCREEN_STRIDE
         row = []
         for group in range(SCREEN_WIDTH // 16):
@@ -122,6 +125,7 @@ def main() -> None:
     parser.add_argument("--hatari", default=shutil.which("hatari") or "hatari")
     parser.add_argument("--vbls", type=int, default=600, help="the VBL to capture at (TOS takes about 300 to boot)")
     parser.add_argument("--ram", default="0", help="Hatari --memsize (0 = 512 KB)")
+    parser.add_argument("--lines", type=int, default=SCREEN_HEIGHT, help="lines of video memory to draw (240 for the overscan screen)")
     parser.add_argument("--work", type=Path, default=project / "build" / "shots")
     parser.add_argument("--trace", default="", help="Hatari trace flags, e.g. os_base,cpu_exception")
     args = parser.parse_args()
@@ -146,7 +150,7 @@ def main() -> None:
 
     base = video_base(log)
     palette_words = read_palette(log)
-    rows = decode_screen(ram_path.read_bytes(), base)
+    rows = decode_screen(ram_path.read_bytes(), base, args.lines)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     write_png(args.out, rows, palette_words)
     print("PALETTE " + " ".join(f"{w:03x}" for w in palette_words))

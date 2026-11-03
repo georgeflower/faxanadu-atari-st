@@ -80,10 +80,11 @@ The iNES header of the Europe ROM: NES 2.0, mapper 1 (MMC1), 16 PRG banks (256 K
 ../ext/                 your ROM (gitignored)
 Makefile, link.ld       build: as -> ld -> objcopy -> PRG; `make check`, `make disk`
 src/main.s              the start-up check (will become the game)
+src/overscan_test.s     the overscan test: a 240-line screen with the bottom border open (`make overscan`)
 tools/make_prg.py       the .PRG header (a flat image, no relocation: PC-relative code only)
 tools/make_disk.py      a 720 KB .st image for the Gotek
 tools/check_reach.py    the 16-bit reach check
-tools/hatari_shot.py    runs a PRG headless in Hatari and renders the screen to a PNG; prints a frame hash
+tools/hatari_shot.py    runs a PRG headless (--trace for Hatari trace flags, --lines 240 for the overscan screen) in Hatari and renders the screen to a PNG; prints a frame hash
 tools/rom_diff.py       Europe ROM against the US build, counts only
 tools/ram_labels.py     the disassembly's RAM labels as JSON (names and addresses only)
 tools/faxanadu_rom.py   tables by label name from your ROM (labels cached, no ROM data)
@@ -98,7 +99,7 @@ build/                  output (gitignored)
 
 ROM harness: `cd tools/refnes && npm install`, `python3 tools/ram_labels.py`, then `node scroll_probe.mjs RIGHT`. The labels were checked against the running ROM: player position and screen, area, scroll direction, scroll X and the neighbour screens all read right. In the Europe ROM the bank-call variables in zero page sit four bytes higher than in the disassembly (`BankedCallSetup_Saved*`); nothing else in zero page or RAM was seen to differ.
 
-Toolchain: `binutils-m68k-linux-gnu` (`m68k-linux-gnu-as -m68000`), `cc65`, Hatari (2.4 and up), `pip install machine68k`, Python 3. A TOS image is needed for Hatari: EmuTOS 512k works (`--tos etos512us.img`, or the `TOS` environment variable). **Never commit a TOS image.**
+Toolchain: `binutils-m68k-linux-gnu` (`m68k-linux-gnu-as -m68000`), `cc65`, Hatari (2.4 and up), `pip install machine68k`, Python 3. A TOS image is needed for Hatari: EmuTOS 512k works (`--tos etos512us.img`, or the `TOS` environment variable). The German image (`etos512de.img`, `TOS_PAL` for the overscan test) starts at 50 Hz like a PAL machine; the US one starts at 60 Hz. **Never commit a TOS image.**
 
 Run: `make`, `make check`, `python3 tools/hatari_shot.py --tos etos512us.img` (captures at VBL 600; TOS takes about 300 to boot). Hatari is run with `--memsize 0` = 512 KB, like Göran's 520 STFM.
 
@@ -114,7 +115,7 @@ Run: `make`, `make check`, `python3 tools/hatari_shot.py --tos etos512us.img` (c
 
 ## 7b. Display decision (Göran, Nov 2026)
 
-The whole NES picture on screen: **240 lines, HUD on top**, by opening the ST's borders (overscan), not by cropping. On a PAL STF/STFM the top and bottom borders give about 270 lines, so 240 fit. Opening them is cheap for the CPU (a few timed writes per frame, from timer interrupts). **Opening the left and right borders too** (lines about 416 pixels / 230 bytes wide) costs timed writes on every scanline and 230-byte lines (240 lines = 55 KB a screen), which eats much of the frame budget; Göran wants the sides filled as well, so it stays a goal, to be measured after top and bottom work. What would fill the side areas is not decided. A 320-wide screen is the safe base; overscan must be tried on the real 520 STFM and on Hatari's cycle-exact mode (`--trace video_border_v,video_border_h` logs when a border is opened).
+The whole NES picture on screen: **240 lines, HUD on top**, by opening the ST's borders (overscan), not by cropping. On a PAL STF/STFM the top and bottom borders give about 270 lines, so 240 fit. Opening them is cheap for the CPU (a few timed writes per frame, from timer interrupts). **Opening the left and right borders too** (lines about 416 pixels / 230 bytes wide) costs timed writes on every scanline and 230-byte lines (240 lines = 55 KB a screen), which eats much of the frame budget; Göran wants the sides filled as well, so it stays a goal, to be measured after top and bottom work. What would fill the side areas is not decided. **Bottom border, found in Hatari (cycle-exact, PAL), `src/overscan_test.s`:** removing only the bottom border gives lines 63 to about 310, so about 247 lines, enough for 240 without touching the top border. A timer B interrupt (event count, data 199) fires at the end of line 261 (cycle 504); the handler writes 0 (60 Hz) to `$FF820A` at once and 2 (50 Hz) about 500 cycles later (a `dbra` loop of 50, i.e. on line 263 at cycle 120). Hatari's rule (`video.c`): 60 Hz must be written on or before line 262 before cycle 502, and the write back to 50 Hz must come after cycle 502 of line 262; any wait of 45 to 60 loops works, 30 does not. The vertical blank re-arms timer B each frame; the program keeps TOS's own vertical blank vector and restores everything on exit. Hatari reports `detect remove bottom` once a frame. The shifter then fetches about 248 lines, so the screen buffer is 248 lines (39,680 bytes). **Not yet tried on the real 520 STFM;** the monitor's visible area (about 270 lines) and a real STF's exact cycle window may need other values (`make overscan TB_LINE=.. TB_NOPS=.. TB_WAIT=..`). A 320-wide screen is the safe base; overscan must be tried on the real 520 STFM and on Hatari's cycle-exact mode (`--trace video_border_v,video_border_h` logs when a border is opened).
 
 ## 8. Deliberate differences from the ROM
 

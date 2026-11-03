@@ -47,9 +47,23 @@ $(PRG): $(BIN) $(TOOLS_DIR)/make_prg.py
 disk: all
 	$(PYTHON) $(TOOLS_DIR)/make_disk.py $(DISK) $(PRG)
 
-check: all
+check: all overscan
 	$(PYTHON) -m unittest discover -s tests -p 'test_*.py'
 	$(PYTHON) $(TOOLS_DIR)/make_prg.py --check $(PRG)
 
 clean:
 	rm -rf $(BUILD_DIR)
+
+# The overscan test program (a second PRG from src/overscan_test.s). TB_LINE and TB_NOPS tune the timed writes:
+#   make overscan TB_LINE=199 TB_NOPS=0 TB_WAIT=50
+TB_LINE ?= 199
+TB_NOPS ?= 0
+TB_WAIT ?= 50
+OVERSCAN_PRG := $(BUILD_DIR)/OVERSCAN.PRG
+.PHONY: overscan
+overscan:
+	@mkdir -p $(BUILD_DIR)
+	$(AS) -m68000 --defsym TB_LINE=$(TB_LINE) --defsym TB_NOPS=$(TB_NOPS) --defsym TB_WAIT=$(TB_WAIT) -al=$(BUILD_DIR)/overscan.lst -o $(BUILD_DIR)/overscan.o $(SRC_DIR)/overscan_test.s
+	$(LD) $(LDFLAGS) -o $(BUILD_DIR)/overscan.elf $(BUILD_DIR)/overscan.o
+	$(OBJCOPY) -O binary $(BUILD_DIR)/overscan.elf $(BUILD_DIR)/overscan.bin
+	$(PYTHON) $(TOOLS_DIR)/make_prg.py $(BUILD_DIR)/overscan.bin $(OVERSCAN_PRG)
