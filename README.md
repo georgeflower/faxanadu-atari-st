@@ -1,4 +1,4 @@
-Faxanadu for NES Disassembly
+Faxanadu for Atari ST
 ============================
 
 [Faxanadu](https://www.mobygames.com/game/7331/faxanadu/) is a criminally
