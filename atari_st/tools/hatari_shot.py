@@ -126,6 +126,7 @@ def main() -> None:
     parser.add_argument("--vbls", type=int, default=600, help="the VBL to capture at (TOS takes about 300 to boot)")
     parser.add_argument("--ram", default="0", help="Hatari --memsize (0 = 512 KB)")
     parser.add_argument("--lines", type=int, default=SCREEN_HEIGHT, help="lines of video memory to draw (240 for the overscan screen)")
+    parser.add_argument("--rows", type=Path, help="also write the picture as raw colour numbers (one byte a pixel, 320 a line) for a test to compare")
     parser.add_argument("--work", type=Path, default=project / "build" / "shots")
     parser.add_argument("--trace", default="", help="Hatari trace flags, e.g. os_base,cpu_exception")
     args = parser.parse_args()
@@ -153,6 +154,8 @@ def main() -> None:
     rows = decode_screen(ram_path.read_bytes(), base, args.lines)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     write_png(args.out, rows, palette_words)
+    if args.rows:
+        args.rows.write_bytes(b"".join(bytes(r) for r in rows))
     print("PALETTE " + " ".join(f"{w:03x}" for w in palette_words))
     print("FRAMEHASH " + frame_hash(rows, palette_words))
     print(f"video base {base:#08x}, wrote {args.out}")

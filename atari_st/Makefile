@@ -69,3 +69,21 @@ overscan:
 	$(LD) $(LDFLAGS) -o $(BUILD_DIR)/overscan.elf $(BUILD_DIR)/overscan.o
 	$(OBJCOPY) -O binary $(BUILD_DIR)/overscan.elf $(BUILD_DIR)/overscan.bin
 	$(PYTHON) $(TOOLS_DIR)/make_prg.py $(BUILD_DIR)/overscan.bin $(OVERSCAN_PRG)
+
+# The viewer: one screen of the game on the ST, from your ROM (ext/Faxanadu_Europe.nes).
+#   make viewer AREA=0 SCREEN=1 CAMERA=40
+AREA ?= 0
+SCREEN ?= 1
+CAMERA ?= 40
+ROM_FILE ?= ../ext/Faxanadu_Europe.nes
+GENERATED := $(BUILD_DIR)/generated
+VIEWER_PRG := $(BUILD_DIR)/VIEWER.PRG
+.PHONY: viewer
+viewer:
+	@mkdir -p $(BUILD_DIR)
+	$(PYTHON) $(TOOLS_DIR)/build_assets.py --rom $(ROM_FILE) --area $(AREA) --screen $(SCREEN) --camera $(CAMERA) --out $(GENERATED)
+	$(AS) -m68000 -I $(GENERATED) -I $(SRC_DIR) -al=$(BUILD_DIR)/viewer.lst -o $(BUILD_DIR)/viewer.o $(SRC_DIR)/viewer.s
+	$(LD) $(LDFLAGS) -o $(BUILD_DIR)/viewer.elf $(BUILD_DIR)/viewer.o
+	$(PYTHON) $(TOOLS_DIR)/check_reach.py --nm $(NM) --listing $(BUILD_DIR)/viewer.lst $(BUILD_DIR)/viewer.elf $(SRC_DIR)/viewer.s
+	$(OBJCOPY) -O binary $(BUILD_DIR)/viewer.elf $(BUILD_DIR)/viewer.bin
+	$(PYTHON) $(TOOLS_DIR)/make_prg.py $(BUILD_DIR)/viewer.bin $(VIEWER_PRG)

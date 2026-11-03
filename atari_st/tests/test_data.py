@@ -78,6 +78,16 @@ class DecoderTests(unittest.TestCase):
                         one_way += 1
         self.assertEqual(one_way, 7)
 
+    def test_every_palette_set_fits_sixteen_st_colours_with_nearly_no_change(self) -> None:
+        import st_convert as sc
+
+        for index in range(28):
+            plan = sc.plan_for_set(self.rom, index)
+            self.assertLessEqual(len(plan.colours), 16, f"palette set {index}")
+            self.assertEqual(plan.colours[0], (0, 0, 0))
+            for _small, _big, distance in plan.merged:
+                self.assertLessEqual(distance, 2, f"palette set {index}: two colours {distance} apart were merged")
+
     def test_the_last_rows_of_the_screen_buffer_are_zero(self) -> None:
         a = self.fm.area(self.rom, 0)
         self.assertEqual(self.fm.decode_screen(self.rom, a, 1)[0xF0:], bytes(16))

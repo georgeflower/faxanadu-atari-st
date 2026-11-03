@@ -1,0 +1,153 @@
+"""NES to Atari ST: colours and tiles.
+
+The ST shows 16 colours at once; a Faxanadu screen has four background palettes and four sprite palettes of four NES colours
+each, 9 to 19 different colours after rounding to the ST's 3 bits a channel. `palette_plan` makes one 16-colour palette per palette set (the colours of the
+set's background and sprite palettes, with the closest pairs merged when there are more than 16). Block images are
+ST planar: a 16x16 block is 16 lines of four plane words, 128 bytes.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import faxanadu_maps as fm
+import faxanadu_rom as fr
+import render_screen as rs
+from nes_palette import NES_RGB
+
+BLOCK_BYTES = 128
+NO_IMAGE = 0xFFFF
+
+
+def st_rgb(nes_colour: int) -> tuple[int, int, int]:
+    """A NES master colour as the ST's three bits a channel."""
+    r, g, b = NES_RGB[nes_colour & 0x3F]
+    return r >> 5, g >> 5, b >> 5
+
+
+def st_word(rgb: tuple[int, int, int]) -> int:
+    return (rgb[0] << 8) | (rgb[1] << 4) | rgb[2]
+
+
+@dataclass
+class PalettePlan:
+    colours: list[tuple[int, int, int]]          # the 16 ST colours (r, g, b 0-7), slot 0 is black
+    slot: dict[int, int]                         # NES colour number -> slot
+    merged: list[tuple[int, int, int]]           # (nes colour, nes colour it was merged into, distance squared)
+
+    def words(self) -> bytes:
+        padded = self.colours + [(0, 0, 0)] * (16 - len(self.colours))
+        return b"".join(st_word(c).to_bytes(2, "big") for c in padded)
+
+
+def palette_set(rom: fr.Rom, index: int, sprites: str = "outside") -> tuple[list[list[int]], list[list[int]]]:
+    """(four background palettes, four sprite palettes) of NES colour numbers, as the game loads them (bank 11)."""
+    b11 = rom.prg(11)
+    bg = [list(b11[index * 16 + 4 * i:index * 16 + 4 * i + 4]) for i in range(4)]
+    base = {"outside": 0x1C0, "inside": 0x1D0}[sprites]
+    sp = [list(b11[base + 4 * i:base + 4 * i + 4]) for i in range(4)]
+    return bg, sp
+
+
+def palette_plan(nes_colours: set[int]) -> PalettePlan:
+    """One slot for each different ST colour; black first. Over 16, the two closest colours are merged until 16 are left
+    (the colour that is used by fewer NES entries goes into the other)."""
+    by_rgb: dict[tuple[int, int, int], list[int]] = {}
+    for c in sorted(nes_colours):
+        by_rgb.setdefault(st_rgb(c), []).append(c)
+    black = st_rgb(0x0F)
+    by_rgb.setdefault(black, [])
+    merged: list[tuple[int, int, int]] = []
+
+    def dist(a: tuple[int, int, int], b: tuple[int, int, int]) -> int:
+        return sum((x - y) ** 2 for x, y in zip(a, b))
+
+    while len(by_rgb) > 16:
+        keys = [k for k in by_rgb if k != black]
+        a, b = min(((x, y) for i, x in enumerate(keys) for y in keys[i + 1:]), key=lambda p: dist(*p))
+        small, big = (a, b) if len(by_rgb[a]) <= len(by_rgb[b]) else (b, a)
+        merged.append((by_rgb[small][0] if by_rgb[small] else -1, by_rgb[big][0], dist(small, big)))
+        by_rgb[big] += by_rgb.pop(small)
+    order = [black] + sorted(k for k in by_rgb if k != black)
+    slot = {c: i for i, k in enumerate(order) for c in by_rgb[k]}
+    return PalettePlan(order, slot, merged)
+
+
+def plan_for_set(rom: fr.Rom, index: int, sprites: str = "outside") -> PalettePlan:
+    bg, sp = palette_set(rom, index, sprites)
+    return palette_plan({c for row in bg + sp for c in row})
+
+
+def planar_line(pixels: list[int]) -> bytes:
+    """Sixteen slot numbers (0-15) as four plane words, plane 0 first, leftmost pixel in the top bit."""
+    out = bytearray()
+    for plane in range(4):
+        word = 0
+        for px in pixels:
+            word = (word << 1) | ((px >> plane) & 1)
+        out += word.to_bytes(2, "big")
+    return bytes(out)
+
+
+def block_pixels(rom: fr.Rom, a: fm.Area, tiles: dict, bg: list[list[int]], plan: PalettePlan, block: int, corner: int) -> list[list[int]]:
+    """A block's 16x16 pixels as slot numbers, drawn with the palette of the given corner."""
+    attr = rom.prg(3)[a.attributes + block]
+    palette = bg[(attr >> (2 * corner)) & 3]
+    out = [[0] * 16 for _ in range(16)]
+    for q, tile_id in enumerate(fm.block_tiles(rom, a, block)):
+        px = tiles.get(tile_id, rs.BLANK_TILE)
+        for y in range(8):
+            for x in range(8):
+                out[(q >> 1) * 8 + y][(q & 1) * 8 + x] = plan.slot[palette[px[y][x]] & 0x3F]
+    return out
+
+
+def block_image(pixels: list[list[int]]) -> bytes:
+    return b"".join(planar_line(row) for row in pixels)
+
+
+def used_block_corners(rom: fr.Rom, a: fm.Area, screens: list[int] | None = None) -> list[tuple[int, int]]:
+    """The (block id, corner) pairs the area's screens use (the corner is the parity of the block's column and row)."""
+    used = set()
+    for s in screens if screens is not None else range(fm.screen_count(rom, a)):
+        blocks = fm.decode_screen(rom, a, s)
+        for r in range(fm.SCREEN_ROWS):
+            for c in range(fm.SCREEN_COLS):
+                used.add((blocks[r * 16 + c], (c & 1) | ((r & 1) << 1)))
+    return sorted(used)
+
+
+def build_area_blocks(rom: fr.Rom, area_index: int, palette_index: int | None = None, screens: list[int] | None = None):
+    """(plan, image table, images): `images` is the list of 128-byte block images, `table[id * 4 + corner]` the number of the
+    image or NO_IMAGE."""
+    a = fm.area(rom, area_index)
+    pal = a.palette_index if palette_index is None else palette_index
+    bg, _ = palette_set(rom, pal)
+    plan = plan_for_set(rom, pal)
+    tiles = rs.tileset(rom, a.tiles_index)
+    table = [NO_IMAGE] * 1024
+    images: list[bytes] = []
+    for block, corner in used_block_corners(rom, a, screens):
+        table[block * 4 + corner] = len(images)
+        images.append(block_image(block_pixels(rom, a, tiles, bg, plan, block, corner)))
+    return plan, table, images
+
+
+def expected_window(rom: fr.Rom, area_index: int, screen: int, camera: int, lines: int, palette_index: int | None = None,
+                    screens: list[int] | None = None) -> list[list[int]]:
+    """What the ST should show of a screen: `lines` lines of the 208-line playfield from line `camera`, 256 pixels wide, as slot numbers."""
+    a = fm.area(rom, area_index)
+    pal = a.palette_index if palette_index is None else palette_index
+    bg, _ = palette_set(rom, pal)
+    plan = plan_for_set(rom, pal)
+    tiles = rs.tileset(rom, a.tiles_index)
+    blocks = fm.decode_screen(rom, a, screen)
+    rows = []
+    for y in range(lines):
+        line = camera + y
+        r, ly = line >> 4, line & 15
+        row: list[int] = []
+        for c in range(16):
+            px = block_pixels(rom, a, tiles, bg, plan, blocks[r * 16 + c], (c & 1) | ((r & 1) << 1))
+            row += px[ly]
+        rows.append(row)
+    return rows

@@ -10,7 +10,7 @@ It follows the Zelda 1 port (`georgeflower/zelda1-atarist`): same method, same t
 
 The rest of the repository is chipx86's labelled disassembly of the **US** version (`src/*.asm`, builds with `make` in the root). It is the **spec for every behaviour**: when you need a number (speed, timer, damage, tile id, table), read it there, never guess.
 
-Status: set-up, the ROM harness and the map data decoder. `src/main.s` is a start-up check that shows 16 colour bars. What comes next is in `PLAN.md`.
+Status: set-up, the ROM harness, the map data decoder and a viewer that draws one screen on the ST. `src/main.s` is a start-up check that shows 16 colour bars. What comes next is in `PLAN.md`.
 
 ## 2. Rules
 
@@ -73,6 +73,12 @@ The iNES header of the Europe ROM: NES 2.0, mapper 1 (MMC1), 16 PRG banks (256 K
 - **HUD and letter tiles**: 60 tiles at `HUD_TILES_START` in bank 10 are written to the background pattern table's first 60 tiles. They equal the game's CHR RAM except tiles 12 and 13, the bar tiles, which the game draws into CHR RAM as the bars fill.
 - Still to find: the HUD's layout and palette, the sprite tiles (banks 6-8, with the sprite info and palettes in bank 11) and the per-screen sprite placements, what the other property values mean, doors into buildings, text (banks 12 and 13 differ in Europe).
 
+## 5c. Colours and the first picture on the ST [verified]
+
+- **16 colours are enough.** A palette set (four background and four sprite palettes of four NES colours, `tools/st_convert.py`) has 9 to 19 different colours after rounding to the ST's 3 bits a channel. Merging the closest pairs down to 16 changes at most three colours, each by one step in one or two channels (squared distance 2 at most), in all 28 sets. So **one 16-colour palette per palette set**, slot 0 black, no raster tricks. Enemy sprite palettes that the screen loads on top (`Screen_LoadSpritePalette`) are not counted yet.
+- **Block images**: a 16x16 block as 16 lines of four plane words (128 bytes), made for each (block id, corner) pair a screen uses, because the attribute byte gives a block a different palette in each corner (parity of column and row). Eolis screen 1 needs 59 images (7.5 KB); all nine Eolis screens 282 (36 KB).
+- **The viewer** (`make viewer AREA=0 SCREEN=1 CAMERA=40`, `src/viewer.s`, data from `tools/build_assets.py` into `build/generated/`) draws the playfield window under an empty HUD strip, 256 pixels wide in the middle of 320. It equals the converter's expected picture pixel for pixel in Hatari (`tests/test_viewer.py`, needs a TOS image in `TOS`). It is a plain loop (block by block, line by line), not tuned.
+
 ## 6. Tools and layout
 
 ```
@@ -92,6 +98,9 @@ tools/faxanadu_maps.py  areas, screens, blocks, neighbours, block properties, do
 tools/faxanadu_gfx.py   the HUD and letter tiles
 tools/render_screen.py  draw a screen from the ROM's data; compare with a jsnes picture
 tools/nes_palette.py    the 64 NES colours as jsnes shows them
+tools/st_convert.py     NES to ST: one 16-colour palette per palette set, planar block images
+tools/build_assets.py   the ST data of one screen from the ROM, for the viewer
+src/viewer.s            draws one screen on the ST (`make viewer`)
 tools/refnes/           the jsnes ROM harness: read RAM by label, press buttons, take pictures, probes (see its README)
 tests/                  unit tests; test_start.py runs main.s on machine68k with GEMDOS stubs
 build/                  output (gitignored)
