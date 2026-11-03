@@ -164,6 +164,49 @@ class PictureTests(unittest.TestCase):
         self.assertEqual(fm.door_destination(rom, a, door)[0], state["screen"])
         self.assertEqual(((door.start & 0x0F) << 4, door.start & 0xF0), (state["x"], state["y"]))
 
+    def test_the_hud_layout_and_bars_equal_the_games_own_drawing(self) -> None:
+        import faxanadu_gfx as gfx
+        import faxanadu_rom as fr
+
+        subprocess.run([sys.executable, str(ROOT / "tools" / "ram_labels.py")], check=True, capture_output=True)
+        rom = fr.Rom(ROM)
+        for hp, mp, exp, gold, secs in ((16, 0, 0, 0, 0), (80, 80, 1, 1, 59), (35, 13, 4242, 1234567, 7), (7, 0, 65535, 16777215, 99)):
+            out = subprocess.run(["node", "hudshot.mjs", *map(str, (hp, mp, exp, gold, secs))], cwd=ROOT / "tools" / "refnes",
+                                 check=True, capture_output=True, text=True, timeout=300).stdout
+            got = json.loads(out.strip().splitlines()[-1])
+            self.assertEqual(got["rows"], gfx.hud_layout(hp, mp, exp, gold, secs)[2:4], (hp, mp, exp, gold, secs))
+            self.assertEqual(bytes(got["power"]), gfx.partial_tile(rom, hp, 0))
+            self.assertEqual(bytes(got["magic"]), gfx.partial_tile(rom, mp, 1))
+
+    def test_the_hud_picture_equals_jsnes(self) -> None:
+        import faxanadu_gfx as gfx
+        import faxanadu_rom as fr
+        import render_screen as rs
+        import st_convert as sc
+        from nes_palette import NES_RGB
+
+        state, prefix = self.shot("town")
+        rom = fr.Rom(ROM)
+        bg, _ = sc.palette_set(rom, state["palette"])
+        palette = bg[sc.ui_palette_row(rom, state["palette"])]
+        layout = gfx.hud_layout(16, 0, 0, 0, 0)
+        tiles = [rs.decode_tile(t) for t in gfx.hud_tile_data(rom, 16, 0)]
+        ref = rs.read_ppm(Path(prefix + ".ppm"))
+        covered = set()
+        for y, _t, _a, x in json.loads(Path(prefix + ".oam.json").read_text()):
+            if y < 0xEF:
+                covered |= {(x + dx, y + 1 + dy) for dx in range(8) for dy in range(8)}
+        bad = 0
+        for r in range(4):
+            for c in range(32):
+                px = tiles[layout[r][c]] if layout[r][c] < len(tiles) else rs.BLANK_TILE
+                for y in range(8):
+                    for x in range(8):
+                        pos = (c * 8 + x, r * 8 + y)
+                        if NES_RGB[palette[px[y][x]] & 0x3F] != ref[pos[1]][pos[0]] and pos not in covered:
+                            bad += 1
+        self.assertEqual(bad, 0)
+
     def test_eolis_screen_1(self) -> None:
         self.check("town", 1)
 

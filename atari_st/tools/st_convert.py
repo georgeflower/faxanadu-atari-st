@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import faxanadu_gfx as gfx
 import faxanadu_maps as fm
 import faxanadu_rom as fr
 import render_screen as rs
@@ -151,3 +152,67 @@ def expected_window(rom: fr.Rom, area_index: int, screen: int, camera: int, line
             row += px[ly]
         rows.append(row)
     return rows
+
+
+# ---------------------------------------------------------------------------------------------------------------------- HUD
+HUD_TILES_ST = 64
+HUD_START = dict(hp=16, mp=0, experience=0, gold=0, seconds=0)     # the game's state at the start of a new game
+
+
+def ui_palette_row(rom: fr.Rom, palette_index: int) -> int:
+    """Which of the four background palettes the HUD is drawn with (`PALETTE_INDEX_TO_UI_BG_ATTRIBUTE_INDEX`, bank 11)."""
+    return rom.prg(11)[0x1F0 + palette_index]
+
+
+def hud_tile_images(rom: fr.Rom, palette_index: int, plan: PalettePlan, hp: int, mp: int) -> bytes:
+    """The HUD tiles for the ST: 8 lines of four plane bytes (32 bytes a tile), in the set's HUD palette. The 60 tiles of bank 10 are
+    followed by four blank ones: the item box uses tiles $3C-$3F for the item's picture, which is blank when no item is selected."""
+    bg, _ = palette_set(rom, palette_index)
+    palette = bg[ui_palette_row(rom, palette_index)]
+    out = bytearray()
+    for raw in gfx.hud_tile_data(rom, hp, mp):
+        px = rs.decode_tile(raw)
+        for y in range(8):
+            slots = [plan.slot[palette[v] & 0x3F] for v in px[y]]
+            for plane in range(4):
+                byte = 0
+                for slot in slots:
+                    byte = (byte << 1) | ((slot >> plane) & 1)
+                out.append(byte)
+    out += bytes(32 * (HUD_TILES_ST - gfx.HUD_TILE_COUNT))
+    return bytes(out)
+
+
+def hud_pixels(rom: fr.Rom, palette_index: int, plan: PalettePlan, state: dict | None = None) -> list[list[int]]:
+    """The HUD's 32 lines of 256 pixels as slot numbers."""
+    state = state or HUD_START
+    layout = gfx.hud_layout(state["hp"], state["mp"], state["experience"], state["gold"], state["seconds"])
+    bg, _ = palette_set(rom, palette_index)
+    palette = bg[ui_palette_row(rom, palette_index)]
+    tiles = [rs.decode_tile(t) for t in gfx.hud_tile_data(rom, state["hp"], state["mp"])]
+    rows = [[0] * 256 for _ in range(32)]
+    for r in range(4):
+        for c in range(32):
+            tile = layout[r][c]
+            px = tiles[tile] if tile < len(tiles) else rs.BLANK_TILE
+            for y in range(8):
+                for x in range(8):
+                    rows[r * 8 + y][c * 8 + x] = plan.slot[palette[px[y][x]] & 0x3F]
+    return rows
+
+
+def expected_screen(rom: fr.Rom, area_index: int, screen: int, camera: int, palette_index: int | None = None,
+                    state: dict | None = None) -> list[list[int]]:
+    """The whole 320x200 ST screen as slot numbers: the HUD in lines 0-31, then the playfield window of 168 lines, both 256 wide
+    and 32 pixels from the left."""
+    a = fm.area(rom, area_index)
+    pal = a.palette_index if palette_index is None else palette_index
+    plan = plan_for_set(rom, pal)
+    hud = hud_pixels(rom, pal, plan, state)
+    window = expected_window(rom, area_index, screen, camera, 168, palette_index)
+    out = [[0] * 320 for _ in range(200)]
+    for y in range(32):
+        out[y][32:288] = hud[y]
+    for y in range(168):
+        out[32 + y][32:288] = window[y]
+    return out

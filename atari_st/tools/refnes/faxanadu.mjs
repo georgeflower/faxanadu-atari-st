@@ -25,6 +25,9 @@ export class Faxanadu {
     this.nes.loadROM(fs.readFileSync(ROM).toString("binary"));
     this.frames = 0;
     this.labels = fs.existsSync(LABELS) ? JSON.parse(fs.readFileSync(LABELS, "utf8")) : {};
+    // ROM labels [cpu address, bank, file offset] from tools/faxanadu_rom.py (made when that module first runs)
+    const romLabels = path.resolve(here, "../../build/refnes/rom_labels.json");
+    this.romLabels = fs.existsSync(romLabels) ? JSON.parse(fs.readFileSync(romLabels, "utf8")) : {};
   }
   // an address, or a label name from the disassembly
   addr(a) {
@@ -91,4 +94,19 @@ Faxanadu.prototype.oam = function () {
   const m = this.nes.ppu.spriteMem, out = [];
   for (let i = 0; i < 64; i++) out.push([m[i * 4], m[i * 4 + 1], m[i * 4 + 2], m[i * 4 + 3]]);
   return out;
+};
+
+// Run one of the game's own routines (by label in the disassembly, from `labels` of ROM addresses) from where the main loop
+// waits, with the registers given, and let `frames` frames pass so the NMI writes what it queued to the PPU.
+// jsnes keeps PC one byte before the next instruction, which is what a JSR pushes, so pushing PC and jumping to addr - 1 is a call.
+Faxanadu.prototype.call = function (target, regs = {}, frames = 3) {
+  const cpu = this.nes.cpu;
+  const addr = typeof target === "number" ? target : this.romLabels[target][0];
+  cpu.push((cpu.REG_PC >> 8) & 255);
+  cpu.push(cpu.REG_PC & 255);
+  if (regs.a !== undefined) cpu.REG_ACC = regs.a;
+  if (regs.x !== undefined) cpu.REG_X = regs.x;
+  if (regs.y !== undefined) cpu.REG_Y = regs.y;
+  cpu.REG_PC = addr - 1;
+  this.run(frames);
 };

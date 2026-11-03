@@ -33,9 +33,8 @@ class ViewerTests(unittest.TestCase):
         import st_convert as sc
 
         got = self.run_viewer(area, screen, camera)
-        expected = sc.expected_window(fr.Rom(ROM), area, screen, camera, 168)
-        bad = [(x, y) for y in range(200) for x in range(320)
-               if got[y * 320 + x] != (expected[y - 32][x - 32] if 32 <= y and 32 <= x < 288 else 0)]
+        expected = sc.expected_screen(fr.Rom(ROM), area, screen, camera)
+        bad = [(x, y) for y in range(200) for x in range(320) if got[y * 320 + x] != expected[y][x]]
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
 
     def test_eolis_screen_1_at_the_bottom_of_the_playfield(self) -> None:

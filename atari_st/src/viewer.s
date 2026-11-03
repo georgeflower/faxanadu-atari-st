@@ -1,7 +1,7 @@
 | Viewer: one Faxanadu screen on the ST, made from the ROM's data by tools/build_assets.py.
 |
 | 320x200, low resolution. The 256-pixel-wide playfield sits in the middle (32 pixels free on each side); the first 32 lines are
-| the HUD's (empty for now); below it a window of 168 lines of the 208-line playfield, starting at line CAMERA.
+| the HUD's (as at the start of a game); below it a window of 168 lines of the 208-line playfield, starting at line CAMERA.
 |
 | Position independent, like main.s: only PC-relative addressing names our own labels.
 
@@ -130,6 +130,41 @@ start:
     cmpi.w #WINDOW_LINES, %d6
     blt 4b
 
+    | The HUD: rows 2 and 3 of its 32x4 tiles (lines 16 to 31); rows 0 and 1 are blank. A tile is 8 lines of four plane bytes; on the
+    | screen it is the left or right byte of each plane word of a 16-pixel group.
+    lea hud_layout+64(%pc), %a5
+    lea hud_tiles(%pc), %a3
+    moveq #2, %d6                           | tile row
+7:  moveq #0, %d4                           | tile column
+8:  moveq #0, %d0
+    move.b (%a5)+, %d0                      | tile id
+    beq.s 12f                               | tile 0 is blank and the screen is clear
+    lsl.w #5, %d0
+    lea (%a3,%d0.w), %a6                    | its 32 bytes
+    move.w %d6, %d1
+    mulu.w #(8 * STRIDE), %d1
+    move.w %d4, %d2
+    lsr.w #1, %d2
+    lsl.w #3, %d2                           | 8 bytes a 16-pixel group
+    add.w %d2, %d1
+    move.w %d4, %d2
+    andi.w #1, %d2
+    add.w %d2, %d1                          | left or right byte of the plane words
+    lea LEFT_BYTES(%a4,%d1.w), %a0
+    moveq #7, %d3
+9:  move.b (%a6)+, (%a0)                    | plane 0
+    move.b (%a6)+, 2(%a0)
+    move.b (%a6)+, 4(%a0)
+    move.b (%a6)+, 6(%a0)
+    lea STRIDE(%a0), %a0
+    dbra %d3, 9b
+12: addq.w #1, %d4
+    cmpi.w #32, %d4
+    blt.s 8b
+    addq.w #1, %d6
+    cmpi.w #4, %d6
+    blt.s 7b
+
     move.w #7, -(%sp)
     trap #1                                 | Crawcin: wait for a key
     addq.l #2, %sp
@@ -151,6 +186,10 @@ start:
     trap #1
 
     .section .rodata
+hud_layout:
+    .incbin "hud_layout.bin"
+hud_tiles:
+    .incbin "hud_tiles.bin"
 palette_data:
     .incbin "palette.bin"
 screen_data:
