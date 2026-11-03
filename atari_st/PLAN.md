@@ -1,6 +1,6 @@
 # Plan
 
-The order follows the Zelda port. Each step is a pull request (or a few) that builds, is tested in Hatari and gets a disk image `F-PR##.st`.
+The order follows the Zelda port. Each step is one or a few commits straight to `main` that build and are tested (in Hatari once there is something to see) and, when worth playing, get a disk image.
 
 ## Done
 

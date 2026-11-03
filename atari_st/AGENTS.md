@@ -20,7 +20,7 @@ Status: set-up, the ROM harness and the map data decoder. `src/main.s` is a star
 4. **The 16-bit branch limit wraps silently** in GNU as and ld. `tools/check_reach.py` runs on every link; do not disable it.
 5. **Budget first.** An STFM has no blitter and no hardware scroll; a frame is about 160,000 cycles at 50 Hz. Estimate the cycles of anything per-frame before writing it and measure afterwards.
 6. **No version numbers** anywhere (no VERSION, no CHANGELOG, no version line in docs). Göran tags releases himself.
-7. Pull requests go to `master`; Göran merges them himself, so treat a created pull request as merged. Disk images are named `F-PR##.st` (## = the pull request number). Commits end with the `Co-Authored-By` line and no session link; pull request bodies end with the "Generated with Claude Code" line and no session link.
+7. **Commit straight to `main` and push; no pull requests** (Göran's decision, Nov 2026; stacked pull requests had merged into their base branches and never reached `main`). Run `make check` first. Disk images used to be named `F-PR##.st` after the pull request; without pull requests the naming needs a new rule (ask Göran when the first image is delivered). Commits end with the `Co-Authored-By` line and no session link.
 8. Docs are short and plain, in Göran's voice. One line on the AI help, no details of what was tested by hand.
 
 ## 3. Which ROM
