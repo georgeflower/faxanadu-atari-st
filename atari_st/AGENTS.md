@@ -67,7 +67,11 @@ The iNES header of the Europe ROM: NES 2.0, mapper 1 (MMC1), 16 PRG banks (256 K
 - The tileset of an area is plain NES 2-bit tiles in bank 4 (`TILE_INDEX_TO_ADDR`, 4 to 8 pages of 256 bytes; all nine tilesets are 16 KB) loaded at `$1800`, which is tile `$80` of the background pattern table at `$1000`. Buildings load theirs at `$1A00`. Tile 0 is blank.
 - Background palettes: `PALETTE_TILES_*` in bank 11, 16 bytes (four palettes of four NES colours); the area's default is `AREA_PALETTE_INDEXES`. Whether single screens use another one is [to check]. The harness' colour table is in `tools/nes_palette.py`.
 - The jsnes picture differs from the data in three places that are not data: sprites (the hero and NPCs), the outer 8 pixels on each side, and the last 8 lines of the playfield (jsnes shows the NTSC window and blanks them; on a PAL TV they are visible). `render_screen.compare` leaves these out.
-- Still to find: the common background tiles `$1000-$17FF` (HUD, letters, from bank 10, loaded in pieces), the sprite tiles (banks 6-8, with the sprite info and palettes in bank 11), block properties (which blocks are solid, ladders, doors), doors and the screen transitions, the per-screen sprite placements.
+- **Screen neighbours** [verified against the game's RAM]: four bytes a screen in the area's scrolling data: left, right, above, below, `$FF` for none (`Area_LoadScrollData`). Seven of the links are one-way (area 1 screen 27, area 2 screen 38, area 7 screens 1, 12, 17); all others are mirrored.
+- **Block properties** [verified against the game's RAM]: 256 bytes a area (one per block id, value 0-15; the game packs them two to a byte). Eolis uses 0, 1, 3 and 4. From chipx86's notes (not checked here): 0 air, 1 solid, 2 ladder, 3 door, 10-13 the screen transitions (up, down, left, right).
+- **Doors**: records of four bytes ended by `$FF` in the area's door locations: screen, block position (row*16+column), destination index, start position (high nibble Y/16, low nibble X/16: where the hero stands on arrival). The destination (four bytes at index*4 in the door destinations; area 3 is 32 too high): new screen, palette, key requirement, and a byte not read yet. Verified for the castle door of Eolis (screen 0, block 156 -> screen 1, hero at 144,144); indices of 32 and up (doors into buildings) are decoded the same way but not checked. A new screen's **palette** comes from the door; scrolling between screens keeps it.
+- **HUD and letter tiles**: 60 tiles at `HUD_TILES_START` in bank 10 are written to the background pattern table's first 60 tiles. They equal the game's CHR RAM except tiles 12 and 13, the bar tiles, which the game draws into CHR RAM as the bars fill.
+- Still to find: the HUD's layout and palette, the sprite tiles (banks 6-8, with the sprite info and palettes in bank 11) and the per-screen sprite placements, what the other property values mean, doors into buildings, text (banks 12 and 13 differ in Europe).
 
 ## 6. Tools and layout
 
@@ -83,7 +87,8 @@ tools/hatari_shot.py    runs a PRG headless in Hatari and renders the screen to 
 tools/rom_diff.py       Europe ROM against the US build, counts only
 tools/ram_labels.py     the disassembly's RAM labels as JSON (names and addresses only)
 tools/faxanadu_rom.py   tables by label name from your ROM (labels cached, no ROM data)
-tools/faxanadu_maps.py  areas, screens, blocks decoded from the ROM
+tools/faxanadu_maps.py  areas, screens, blocks, neighbours, block properties, doors from the ROM
+tools/faxanadu_gfx.py   the HUD and letter tiles
 tools/render_screen.py  draw a screen from the ROM's data; compare with a jsnes picture
 tools/nes_palette.py    the 64 NES colours as jsnes shows them
 tools/refnes/           the jsnes ROM harness: read RAM by label, press buttons, take pictures, probes (see its README)

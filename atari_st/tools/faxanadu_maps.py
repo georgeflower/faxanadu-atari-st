@@ -107,3 +107,44 @@ def nametable(rom: fr.Rom, a: Area, blocks: bytes) -> list[list[int]]:
             rows[2 * r][2 * c], rows[2 * r][2 * c + 1] = tl, tr
             rows[2 * r + 1][2 * c], rows[2 * r + 1][2 * c + 1] = bl, br
     return rows
+
+
+def neighbours(rom: fr.Rom, a: Area, screen: int) -> tuple[int, int, int, int]:
+    """The screens to the left, right, above and below ($FF for none): four bytes a screen in the area's scrolling data
+    (`Area_LoadScrollData`)."""
+    o = a.scrolling + 4 * screen
+    return tuple(rom.prg(3)[o:o + 4])  # type: ignore[return-value]
+
+
+BLOCK_AIR, BLOCK_SOLID, BLOCK_LADDER, BLOCK_DOOR = 0, 1, 2, 3     # property values 0-15; the rest are in the notes (AGENTS.md)
+
+
+def block_properties(rom: fr.Rom, a: Area) -> bytes:
+    """The property (0-15) of each of the 256 block ids. The game packs them two to a byte in RAM
+    (`Area_LoadBlockProperties`: the first source byte is the low nibble, the second the high)."""
+    return bytes(b & 0x0F for b in rom.prg(3)[a.properties:a.properties + 256])
+
+
+@dataclass
+class Door:
+    screen: int
+    block: int          # block position on that screen (row * 16 + column)
+    destination: int    # index in the area's door destinations
+    start: int          # where the hero stands on arrival: high nibble Y / 16, low nibble X / 16 (`Screen_StartPosYX`)
+
+
+def doors(rom: fr.Rom, a: Area) -> list[Door]:
+    """The door records: four bytes each, ended by $FF (`Area_SetStateFromDoorDestination`)."""
+    b3 = rom.prg(3)
+    out, o = [], a.door_locations
+    while b3[o] != 0xFF:
+        out.append(Door(*b3[o:o + 4]))
+        o += 4
+    return out
+
+
+def door_destination(rom: fr.Rom, a: Area, door: Door) -> tuple[int, int, int, int]:
+    """(screen, palette, key requirement, a fourth byte not read yet) for a door. In area 3 the index is 32 too high."""
+    index = door.destination - (0x20 if a.index == 3 else 0)
+    o = a.door_destinations + 4 * index
+    return tuple(rom.prg(3)[o:o + 4])  # type: ignore[return-value]

@@ -15,5 +15,8 @@ if (where === "right") {
   g.run(30);
 }
 g.ppm(prefix + ".ppm");
+fs.writeFileSync(prefix + ".chr.bin", Buffer.from(g.nes.ppu.vramMem.slice(0, 0x2000)));   // the CHR RAM as the game filled it
+fs.writeFileSync(prefix + ".props.bin", Buffer.from(Array.from({length: 128}, (_, i) => g.rd(g.addr("BlockProperties") + i))));
 fs.writeFileSync(prefix + ".oam.json", JSON.stringify(g.oam()));
-console.log(JSON.stringify({area: g.rd("Area_CurrentArea"), screen: g.rd("Area_CurrentScreen"), palette: g.rd("Screen_PaletteIndex")}));
+console.log(JSON.stringify({area: g.rd("Area_CurrentArea"), screen: g.rd("Area_CurrentScreen"), palette: g.rd("Screen_PaletteIndex"), x: g.rd("Player_PosX_Block"), y: g.rd("Player_PosY"),
+  neighbours: ["Area_ScreenToTheLeft", "Area_ScreenToTheRight", "Area_ScreenAbove", "Area_ScreenBelow"].map((n) => g.rd(n))}));

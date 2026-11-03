@@ -9,9 +9,11 @@ The order follows the Zelda port. Each step is one or a few commits straight to 
 
 - [x] 3a. The map data: areas, screens, blocks, tilesets and palettes read from the ROM; a screen drawn from them equals jsnes, pixel for pixel.
 
+- [x] 3a'. Block properties, screen neighbours, doors and the HUD and letter tiles, checked against the game's RAM.
+
 ## Next
 
-3b. **The rest of the data.** The common background tiles (HUD, letters: bank 10), the sprite tiles and their info and palettes (banks 6-8, 11), block properties, doors and screen transitions, per-screen palettes and sprite placements, text (bank 12 and 13 differ in Europe: read the Europe ROM). Then convert tiles, blocks and maps to ST planar form and map the NES colours to 16 (see the Zelda port).
+3b. **The rest of the data.** The HUD layout, the sprite tiles and their info and palettes (banks 6-8, 11) and per-screen sprite placements, doors into buildings, text (banks 12 and 13 differ in Europe: read the Europe ROM). Then convert tiles, blocks and maps to ST planar form and map the NES colours to 16 (see the Zelda port).
 4. **Decide the display and the scroll, then measure.** This is the main risk. Open questions to answer by reading first:
    - The playfield is 256x208 under a 32-line HUD (seen in a screenshot). 208 lines do not fit 200 with a HUD on top. Options: crop, a HUD at the sides (the screen has 64 spare pixels across), a smaller window, or overscan (top and bottom border, timing-critical, a real-hardware project of its own). Look at real screens and decide with Göran.
    - Scroll between screens: 256 px in 64 frames at 4 px a frame (measured), nothing else runs. Cheap candidates: 16-pixel steps every four frames from a pre-composed wider buffer, and the ST's 8-line vertical steps through the video base for up and down.
