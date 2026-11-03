@@ -10,7 +10,7 @@ It follows the Zelda 1 port (`georgeflower/zelda1-atarist`): same method, same t
 
 The rest of the repository is chipx86's labelled disassembly of the **US** version (`src/*.asm`, builds with `make` in the root). It is the **spec for every behaviour**: when you need a number (speed, timer, damage, tile id, table), read it there, never guess.
 
-Status: set-up only. `src/main.s` is a start-up check that shows 16 colour bars. What comes next is in `PLAN.md`.
+Status: set-up and the ROM harness. `src/main.s` is a start-up check that shows 16 colour bars. What comes next is in `PLAN.md`.
 
 ## 2. Rules
 
@@ -50,8 +50,9 @@ The iNES header of the Europe ROM: NES 2.0, mapper 1 (MMC1), 16 PRG banks (256 K
 
 ## 5. Facts read from the disassembly (US)
 
-- **Scrolling is between screens.** In `Game_MainLoop` the camera is still in normal play. When the hero leaves a screen the loop `@_scrolling` runs `Screen_HandleScroll` four times a frame, one pixel each (`PPU_ScrollX` +1, or `PPU_ScrollY` +1), until the next screen is in place; so 256 pixels take 64 frames. Vertical scrolls wrap at `$D0` = 208 lines. `Screen_HandleScroll` has two more callers that are not read yet, so "never scrolls anywhere else" is [to check].
-- **The playfield is probably 256x208** (a screen 16 blocks wide and 13 high, if the blocks are 16 px; [to check]). That does not fit 200 lines, and the HUD comes on top. The HUD is split from the playfield with a sprite-0 hit; its height is [to check]. This is the main design question for the display (see `PLAN.md`, step 4).
+- **Scrolling is between screens** [verified in the ROM, `tools/refnes/scroll_probe.mjs`]. In normal play the camera is still. Leaving a screen costs 14 frames of preparation and then exactly 64 frames of 4 pixels (`Game_MainLoop` runs `Screen_HandleScroll` four times a frame, one pixel each), 256 pixels in all, with nothing else going on. The Europe ROM and the US build do the same. Vertical scrolls wrap at `$D0` = 208 lines (read in the code, not yet measured). `Screen_HandleScroll` has two more callers that are not read yet.
+- **The picture is a 32-line HUD on top of a 256x208 playfield** (NES screen 256x240) [verified in a jsnes screenshot; the HUD is split from the playfield with a sprite-0 hit]. 208 lines do not fit 200, and the HUD would come on top: the main design question for the display (see `PLAN.md`, step 4).
+- The hero starts on a first screen with no neighbouring screens (`Area_ScreenToTheLeft/Right/Above/Below` all `$FF`); the castle door at x 192 (Up) leads to Eolis, screen 1, which has screens on both sides. Eolis is area 0.
 - Interaction scripts: a script language runs all NPC and item interactions (`IScripts_*`, `IScriptAction_*`). The port should run the ROM's own scripts through a small interpreter, not hand-code each dialogue.
 - Passwords: `IScriptAction_ShowPassword`; the format is in chipx86's notes.
 
@@ -67,9 +68,13 @@ tools/make_disk.py      a 720 KB .st image for the Gotek
 tools/check_reach.py    the 16-bit reach check
 tools/hatari_shot.py    runs a PRG headless in Hatari and renders the screen to a PNG; prints a frame hash
 tools/rom_diff.py       Europe ROM against the US build, counts only
+tools/ram_labels.py     the disassembly's RAM labels as JSON (names and addresses only)
+tools/refnes/           the jsnes ROM harness: read RAM by label, press buttons, take pictures, probes (see its README)
 tests/                  unit tests; test_start.py runs main.s on machine68k with GEMDOS stubs
 build/                  output (gitignored)
 ```
+
+ROM harness: `cd tools/refnes && npm install`, `python3 tools/ram_labels.py`, then `node scroll_probe.mjs RIGHT`. The labels were checked against the running ROM: player position and screen, area, scroll direction, scroll X and the neighbour screens all read right. In the Europe ROM the bank-call variables in zero page sit four bytes higher than in the disassembly (`BankedCallSetup_Saved*`); nothing else in zero page or RAM was seen to differ.
 
 Toolchain: `binutils-m68k-linux-gnu` (`m68k-linux-gnu-as -m68000`), `cc65`, Hatari (2.4 and up), `pip install machine68k`, Python 3. A TOS image is needed for Hatari: EmuTOS 512k works (`--tos etos512us.img`, or the `TOS` environment variable). **Never commit a TOS image.**
 
