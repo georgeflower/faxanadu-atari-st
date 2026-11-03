@@ -85,3 +85,10 @@ export function newTown() {
   g.run(20);
   return g;
 }
+
+// The sprites jsnes has on screen: [y, tile, attributes, x] for each of the 64 OAM entries (y is the line above the sprite).
+Faxanadu.prototype.oam = function () {
+  const m = this.nes.ppu.spriteMem, out = [];
+  for (let i = 0; i < 64; i++) out.push([m[i * 4], m[i * 4 + 1], m[i * 4 + 2], m[i * 4 + 3]]);
+  return out;
+};

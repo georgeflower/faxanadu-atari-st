@@ -10,7 +10,7 @@ It follows the Zelda 1 port (`georgeflower/zelda1-atarist`): same method, same t
 
 The rest of the repository is chipx86's labelled disassembly of the **US** version (`src/*.asm`, builds with `make` in the root). It is the **spec for every behaviour**: when you need a number (speed, timer, damage, tile id, table), read it there, never guess.
 
-Status: set-up and the ROM harness. `src/main.s` is a start-up check that shows 16 colour bars. What comes next is in `PLAN.md`.
+Status: set-up, the ROM harness and the map data decoder. `src/main.s` is a start-up check that shows 16 colour bars. What comes next is in `PLAN.md`.
 
 ## 2. Rules
 
@@ -56,6 +56,19 @@ The iNES header of the Europe ROM: NES 2.0, mapper 1 (MMC1), 16 PRG banks (256 K
 - Interaction scripts: a script language runs all NPC and item interactions (`IScripts_*`, `IScriptAction_*`). The port should run the ROM's own scripts through a small interpreter, not hand-code each dialogue.
 - Passwords: `IScriptAction_ShowPassword`; the format is in chipx86's notes.
 
+## 5b. The map data, decoded [verified: pixel-exact against jsnes on two Eolis screens]
+
+`tools/faxanadu_rom.py` finds tables by the disassembly's label names (names, addresses and file offsets only are cached, never ROM data) and reads the bytes from your ROM; `tools/faxanadu_maps.py` decodes areas and screens; `tools/render_screen.py` draws a screen from them with no emulator. `tools/refnes/refshot.mjs` makes the reference picture (and the sprites on it) from the harness.
+
+- There are **8 areas** with 272 screens: 9, 64, 83, 14, 10, 40, 32 and 20. Their tilesets are 0 Eolis, 2 Trunk, 3 Mist, 5 Towns, 6 King's room/guru/hospital (buildings), 1 Branch, 4 Dartmoor and 4 again for the last area (the names of the areas themselves are not read yet).
+- A screen is **16x13 blocks of 16x16 pixels**. Its block ids are compressed: two control bits per block, most significant first: 0 copy the block to the left, 1 the one above, 2 the one above and to the left, 3 read the next 8 bits. Offsets wrap in a 256-byte buffer; the last three rows are zeros (`Area_LoadBlocks`).
+- An area's tables are in bank 3 (`AREAS_TABLE_PTR` then per area: five pointers to the block attributes and four block lists, block properties, scrolling data, door locations, door destinations). The block data is in banks 0-2 (`AREA_TO_SCREEN_DATA_BANKS`, `AREA_TO_BANK_OFFSET`). Pointers in a bank are the CPU address minus `$8000`.
+- A block is four tiles (lists 1 to 4: top left, top right, bottom left, bottom right) and one attribute byte holding a palette number for each corner of a 2x2 group of blocks; the block's own corner is picked by the parity of its column and row.
+- The tileset of an area is plain NES 2-bit tiles in bank 4 (`TILE_INDEX_TO_ADDR`, 4 to 8 pages of 256 bytes; all nine tilesets are 16 KB) loaded at `$1800`, which is tile `$80` of the background pattern table at `$1000`. Buildings load theirs at `$1A00`. Tile 0 is blank.
+- Background palettes: `PALETTE_TILES_*` in bank 11, 16 bytes (four palettes of four NES colours); the area's default is `AREA_PALETTE_INDEXES`. Whether single screens use another one is [to check]. The harness' colour table is in `tools/nes_palette.py`.
+- The jsnes picture differs from the data in three places that are not data: sprites (the hero and NPCs), the outer 8 pixels on each side, and the last 8 lines of the playfield (jsnes shows the NTSC window and blanks them; on a PAL TV they are visible). `render_screen.compare` leaves these out.
+- Still to find: the common background tiles `$1000-$17FF` (HUD, letters, from bank 10, loaded in pieces), the sprite tiles (banks 6-8, with the sprite info and palettes in bank 11), block properties (which blocks are solid, ladders, doors), doors and the screen transitions, the per-screen sprite placements.
+
 ## 6. Tools and layout
 
 ```
@@ -69,6 +82,10 @@ tools/check_reach.py    the 16-bit reach check
 tools/hatari_shot.py    runs a PRG headless in Hatari and renders the screen to a PNG; prints a frame hash
 tools/rom_diff.py       Europe ROM against the US build, counts only
 tools/ram_labels.py     the disassembly's RAM labels as JSON (names and addresses only)
+tools/faxanadu_rom.py   tables by label name from your ROM (labels cached, no ROM data)
+tools/faxanadu_maps.py  areas, screens, blocks decoded from the ROM
+tools/render_screen.py  draw a screen from the ROM's data; compare with a jsnes picture
+tools/nes_palette.py    the 64 NES colours as jsnes shows them
 tools/refnes/           the jsnes ROM harness: read RAM by label, press buttons, take pictures, probes (see its README)
 tests/                  unit tests; test_start.py runs main.s on machine68k with GEMDOS stubs
 build/                  output (gitignored)

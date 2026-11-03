@@ -1,0 +1,109 @@
+"""Faxanadu's areas, screens and blocks, decoded from the ROM with the game's own tables.
+
+An area (Eolis, Trunk ...) is a set of screens. A screen is 16x13 blocks of 16x16 pixels (256x208). The block data of a
+screen is compressed (2 control bits per block, `Area_LoadBlocks`); a block is four tiles (block lists 1 to 4, `Area_SetBlocks`).
+Tiles of the area's tileset are in bank 4 and are loaded at tile $80 of the background pattern table.
+
+Everything is read from the ROM given to `Rom`; nothing from it is stored.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import faxanadu_rom as fr
+
+SCREEN_COLS = 16
+SCREEN_ROWS = 13
+BUFFER_ROWS = 16        # the game's screen buffer is 16 rows of 16 blocks; the last rows are filled with zeros
+
+
+@dataclass
+class Area:
+    index: int
+    data_bank: int          # bank 0-2 holding the screens' block data
+    bank_offset: int        # which of the bank's three area tables
+    tiles_index: int        # the tileset (TILE_INDEX_TO_ADDR)
+    palette_index: int
+    attributes: int         # bank 3 offsets of the block tables
+    lists: tuple[int, int, int, int]
+    properties: int
+    scrolling: int
+    door_locations: int
+    door_destinations: int
+    screen_table: int       # offset in data_bank of the screens' pointers
+
+
+def w(data: bytes, off: int) -> int:
+    return data[off] | (data[off + 1] << 8)
+
+
+def area(rom: fr.Rom, index: int) -> Area:
+    data_bank = rom.byte("AREA_TO_SCREEN_DATA_BANKS", index)
+    bank_offset = rom.byte("AREA_TO_BANK_OFFSET", index)
+    bank = rom.prg(data_bank)
+    screen_table = w(bank, 2 * bank_offset)             # pointers in a bank are the CPU address minus $8000
+    b3 = rom.prg(3)
+    areas_table = w(b3, 0)                              # AREAS_TABLE_PTR
+    meta = w(b3, areas_table + 2 * index)               # this area's metadata table
+    info = w(b3, meta + 0)                              # five words: attributes, block lists 1 to 4
+    ptrs = [w(b3, info + 2 * i) for i in range(5)]
+    return Area(index, data_bank, bank_offset, rom.byte("AREA_TO_TILES_INDEXES", index), rom.byte("AREA_PALETTE_INDEXES", index),
+                ptrs[0], (ptrs[1], ptrs[2], ptrs[3], ptrs[4]), w(b3, meta + 2), w(b3, meta + 4), w(b3, meta + 6), w(b3, meta + 8),
+                screen_table)
+
+
+def screen_count(rom: fr.Rom, a: Area) -> int:
+    """Screens in the area: the screen pointer table runs up to the first screen's data."""
+    bank = rom.prg(a.data_bank)
+    first = w(bank, a.screen_table)
+    return (first - a.screen_table) // 2
+
+
+def decode_screen(rom: fr.Rom, a: Area, screen: int, previous: bytes | None = None) -> bytes:
+    """The 256 block ids of a screen (row by row, 16 rows of 16; the last three rows are zeros).
+
+    Control bits, most significant first: 0 copy the block to the left, 1 the one above, 2 the one above and to the left,
+    3 read the block as the next 8 bits. Offsets wrap in a 256-byte buffer; `previous` is what the buffer held before
+    (the screen before), which matters only if a screen starts by copying."""
+    bank = rom.prg(a.data_bank)
+    start = w(bank, a.screen_table + 2 * screen)
+    stream = bank[start:start + 0x400]
+    buf = bytearray(previous if previous is not None else bytes(256))
+    bit = 0
+
+    def take() -> int:
+        nonlocal bit
+        v = (stream[bit >> 3] >> (7 - (bit & 7))) & 1
+        bit += 1
+        return v
+
+    offsets = (0xFF, 0xF0, 0xEF)
+    for count in range(256):
+        control = (take() << 1) | take()
+        if control == 3:
+            value = 0
+            for _ in range(8):
+                value = (value << 1) | take()
+        else:
+            value = buf[(count + offsets[control]) & 0xFF]
+        buf[count] = value
+    for i in range(0xF0, 0x100):
+        buf[i] = 0
+    return bytes(buf)
+
+
+def block_tiles(rom: fr.Rom, a: Area, block: int) -> tuple[int, int, int, int]:
+    """The four tile ids of a block: (top left, top right, bottom left, bottom right)."""
+    b3 = rom.prg(3)
+    return tuple(b3[a.lists[i] + block] for i in range(4))  # type: ignore[return-value]
+
+
+def nametable(rom: fr.Rom, a: Area, blocks: bytes) -> list[list[int]]:
+    """The 32x26 tile ids of the playfield as the game writes them to the nametable (rows 4 to 29)."""
+    rows = [[0] * 32 for _ in range(SCREEN_ROWS * 2)]
+    for r in range(SCREEN_ROWS):
+        for c in range(SCREEN_COLS):
+            tl, tr, bl, br = block_tiles(rom, a, blocks[r * 16 + c])
+            rows[2 * r][2 * c], rows[2 * r][2 * c + 1] = tl, tr
+            rows[2 * r + 1][2 * c], rows[2 * r + 1][2 * c + 1] = bl, br
+    return rows
