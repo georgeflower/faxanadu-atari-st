@@ -7,3 +7,7 @@ src/RAM_MIRROR*.asm
 src/SRAM.asm
 
 .*.swp
+
+ext/
+atari_st/build/
+__pycache__/
