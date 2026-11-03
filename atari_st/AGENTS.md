@@ -10,7 +10,7 @@ It follows the Zelda 1 port (`georgeflower/zelda1-atarist`): same method, same t
 
 The rest of the repository is chipx86's labelled disassembly of the **US** version (`src/*.asm`, builds with `make` in the root). It is the **spec for every behaviour**: when you need a number (speed, timer, damage, tile id, table), read it there, never guess.
 
-Status: set-up only. `src/main.s` is a start-up check that shows 16 colour bars. What comes next is in `PLAN.md`.
+Status: set-up, the ROM harness and the map data decoder. `src/main.s` is a start-up check that shows 16 colour bars. What comes next is in `PLAN.md`.
 
 ## 2. Rules
 
@@ -50,10 +50,24 @@ The iNES header of the Europe ROM: NES 2.0, mapper 1 (MMC1), 16 PRG banks (256 K
 
 ## 5. Facts read from the disassembly (US)
 
-- **Scrolling is between screens.** In `Game_MainLoop` the camera is still in normal play. When the hero leaves a screen the loop `@_scrolling` runs `Screen_HandleScroll` four times a frame, one pixel each (`PPU_ScrollX` +1, or `PPU_ScrollY` +1), until the next screen is in place; so 256 pixels take 64 frames. Vertical scrolls wrap at `$D0` = 208 lines. `Screen_HandleScroll` has two more callers that are not read yet, so "never scrolls anywhere else" is [to check].
-- **The playfield is probably 256x208** (a screen 16 blocks wide and 13 high, if the blocks are 16 px; [to check]). That does not fit 200 lines, and the HUD comes on top. The HUD is split from the playfield with a sprite-0 hit; its height is [to check]. This is the main design question for the display (see `PLAN.md`, step 4).
+- **Scrolling is between screens** [verified in the ROM, `tools/refnes/scroll_probe.mjs`]. In normal play the camera is still. Leaving a screen costs 14 frames of preparation and then exactly 64 frames of 4 pixels (`Game_MainLoop` runs `Screen_HandleScroll` four times a frame, one pixel each), 256 pixels in all, with nothing else going on. The Europe ROM and the US build do the same. Vertical scrolls wrap at `$D0` = 208 lines (read in the code, not yet measured). `Screen_HandleScroll` has two more callers that are not read yet.
+- **The picture is a 32-line HUD on top of a 256x208 playfield** (NES screen 256x240) [verified in a jsnes screenshot; the HUD is split from the playfield with a sprite-0 hit]. 208 lines do not fit 200, and the HUD would come on top: the main design question for the display (see `PLAN.md`, step 4).
+- The hero starts on a first screen with no neighbouring screens (`Area_ScreenToTheLeft/Right/Above/Below` all `$FF`); the castle door at x 192 (Up) leads to Eolis, screen 1, which has screens on both sides. Eolis is area 0.
 - Interaction scripts: a script language runs all NPC and item interactions (`IScripts_*`, `IScriptAction_*`). The port should run the ROM's own scripts through a small interpreter, not hand-code each dialogue.
 - Passwords: `IScriptAction_ShowPassword`; the format is in chipx86's notes.
+
+## 5b. The map data, decoded [verified: pixel-exact against jsnes on two Eolis screens]
+
+`tools/faxanadu_rom.py` finds tables by the disassembly's label names (names, addresses and file offsets only are cached, never ROM data) and reads the bytes from your ROM; `tools/faxanadu_maps.py` decodes areas and screens; `tools/render_screen.py` draws a screen from them with no emulator. `tools/refnes/refshot.mjs` makes the reference picture (and the sprites on it) from the harness.
+
+- There are **8 areas** with 272 screens: 9, 64, 83, 14, 10, 40, 32 and 20. Their tilesets are 0 Eolis, 2 Trunk, 3 Mist, 5 Towns, 6 King's room/guru/hospital (buildings), 1 Branch, 4 Dartmoor and 4 again for the last area (the names of the areas themselves are not read yet).
+- A screen is **16x13 blocks of 16x16 pixels**. Its block ids are compressed: two control bits per block, most significant first: 0 copy the block to the left, 1 the one above, 2 the one above and to the left, 3 read the next 8 bits. Offsets wrap in a 256-byte buffer; the last three rows are zeros (`Area_LoadBlocks`).
+- An area's tables are in bank 3 (`AREAS_TABLE_PTR` then per area: five pointers to the block attributes and four block lists, block properties, scrolling data, door locations, door destinations). The block data is in banks 0-2 (`AREA_TO_SCREEN_DATA_BANKS`, `AREA_TO_BANK_OFFSET`). Pointers in a bank are the CPU address minus `$8000`.
+- A block is four tiles (lists 1 to 4: top left, top right, bottom left, bottom right) and one attribute byte holding a palette number for each corner of a 2x2 group of blocks; the block's own corner is picked by the parity of its column and row.
+- The tileset of an area is plain NES 2-bit tiles in bank 4 (`TILE_INDEX_TO_ADDR`, 4 to 8 pages of 256 bytes; all nine tilesets are 16 KB) loaded at `$1800`, which is tile `$80` of the background pattern table at `$1000`. Buildings load theirs at `$1A00`. Tile 0 is blank.
+- Background palettes: `PALETTE_TILES_*` in bank 11, 16 bytes (four palettes of four NES colours); the area's default is `AREA_PALETTE_INDEXES`. Whether single screens use another one is [to check]. The harness' colour table is in `tools/nes_palette.py`.
+- The jsnes picture differs from the data in three places that are not data: sprites (the hero and NPCs), the outer 8 pixels on each side, and the last 8 lines of the playfield (jsnes shows the NTSC window and blanks them; on a PAL TV they are visible). `render_screen.compare` leaves these out.
+- Still to find: the common background tiles `$1000-$17FF` (HUD, letters, from bank 10, loaded in pieces), the sprite tiles (banks 6-8, with the sprite info and palettes in bank 11), block properties (which blocks are solid, ladders, doors), doors and the screen transitions, the per-screen sprite placements.
 
 ## 6. Tools and layout
 
@@ -67,9 +81,17 @@ tools/make_disk.py      a 720 KB .st image for the Gotek
 tools/check_reach.py    the 16-bit reach check
 tools/hatari_shot.py    runs a PRG headless in Hatari and renders the screen to a PNG; prints a frame hash
 tools/rom_diff.py       Europe ROM against the US build, counts only
+tools/ram_labels.py     the disassembly's RAM labels as JSON (names and addresses only)
+tools/faxanadu_rom.py   tables by label name from your ROM (labels cached, no ROM data)
+tools/faxanadu_maps.py  areas, screens, blocks decoded from the ROM
+tools/render_screen.py  draw a screen from the ROM's data; compare with a jsnes picture
+tools/nes_palette.py    the 64 NES colours as jsnes shows them
+tools/refnes/           the jsnes ROM harness: read RAM by label, press buttons, take pictures, probes (see its README)
 tests/                  unit tests; test_start.py runs main.s on machine68k with GEMDOS stubs
 build/                  output (gitignored)
 ```
+
+ROM harness: `cd tools/refnes && npm install`, `python3 tools/ram_labels.py`, then `node scroll_probe.mjs RIGHT`. The labels were checked against the running ROM: player position and screen, area, scroll direction, scroll X and the neighbour screens all read right. In the Europe ROM the bank-call variables in zero page sit four bytes higher than in the disassembly (`BankedCallSetup_Saved*`); nothing else in zero page or RAM was seen to differ.
 
 Toolchain: `binutils-m68k-linux-gnu` (`m68k-linux-gnu-as -m68000`), `cc65`, Hatari (2.4 and up), `pip install machine68k`, Python 3. A TOS image is needed for Hatari: EmuTOS 512k works (`--tos etos512us.img`, or the `TOS` environment variable). **Never commit a TOS image.**
 

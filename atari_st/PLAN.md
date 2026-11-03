@@ -5,14 +5,16 @@ The order follows the Zelda port. Each step is a pull request (or a few) that bu
 ## Done
 
 - [x] 1. Set-up: `atari_st/` with the build, the tools, a start-up check that runs in Hatari on a 512 KB machine, tests, this briefing.
+- [x] 2. ROM harness: jsnes plays the Europe ROM from RAM labels; scroll measured (64 frames of 4 px); labels checked.
+
+- [x] 3a. The map data: areas, screens, blocks, tilesets and palettes read from the ROM; a screen drawn from them equals jsnes, pixel for pixel.
 
 ## Next
 
-2. **ROM harness.** `tools/refnes/` from the Zelda port (jsnes in Node) against the Europe ROM: boot, get into the game, read and write RAM, run frames. Check the disassembly's RAM labels (`ZEROPAGE.asm`, `RAM.asm`) against what the harness sees. Also decide how to run the US build for comparison.
-3. **Read the data.** Pull out of the ROM, by searching (not by US offsets): the CHR RAM tiles (bank 10: find the upload routines, run them in the harness), sprite tiles (banks 6-8), palettes (bank 11 and the per-area ones), the area maps (banks 0-3, compressed: write the decoder in Python first). Render a screen to a PNG and compare it with a jsnes screenshot of the same place.
+3b. **The rest of the data.** The common background tiles (HUD, letters: bank 10), the sprite tiles and their info and palettes (banks 6-8, 11), block properties, doors and screen transitions, per-screen palettes and sprite placements, text (bank 12 and 13 differ in Europe: read the Europe ROM). Then convert tiles, blocks and maps to ST planar form and map the NES colours to 16 (see the Zelda port).
 4. **Decide the display and the scroll, then measure.** This is the main risk. Open questions to answer by reading first:
-   - Playfield size (probably 256x208) and the HUD's height and layout. 208 lines do not fit 200 with a HUD on top. Options: crop, a HUD at the sides (the screen has 64 spare pixels across), a smaller window, or overscan (top and bottom border, timing-critical, a real-hardware project of its own). Look at real screens and decide with Göran.
-   - Scroll between screens: 256 px in 64 frames at 4 px a frame, nothing else runs. Cheap candidates: 16-pixel steps every four frames from a pre-composed wider buffer, and the ST's 8-line vertical steps through the video base for up and down.
+   - The playfield is 256x208 under a 32-line HUD (seen in a screenshot). 208 lines do not fit 200 with a HUD on top. Options: crop, a HUD at the sides (the screen has 64 spare pixels across), a smaller window, or overscan (top and bottom border, timing-critical, a real-hardware project of its own). Look at real screens and decide with Göran.
+   - Scroll between screens: 256 px in 64 frames at 4 px a frame (measured), nothing else runs. Cheap candidates: 16-pixel steps every four frames from a pre-composed wider buffer, and the ST's 8-line vertical steps through the video base for up and down.
    - What the hero does during a scroll (`Game_UpdatePlayerOnScroll`), and the two other `Screen_HandleScroll` callers.
    - Colour: how many colours one screen needs against 16 (the Zelda shared-palette technique, with swaps per area).
    - Data volume: size of all graphics and maps after conversion decides resident data against one file per area.
@@ -30,6 +32,6 @@ The order follows the Zelda port. Each step is a pull request (or a few) that bu
 
 - Scrolling and the display size (step 4).
 - Colour: Faxanadu's per-area palettes against 16 colours.
-- Data volume: eight areas and a lot of text.
+- Data volume: 272 screens in eight areas and a lot of text. The maps are about 54 KB in the ROM's compressed form (about 200 bytes a screen; the biggest area, Mist, 17 KB); all tilesets together are 16 KB. Small enough to keep a whole area in memory.
 - The script interpreter: all NPC behaviour depends on it being exact.
 - Bank 5 (music) and bank 12 (texts) differ between the US and Europe ROMs: the disassembly does not describe those bytes exactly.
