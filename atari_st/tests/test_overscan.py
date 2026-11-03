@@ -28,6 +28,18 @@ class OverscanTests(unittest.TestCase):
         removed = len(re.findall(r"^detect remove bottom$", log, re.M))
         self.assertGreater(removed, 300, f"the border was removed {removed} times (once a frame once the program runs)")
 
+    def test_leaving_puts_the_screen_and_the_palette_back(self) -> None:
+        subprocess.run(["make", "-C", str(ROOT), "overscan", "OVERSCAN_DEFS=--defsym AUTOEXIT=60"], check=True, capture_output=True)
+        try:
+            out = subprocess.run([sys.executable, str(ROOT / "tools" / "hatari_shot.py"), "--tos", str(TOS), "--prg",
+                                  str(ROOT / "build" / "OVERSCAN.PRG"), "--out", str(ROOT / "build" / "overscan_exit.png"),
+                                  "--vbls", "700"], check=True, capture_output=True, text=True, timeout=600).stdout
+        finally:
+            subprocess.run(["make", "-C", str(ROOT), "overscan"], check=True, capture_output=True)    # back to the key-wait build
+        # TOS's own screen (the top of 512 KB less 32 KB) and its default palette, not our test card's
+        self.assertIn("video base 0x078000", out)
+        self.assertIn("PALETTE 777 700 070 770 007 707 077 555", out)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -191,10 +191,18 @@ start:
     bset #0, MFP_IMRA
     move.w #0x2300, %sr
 
+    .ifdef AUTOEXIT
+    | (a test build: leave by itself after AUTOEXIT frames, so a harness can check the way out)
+wait_frames:
+    move.l frames(%pc), %d0
+    cmpi.l #AUTOEXIT, %d0
+    blt.s wait_frames
+    .else
     | Crawcin: wait for a key.
     move.w #7, -(%sp)
     trap #1
     addq.l #2, %sp
+    .endif
 
     | Put everything back.
     move.w #0x2700, %sr

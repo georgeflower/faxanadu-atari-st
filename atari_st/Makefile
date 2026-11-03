@@ -60,10 +60,12 @@ TB_LINE ?= 199
 TB_NOPS ?= 0
 TB_WAIT ?= 50
 OVERSCAN_PRG := $(BUILD_DIR)/OVERSCAN.PRG
+# make overscan OVERSCAN_DEFS="--defsym AUTOEXIT=100" builds a test program that leaves by itself after 100 frames.
+OVERSCAN_DEFS ?=
 .PHONY: overscan
 overscan:
 	@mkdir -p $(BUILD_DIR)
-	$(AS) -m68000 --defsym TB_LINE=$(TB_LINE) --defsym TB_NOPS=$(TB_NOPS) --defsym TB_WAIT=$(TB_WAIT) -al=$(BUILD_DIR)/overscan.lst -o $(BUILD_DIR)/overscan.o $(SRC_DIR)/overscan_test.s
+	$(AS) -m68000 --defsym TB_LINE=$(TB_LINE) --defsym TB_NOPS=$(TB_NOPS) --defsym TB_WAIT=$(TB_WAIT) $(OVERSCAN_DEFS) -al=$(BUILD_DIR)/overscan.lst -o $(BUILD_DIR)/overscan.o $(SRC_DIR)/overscan_test.s
 	$(LD) $(LDFLAGS) -o $(BUILD_DIR)/overscan.elf $(BUILD_DIR)/overscan.o
 	$(OBJCOPY) -O binary $(BUILD_DIR)/overscan.elf $(BUILD_DIR)/overscan.bin
 	$(PYTHON) $(TOOLS_DIR)/make_prg.py $(BUILD_DIR)/overscan.bin $(OVERSCAN_PRG)
