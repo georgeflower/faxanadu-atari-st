@@ -162,6 +162,7 @@ start:
     movea.l %a4, %a0
     movea.l buf_bg(%pc), %a1
     bsr.w copy_screen
+    bsr.w hud_copy_shown
 
     .ifdef BENCH
     | Time the hero: draw it BENCH times over itself and count the VBLs that took (frame_init starts the counter at 0).
@@ -197,7 +198,12 @@ start:
     bsr.w wait_vbl
     movea.l %a4, %a0
     bsr.w show_screen
-    movea.l buf_a(%pc), %a0                 | the other screen is the next one to draw into
+    lea hud_dirty(%pc), %a0                 | the game changed the HUD: draw it into both screens and the background
+    tst.b (%a0)
+    beq.s 14f
+    clr.b (%a0)
+    bsr.w hud_update_all
+14: movea.l buf_a(%pc), %a0                 | the other screen is the next one to draw into
     cmpa.l %a0, %a4
     bne.s 13f
     movea.l buf_b(%pc), %a0

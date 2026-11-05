@@ -18,6 +18,46 @@
     .text
 hud_update:
     movem.l %d0-%d7/%a0-%a6, -(%sp)
+    bsr.s hud_build
+    lea hud_shown(%pc), %a2
+    bsr.w hud_draw
+    movem.l (%sp)+, %d0-%d7/%a0-%a6
+    rts
+
+| hud_update for the three pictures of the frame loop: both screens and the clean background (a4 is kept).
+hud_update_all:
+    movem.l %d0-%d7/%a0-%a6, -(%sp)
+    bsr.s hud_build
+    movea.l buf_a(%pc), %a4
+    lea hud_shown(%pc), %a2
+    bsr.w hud_draw
+    movea.l buf_b(%pc), %a4
+    lea hud_shown_b(%pc), %a2
+    bsr.w hud_draw
+    movea.l buf_bg(%pc), %a4
+    lea hud_shown_bg(%pc), %a2
+    bsr.w hud_draw
+    movem.l (%sp)+, %d0-%d7/%a0-%a6
+    rts
+
+| After the first picture is copied to the other screen and the background: what they show is what the first one shows.
+hud_copy_shown:
+    movem.l %d0/%a0-%a1, -(%sp)
+    lea hud_shown(%pc), %a0
+    lea hud_shown_b(%pc), %a1
+    moveq #31, %d0
+1:  move.l (%a0)+, (%a1)+
+    dbra %d0, 1b
+    lea hud_shown(%pc), %a0
+    lea hud_shown_bg(%pc), %a1
+    moveq #31, %d0
+2:  move.l (%a0)+, (%a1)+
+    dbra %d0, 2b
+    movem.l (%sp)+, %d0/%a0-%a1
+    rts
+
+| Makes the tile ids (hud_buffer) and the partial tiles' pictures from hud_state. Clobbers d0-d5, a0-a3, a5, a6.
+hud_build:
     lea hud_state(%pc), %a5
     lea hud_tiles(%pc), %a3
     lea hud_partial(%pc), %a0
@@ -81,8 +121,12 @@ hud_update:
     moveq #2, %d4
     bsr.w hud_digits
 
-    | Draw what is not shown yet.
-    lea hud_shown(%pc), %a2
+    rts
+
+| Draws the tiles of hud_buffer that are not shown yet. a4 = the screen, a2 = what is shown on it (128 bytes). Clobbers d0-d4, a0-a3, a6.
+hud_draw:
+    lea hud_buffer(%pc), %a6
+    lea hud_tiles(%pc), %a3
     moveq #HUD_FIRST, %d1
 4:  moveq #0, %d0
     move.b (%a6,%d1.w), %d0
@@ -117,7 +161,6 @@ hud_update:
 6:  addq.w #1, %d1
     cmpi.w #HUD_END, %d1
     blt.s 4b
-    movem.l (%sp)+, %d0-%d7/%a0-%a6
     rts
 
 | d0 = a bar's value; returns it cut to 80.
@@ -171,10 +214,17 @@ hud_digits:
     rts
 
     .section .data
+hud_dirty:                                  | set (non-zero) when hud_state changed: the loop calls hud_update_all
+    .byte 0
+    .even
 hud_state:                                  | power, magic, experience, gold, seconds (+ a pad byte)
     .space 10
 hud_buffer:
     .space 128
 hud_shown:
+    .space 128
+hud_shown_b:
+    .space 128
+hud_shown_bg:
     .space 128
     .text

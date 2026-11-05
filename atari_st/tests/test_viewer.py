@@ -95,6 +95,39 @@ class ViewerTests(unittest.TestCase):
         bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
 
+    def test_a_hud_change_during_play_reaches_both_screens_and_the_background(self) -> None:
+        """The program is told through the debugger (poke hud_state, then hud_dirty) that the HUD changed; the HUD lines of both screens
+        and of the clean background must show the new state."""
+        import faxanadu_rom as fr
+        import hatari_shot as hs
+        import st_convert as sc
+
+        subprocess.run(["make", "-C", str(ROOT), "viewer"], check=True, capture_output=True)
+        nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
+        sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
+        image = (ROOT / "build" / "viewer.bin").read_bytes()
+        work = ROOT / "build" / "shots_hud"
+        work.mkdir(parents=True, exist_ok=True)
+        prg = ROOT / "build" / "VIEWER.PRG"
+        hatari = shutil.which("hatari")
+        (work / "c0.ini").write_text(f"savebin {work / 'ram0.bin'} 0 $80000\ncont\n", encoding="utf-8")
+        hs.run_hatari(hatari, TOS, prg, work, 500, "0", f"b VBL > 499 :once :file {work / 'c0.ini'}\n", None)
+        base = (work / "ram0.bin").read_bytes().find(image[sym["start"]:sym["start"] + 48]) - sym["start"]
+        self.assertGreater(base, 0)
+        state = dict(hp=35, mp=13, experience=4242, gold=1234567, seconds=7)
+        values = " ".join(f"0x{b:02x}" for b in sc.hud_state_bytes(state))
+        (work / "poke.ini").write_text(f"memwrite ${base + sym['hud_state']:x} {values}\nmemwrite ${base + sym['hud_dirty']:x} 0x01\ncont\n", encoding="utf-8")
+        (work / "cap.ini").write_text(f"savebin {work / 'ram1.bin'} 0 $80000\ncont\n", encoding="utf-8")
+        script = "".join(f"b VBL > {v} :once :file {work / f}\n" for v, f in ((599, "poke.ini"), (699, "cap.ini")))
+        hs.run_hatari(hatari, TOS, prg, work, 700, "0", script, None)
+        ram = (work / "ram1.bin").read_bytes()
+        expected = sc.expected_screen(fr.Rom(ROM), 0, 1, 40, state=state, hero=sc.Hero())
+        for name in ("buf_a", "buf_b", "buf_bg"):
+            address = int.from_bytes(ram[base + sym[name]:base + sym[name] + 4], "big")
+            rows = hs.decode_screen(ram, address)
+            bad = [(x, y) for y in range(32) for x in range(320) if rows[y][x] != expected[y][x]]
+            self.assertEqual(bad[:5], [], f"{name}: {len(bad)} HUD pixels differ")
+
 
 if __name__ == "__main__":
     unittest.main()
