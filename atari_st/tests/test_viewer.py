@@ -63,6 +63,38 @@ class ViewerTests(unittest.TestCase):
             with self.subTest(first=first, second=second):
                 self.check(0, 1, 40, hud=first, hud2=second)
 
+    def test_the_hero_walks_when_the_stick_is_pushed_and_leaves_no_trail(self) -> None:
+        """Hold the stick right (poked into the program's input state through Hatari's debugger) from VBL 600 to 650, let go, and
+        capture at 700: he stands facing right at his limit, x = 224, in the first walk frame, and the rest of the picture is clean."""
+        import faxanadu_rom as fr
+        import hatari_shot as hs
+        import st_convert as sc
+
+        subprocess.run(["make", "-C", str(ROOT), "viewer"], check=True, capture_output=True)
+        nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
+        sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
+        image = (ROOT / "build" / "viewer.bin").read_bytes()
+        work = ROOT / "build" / "shots_move"
+        work.mkdir(parents=True, exist_ok=True)
+        prg = ROOT / "build" / "VIEWER.PRG"
+        hatari = shutil.which("hatari")
+        (work / "c0.ini").write_text(f"savebin {work / 'ram0.bin'} 0 $80000\ncont\n", encoding="utf-8")
+        hs.run_hatari(hatari, TOS, prg, work, 500, "0", f"b VBL > 499 :once :file {work / 'c0.ini'}\n", None)
+        ram = (work / "ram0.bin").read_bytes()
+        base = ram.find(image[sym["start"]:sym["start"] + 48]) - sym["start"]
+        self.assertGreater(base, 0)
+        joy = base + sym["input_state"] + 259                # IN_JOY: bits 0-3 up, down, left, right
+        (work / "right.ini").write_text(f"memwrite ${joy:x} 0x08\ncont\n", encoding="utf-8")
+        (work / "stop.ini").write_text(f"memwrite ${joy:x} 0x00\ncont\n", encoding="utf-8")
+        (work / "cap.ini").write_text(f"savebin {work / 'ram1.bin'} 0 $80000\n" "m $ff8200-$ff8260\ncont\n", encoding="utf-8")
+        script = "".join(f"b VBL > {v} :once :file {work / f}\n" for v, f in ((599, "right.ini"), (649, "stop.ini"), (699, "cap.ini")))
+        log = hs.run_hatari(hatari, TOS, prg, work, 700, "0", script, None)
+        ram = (work / "ram1.bin").read_bytes()
+        rows = hs.decode_screen(ram, hs.video_base(log))
+        expected = sc.expected_screen(fr.Rom(ROM), 0, 1, 40, hero=sc.Hero(224, 144, 0, 255, 0, 0, False))
+        bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
+        self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
+
 
 if __name__ == "__main__":
     unittest.main()

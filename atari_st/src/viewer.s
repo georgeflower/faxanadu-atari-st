@@ -14,6 +14,10 @@
     .equ LEFT_BYTES, 16                     | 32 pixels
     .equ SPRITE_IMAGE_BYTES, 40
     .equ SCREEN_LINES, 200
+    .equ SCREEN_BYTES, 32000
+    .equ BUFFER_BYTES, 3*SCREEN_BYTES+256   | two screens and the clean background, the first on a 256-byte boundary
+    .equ VIDEO_BASE_HI, 0xFFFF8201
+    .equ VIDEO_BASE_MID, 0xFFFF8203
 
     .text
     .globl _start
@@ -39,7 +43,7 @@ start:
     lea stack_end(%pc), %sp
 
     move.l #image_size, %d0
-    addi.l #0x100, %d0
+    addi.l #0x100+BUFFER_BYTES, %d0         | the image, the basepage and room for three screens behind the image
     move.l %d0, -(%sp)
     move.l %a3, -(%sp)
     clr.w -(%sp)
@@ -81,7 +85,18 @@ start:
     move.w #2, -(%sp)
     trap #14                                | Physbase
     addq.l #2, %sp
-    movea.l %d0, %a4
+    lea orig_screen(%pc), %a0
+    move.l %d0, (%a0)
+    move.l %a3, %d0                         | the basepage; the image follows it, the screens follow the image
+    addi.l #0x100+image_size+255, %d0
+    andi.l #-256, %d0
+    lea buf_a(%pc), %a0
+    move.l %d0, (%a0)+                      | buf_a
+    addi.l #SCREEN_BYTES, %d0
+    move.l %d0, (%a0)+                      | buf_b
+    addi.l #SCREEN_BYTES, %d0
+    move.l %d0, (%a0)                       | buf_bg: the picture without sprites
+    movea.l buf_a(%pc), %a4
 
     | Clear the screen (32,000 bytes), then draw.
     movea.l %a4, %a0
@@ -140,26 +155,61 @@ start:
     bsr.w hud_load_state
     bsr.w hud_update
 
-    | The hero (and later every other sprite): the list is x, line, image number for each tile, ended by a word of -1.
+    | Both screens and the background get the same picture (without sprites).
+    movea.l %a4, %a0
+    movea.l buf_b(%pc), %a1
+    bsr.w copy_screen
+    movea.l %a4, %a0
+    movea.l buf_bg(%pc), %a1
+    bsr.w copy_screen
+
+    .ifdef BENCH
+    | Time the hero: draw it BENCH times over itself and count the VBLs that took (frame_init starts the counter at 0).
     lea hero_list(%pc), %a5
     lea hero_images(%pc), %a3
-10: move.w (%a5)+, %d0                      | x on the screen
-    bmi.s 11f
-    move.w (%a5)+, %d1                      | line (may be above or below the window)
-    move.w (%a5)+, %d2
-    mulu.w #SPRITE_IMAGE_BYTES, %d2
-    lea (%a3,%d2.l), %a1
-    bsr.w blit_tile
-    bra.s 10b
-11:
-    | The frame loop: one pass a VBL until Esc.
     bsr.w frame_init
-12: bsr.w wait_vbl
-    bsr.w input_poll
+    move.w #BENCH-1, %d6
+15: movem.l %d6, -(%sp)
+    lea hero_list(%pc), %a5
+    bsr.w draw_sprites
+    movem.l (%sp)+, %d6
+    dbra %d6, 15b
+    lea frame_count(%pc), %a0
+    lea bench_result(%pc), %a1
+    move.l (%a0), (%a1)
+    bsr.w frame_exit
+    .endif
+
+    | The frame loop. a4 is the screen drawn into; the other one is on show. One pass a VBL until Esc: erase what was drawn in this
+    | screen two frames ago (copy back from the background), move the hero, draw him, wait for the VBL, show this screen.
+    movea.l buf_a(%pc), %a0
+    bsr.w show_screen                       | the picture without the hero
+    movea.l buf_b(%pc), %a4
+    bsr.w frame_init
+12: bsr.w input_poll
+    bsr.w hero_step
+    lea rect_slots(%pc), %a0
+    move.w slot_index(%pc), %d0
+    lsl.w #3, %d0
+    adda.w %d0, %a0                         | this screen's slot: where the hero was drawn in it
+    bsr.w restore_rect
+    bsr.w draw_hero
+    bsr.w wait_vbl
+    movea.l %a4, %a0
+    bsr.w show_screen
+    movea.l buf_a(%pc), %a0                 | the other screen is the next one to draw into
+    cmpa.l %a0, %a4
+    bne.s 13f
+    movea.l buf_b(%pc), %a0
+13: movea.l %a0, %a4
+    lea slot_index(%pc), %a0
+    eori.w #1, (%a0)
     lea input_state(%pc), %a0
     tst.b IN_QUIT(%a0)
     beq.s 12b
     bsr.w frame_exit
+    movea.l orig_screen(%pc), %a0
+    bsr.w show_screen                       | TOS's screen again
 
     movea.l #PALETTE, %a2
     lea saved_palette(%pc), %a1
@@ -224,6 +274,31 @@ blit_tile:
     lsl.w #3, %d1                           | 8 bytes a 16-pixel group
     adda.w %d1, %a0
     andi.w #15, %d0                         | the shift inside the group
+    cmpi.w #8, %d0
+    bgt.s 3f
+    | The tile (8 pixels) fits in one group: a single word a plane.
+    moveq #8, %d6
+    sub.w %d0, %d6                          | shift left by 8 - x
+.macro PLANE1 off
+    moveq #0, %d3
+    move.b (%a1)+, %d3
+    lsl.w %d6, %d3
+    move.w \off(%a0), %d5
+    and.w %d2, %d5
+    or.w %d3, %d5
+    move.w %d5, \off(%a0)
+.endm
+4:  moveq #0, %d2
+    move.b (%a1)+, %d2
+    lsl.w %d6, %d2
+    not.w %d2
+    PLANE1 0
+    PLANE1 2
+    PLANE1 4
+    PLANE1 6
+    lea STRIDE(%a0), %a0
+    dbra %d7, 4b
+    rts
 3:  moveq #0, %d2
     move.b (%a1)+, %d2
     ror.l #8, %d2
@@ -238,6 +313,188 @@ blit_tile:
     lea STRIDE(%a0), %a0
     dbra %d7, 3b
 9:  rts
+
+| Draws a sprite list: a5 = list (x, line, image number for each tile, ended by -1), a3 = images, a4 = screen.
+draw_sprites:
+10: move.w (%a5)+, %d0                      | x on the screen
+    bmi.s 11f
+    move.w (%a5)+, %d1                      | line (may be above or below the window)
+    move.w (%a5)+, %d2
+    mulu.w #SPRITE_IMAGE_BYTES, %d2
+    lea (%a3,%d2.l), %a1
+    bsr.w blit_tile
+    bra.s 10b
+11: rts
+
+| a0 = a screen (256-byte aligned): the shifter shows it from the next frame.
+show_screen:
+    move.l %a0, %d0
+    lsr.l #8, %d0
+    move.b %d0, VIDEO_BASE_MID
+    lsr.l #8, %d0
+    move.b %d0, VIDEO_BASE_HI
+    rts
+
+| a0 = source, a1 = destination: 32,000 bytes.
+copy_screen:
+    move.w #(SCREEN_BYTES/16)-1, %d0
+1:  move.l (%a0)+, (%a1)+
+    move.l (%a0)+, (%a1)+
+    move.l (%a0)+, (%a1)+
+    move.l (%a0)+, (%a1)+
+    dbra %d0, 1b
+    rts
+
+| Puts back the background where a rectangle was drawn. a0 = the rectangle: x0, x1, y0, y1 as words (ST pixels, the end exclusive),
+| a4 = the screen. Whole 16-pixel groups are copied; what is outside the screen's window (the HUD, below the last line) is not.
+restore_rect:
+    movem.l %d0-%d5/%a0-%a1, -(%sp)
+    movem.w (%a0), %d0-%d3                  | x0, x1, y0, y1
+    tst.w %d0
+    bpl.s 1f
+    moveq #0, %d0
+1:  cmpi.w #320, %d1
+    ble.s 2f
+    move.w #320, %d1
+2:  cmpi.w #HUD_LINES, %d2
+    bge.s 3f
+    move.w #HUD_LINES, %d2
+3:  cmpi.w #SCREEN_LINES, %d3
+    ble.s 4f
+    move.w #SCREEN_LINES, %d3
+4:  cmp.w %d0, %d1
+    ble.s 9f
+    sub.w %d2, %d3                          | lines
+    ble.s 9f
+    subq.w #1, %d3
+    subq.w #1, %d1
+    lsr.w #4, %d1                           | last group
+    lsr.w #4, %d0                           | first group
+    sub.w %d0, %d1                          | groups - 1
+    move.w %d1, %d4
+    addq.w #1, %d4
+    lsl.w #3, %d4
+    move.w #STRIDE, %d5
+    sub.w %d4, %d5                          | what to add to get to the next line
+    lsl.w #3, %d0
+    mulu.w #STRIDE, %d2
+    add.l %d0, %d2                          | offset of the first group of the first line
+    lea (%a4,%d2.l), %a1
+    movea.l buf_bg(%pc), %a0
+    adda.l %d2, %a0
+5:  move.w %d1, %d0
+6:  move.l (%a0)+, (%a1)+
+    move.l (%a0)+, (%a1)+
+    dbra %d0, 6b
+    adda.w %d5, %a0
+    adda.w %d5, %a1
+    dbra %d3, 5b
+9:  movem.l (%sp)+, %d0-%d5/%a0-%a1
+    rts
+
+| The pad moves the hero (a demonstration, not the game's physics): two pixels a frame, the walk frame changes every six frames.
+hero_step:
+    movem.l %d0-%d2/%a0-%a1, -(%sp)
+    lea input_state(%pc), %a0
+    move.b IN_PAD(%a0), %d0
+    lea hero_x(%pc), %a1                    | hero_x, hero_y, hero_left, hero_frame, hero_tick
+    moveq #0, %d2                           | 1 when he moves
+    btst #1, %d0                            | left
+    beq.s 1f
+    subq.w #2, (%a1)
+    move.w #1, 4(%a1)
+    moveq #1, %d2
+1:  btst #0, %d0                            | right
+    beq.s 2f
+    addq.w #2, (%a1)
+    clr.w 4(%a1)
+    moveq #1, %d2
+2:  btst #3, %d0                            | up
+    beq.s 3f
+    subq.w #2, 2(%a1)
+    moveq #1, %d2
+3:  btst #2, %d0                            | down
+    beq.s 4f
+    addq.w #2, 2(%a1)
+    moveq #1, %d2
+4:  tst.w %d2                               | the limits only apply to a hero who moves (the start position may lie outside)
+    beq.s 8f
+    cmpi.w #16, (%a1)
+    bge.s 5f
+    move.w #16, (%a1)
+5:  cmpi.w #224, (%a1)
+    ble.s 6f
+    move.w #224, (%a1)
+6:  cmpi.w #56, 2(%a1)
+    bge.s 7f
+    move.w #56, 2(%a1)
+7:  cmpi.w #168, 2(%a1)
+    ble.s 8f
+    move.w #168, 2(%a1)
+8:  tst.w %d2
+    bne.s 9f
+    cmpi.w #-1, 8(%a1)                      | standing (tick -1): the start pose stays until he has moved
+    beq.s 10f
+    clr.w 6(%a1)                            | stopped: frame 0
+    move.w #-1, 8(%a1)
+    bra.s 10f
+9:  addq.w #1, 8(%a1)
+    bne.s 11f
+    clr.w 8(%a1)                            | the first step: tick 0
+11: cmpi.w #6, 8(%a1)
+    blt.s 10f
+    clr.w 8(%a1)
+    addq.w #1, 6(%a1)
+    cmpi.w #3, 6(%a1)
+    blt.s 10f
+    clr.w 6(%a1)
+10: movem.l (%sp)+, %d0-%d2/%a0-%a1
+    rts
+
+| Draws the hero in the pose his state says, into screen a4, and notes the rectangle in this screen's slot.
+draw_hero:
+    movem.l %d0-%d7/%a0-%a3/%a5, -(%sp)
+    lea hero_anim(%pc), %a5
+    move.w hero_left(%pc), %d0
+    add.w %d0, %d0
+    add.w hero_left(%pc), %d0               | * 3
+    add.w hero_frame(%pc), %d0              | the pose
+    add.w %d0, %d0
+    move.w (%a5,%d0.w), %d0
+    adda.w %d0, %a5                         | the pose's record
+    lea rect_slots(%pc), %a0
+    move.w slot_index(%pc), %d0
+    lsl.w #3, %d0
+    adda.w %d0, %a0
+    move.w hero_x(%pc), %d4                 | where he is: ST x and the line
+    move.w hero_y(%pc), %d5
+    subi.w #CAMERA, %d5
+    move.w (%a5)+, %d0
+    add.w %d4, %d0
+    move.w %d0, (%a0)+                      | the box
+    move.w (%a5)+, %d0
+    add.w %d4, %d0
+    move.w %d0, (%a0)+
+    move.w (%a5)+, %d0
+    add.w %d5, %d0
+    move.w %d0, (%a0)+
+    move.w (%a5)+, %d0
+    add.w %d5, %d0
+    move.w %d0, (%a0)+
+    lea hero_anim_images(%pc), %a3
+1:  move.w (%a5)+, %d0
+    bmi.s 2f
+    add.w hero_x(%pc), %d0
+    move.w hero_y(%pc), %d1                 | blit_tile clobbers d0-d7: the position comes from memory each time
+    subi.w #CAMERA, %d1
+    add.w (%a5)+, %d1
+    move.w (%a5)+, %d2
+    mulu.w #SPRITE_IMAGE_BYTES, %d2
+    lea (%a3,%d2.l), %a1
+    bsr.w blit_tile
+    bra.s 1b
+2:  movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5
+    rts
 
 hud_load_state:
     lea hud_state(%pc), %a1
@@ -255,6 +512,10 @@ hero_list:
     .even
 hero_images:
     .incbin "hero_images.bin"
+hero_anim:
+    .incbin "hero_anim.bin"
+hero_anim_images:
+    .incbin "hero_anim_images.bin"
 hud_layout:
     .incbin "hud_layout.bin"
 hud_partial:
@@ -272,8 +533,32 @@ block_images:
     .incbin "blocks.bin"
 
     .section .data
+orig_screen:
+    .long 0
+buf_a:
+    .long 0
+buf_b:
+    .long 0
+buf_bg:
+    .long 0
+slot_index:
+    .word 0
+rect_slots:
+    .space 16                               | per screen: x0, x1, y0, y1 of where the hero was drawn in it (all zero: nothing)
+hero_x:
+    .word HERO_X
+hero_y:
+    .word HERO_Y
+hero_left:
+    .word HERO_LEFT
+hero_frame:
+    .word HERO_FRAME
+hero_tick:
+    .word -1
 hud_tiles:
     .incbin "hud_tiles.bin"
+bench_result:
+    .long 0
 
     .section .stack,"aw",@progbits
     .space 4096

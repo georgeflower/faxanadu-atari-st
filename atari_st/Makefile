@@ -80,6 +80,7 @@ HERO ?= 144,144,0,255,0,0,1
 # the HUD drawn first and the state drawn over it: power,magic,experience,gold,seconds
 HUD ?= 16,0,0,0,0
 HUD2 ?=
+VIEWER_DEFS ?=
 ROM_FILE ?= ../ext/Faxanadu_Europe.nes
 GENERATED := $(BUILD_DIR)/generated
 VIEWER_PRG := $(BUILD_DIR)/VIEWER.PRG
@@ -87,7 +88,7 @@ VIEWER_PRG := $(BUILD_DIR)/VIEWER.PRG
 viewer:
 	@mkdir -p $(BUILD_DIR)
 	$(PYTHON) $(TOOLS_DIR)/build_assets.py --rom $(ROM_FILE) --area $(AREA) --screen $(SCREEN) --camera $(CAMERA) --hero $(HERO) --hud $(HUD) --hud2 '$(HUD2)' --out $(GENERATED)
-	$(AS) -m68000 -I $(GENERATED) -I $(SRC_DIR) -al=$(BUILD_DIR)/viewer.lst -o $(BUILD_DIR)/viewer.o $(SRC_DIR)/viewer.s
+	$(AS) -m68000 -I $(GENERATED) -I $(SRC_DIR) $(VIEWER_DEFS) -al=$(BUILD_DIR)/viewer.lst -o $(BUILD_DIR)/viewer.o $(SRC_DIR)/viewer.s
 	$(LD) $(LDFLAGS) -o $(BUILD_DIR)/viewer.elf $(BUILD_DIR)/viewer.o
 	$(PYTHON) $(TOOLS_DIR)/check_reach.py --nm $(NM) --text-base start --listing $(BUILD_DIR)/viewer.lst $(BUILD_DIR)/viewer.elf $(SRC_DIR)/viewer.s
 	$(OBJCOPY) -O binary $(BUILD_DIR)/viewer.elf $(BUILD_DIR)/viewer.bin

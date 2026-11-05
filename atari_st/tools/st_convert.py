@@ -289,6 +289,45 @@ def hero_assets(rom: fr.Rom, hero: Hero, palette_index: int, plan: PalettePlan, 
     return bytes(entries), b"".join(images)
 
 
+ANIM_BASE = 128             # the pose lists are made with the hero here, so that no sprite coordinate wraps at 8 bits
+
+
+def hero_anim_assets(rom: fr.Rom, hero: Hero, palette_index: int, plan: PalettePlan) -> tuple[bytes, bytes]:
+    """(poses, images) for a walking hero: six poses, pose = frame (0-2) + 3 * faces-left, with the equipment of `hero`.
+
+    poses is a table of six words (the offset of each pose record from the start of the table), then the records: the box the pose
+    covers as four signed words (x0, x1 exclusive, y0, y1 exclusive) and the sprites as (x, line, image) words, ended by -1. All
+    x is relative to the hero's NES x (the ST screen's left margin is in it), y to his NES y (the one-line shift of the sprites is in
+    it); the line on the screen is that y minus the camera. images are shared by the six poses."""
+    tiles = fs.pattern_tiles(rom, hero.armor, hero.shield, hero.weapon)
+    palettes = sprite_palettes(rom, palette_index)
+    images: list[bytes] = []
+    index: dict[tuple, int] = {}
+    records = []
+    for left in (False, True):
+        for frame in range(3):
+            pose = Hero(ANIM_BASE, ANIM_BASE, hero.armor, hero.shield, hero.weapon, frame, left)
+            entries = []
+            for sp in pose.sprites(rom):
+                key = (sp.tile, sp.attr & 3, bool(sp.attr & 0x40))
+                if key not in index:
+                    index[key] = len(images)
+                    images.append(sprite_image(tiles.get(sp.tile, bytes(16)), key[2], palettes[key[1]], plan))
+                entries.append((sp.x - ANIM_BASE + ST_LEFT, sp.y + 1 - ANIM_BASE, index[key]))
+            x0 = min(e[0] for e in entries)
+            y0 = min(e[1] for e in entries)
+            box = (x0, max(e[0] for e in entries) + 8, y0, max(e[1] for e in entries) + 8)
+            record = b"".join(v.to_bytes(2, "big", signed=True) for v in box)
+            for e in entries:
+                record += b"".join(v.to_bytes(2, "big", signed=True) for v in e)
+            records.append(record + b"\xff\xff")
+    offsets, at = [], 12
+    for record in records:
+        offsets.append(at)
+        at += len(record)
+    return b"".join(o.to_bytes(2, "big") for o in offsets) + b"".join(records), b"".join(images)
+
+
 def expected_screen(rom: fr.Rom, area_index: int, screen: int, camera: int, palette_index: int | None = None,
                     state: dict | None = None, hero: Hero | None = None) -> list[list[int]]:
     """The whole 320x200 ST screen as slot numbers: the HUD in lines 0-31, then the playfield window of 168 lines, both 256 wide
