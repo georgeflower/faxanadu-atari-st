@@ -34,9 +34,6 @@ hud_update_all:
     movea.l buf_b(%pc), %a4
     lea hud_shown_b(%pc), %a2
     bsr.w hud_draw
-    movea.l buf_bg(%pc), %a4
-    lea hud_shown_bg(%pc), %a2
-    bsr.w hud_draw
     movem.l (%sp)+, %d0-%d7/%a0-%a6
     rts
 
@@ -48,11 +45,6 @@ hud_copy_shown:
     moveq #31, %d0
 1:  move.l (%a0)+, (%a1)+
     dbra %d0, 1b
-    lea hud_shown(%pc), %a0
-    lea hud_shown_bg(%pc), %a1
-    moveq #31, %d0
-2:  move.l (%a0)+, (%a1)+
-    dbra %d0, 2b
     movem.l (%sp)+, %d0/%a0-%a1
     rts
 

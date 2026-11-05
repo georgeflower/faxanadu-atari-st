@@ -15,9 +15,14 @@
     .equ SPRITE_IMAGE_BYTES, 40
     .equ SCREEN_LINES, 200
     .equ SCREEN_BYTES, 32000
-    .equ BUFFER_BYTES, 4*SCREEN_BYTES+256   | two screens, the clean background and the next screen, the first on a 256-byte boundary
+    .equ REGION_BYTES, 208*160              | a whole 208-line playfield (stride 160: the same layout as the screen)
+    .equ BUFFER_BYTES, 2*SCREEN_BYTES+2*REGION_BYTES+256 | two screens and two playfields, the first on a 256-byte boundary
     .equ HERO_X_MIN, 8                      | where he is at the left edge: scrolls to the screen on the left
     .equ HERO_X_MAX, 241                    | and at the right edge
+    .equ HERO_Y_MIN, 40                     | at the top of the screen: scrolls to the screen above
+    .equ HERO_Y_MAX, 200                    | and at the bottom
+    .equ CAMERA_TOP, 48                     | the hero's top line stays between these (lines on the screen, 32 is the first of the window)
+    .equ CAMERA_BOTTOM, 120
     .equ VIDEO_BASE_HI, 0xFFFF8201
     .equ VIDEO_BASE_MID, 0xFFFF8203
 
@@ -97,19 +102,30 @@ start:
     addi.l #SCREEN_BYTES, %d0
     move.l %d0, (%a0)+                      | buf_b
     addi.l #SCREEN_BYTES, %d0
-    move.l %d0, (%a0)+                      | buf_bg: the picture without sprites
-    addi.l #SCREEN_BYTES, %d0
-    move.l %d0, (%a0)                       | buf_next: the screen scrolled to
+    move.l %d0, (%a0)+                      | pf_ptr: the playfield (208 lines) of the screen, without sprites
+    addi.l #REGION_BYTES, %d0
+    move.l %d0, (%a0)                       | next_ptr: the playfield of the screen scrolled to
     movea.l buf_a(%pc), %a4
 
-    | Clear the screen (32,000 bytes), then draw.
+    | Clear the screen (32,000 bytes) and the two playfields (their margins are never drawn), then draw.
     movea.l %a4, %a0
     move.w #7999, %d1
 3:  clr.l (%a0)+
     dbra %d1, 3b
+    movea.l pf_ptr(%pc), %a0
+    move.w #(2*REGION_BYTES/4)-1, %d1
+13: clr.l (%a0)+
+    dbra %d1, 13b
 
     lea screen_data(%pc), %a5               | the start screen's block ids (screen 0 of the table)
-    bsr.w draw_playfield
+    move.l %a4, -(%sp)
+    movea.l pf_ptr(%pc), %a4
+    bsr.w draw_playfield                    | into the playfield buffer ...
+    movea.l (%sp)+, %a4
+    moveq #0, %d0
+    bsr.w copy_window_half                  | ... and its window into the first screen
+    moveq #1, %d0
+    bsr.w copy_window_half
 
     | The HUD: first the state of the start screen, then the second state (to see that an update clears what was there).
     lea hud_states(%pc), %a0
@@ -119,12 +135,9 @@ start:
     bsr.w hud_load_state
     bsr.w hud_update
 
-    | Both screens and the background get the same picture (without sprites).
+    | Both screens get the same picture (without sprites).
     movea.l %a4, %a0
     movea.l buf_b(%pc), %a1
-    bsr.w copy_screen
-    movea.l %a4, %a0
-    movea.l buf_bg(%pc), %a1
     bsr.w copy_screen
     bsr.w hud_copy_shown
 
@@ -154,6 +167,7 @@ start:
 12: bsr.w input_poll
     bsr.w hero_step
     bsr.w scroll_check                      | at the edge of the screen: scrolls to the next one (and comes back when it is done)
+    bsr.w camera_follow                     | the window of the playfield follows him up and down
     lea rect_slots(%pc), %a0
     move.w slot_index(%pc), %d0
     lsl.w #3, %d0
@@ -341,8 +355,12 @@ restore_rect:
     mulu.w #STRIDE, %d2
     add.l %d0, %d2                          | offset of the first group of the first line
     lea (%a4,%d2.l), %a1
-    movea.l buf_bg(%pc), %a0
+    movea.l pf_ptr(%pc), %a0
     adda.l %d2, %a0
+    move.w camera(%pc), %d4                 | the screen's line y is the playfield's line y - 32 + camera
+    subi.w #HUD_LINES, %d4
+    muls.w #STRIDE, %d4
+    adda.l %d4, %a0
 5:  move.w %d1, %d0
 6:  move.l (%a0)+, (%a1)+
     move.l (%a0)+, (%a1)+
@@ -429,7 +447,7 @@ draw_hero:
     adda.w %d0, %a0
     move.w hero_x(%pc), %d4                 | where he is: ST x and the line
     move.w hero_y(%pc), %d5
-    subi.w #CAMERA, %d5
+    sub.w camera(%pc), %d5
     move.w (%a5)+, %d0
     add.w %d4, %d0
     move.w %d0, (%a0)+                      | the box
@@ -447,7 +465,7 @@ draw_hero:
     bmi.s 2f
     add.w hero_x(%pc), %d0
     move.w hero_y(%pc), %d1                 | blit_tile clobbers d0-d7: the position comes from memory each time
-    subi.w #CAMERA, %d1
+    sub.w camera(%pc), %d1
     add.w (%a5)+, %d1
     move.w (%a5)+, %d2
     mulu.w #SPRITE_IMAGE_BYTES, %d2
@@ -494,14 +512,13 @@ clear_margins:
     dbra %d3, 4b
 9:  rts
 
-| Draws a screen's playfield window (CAMERA..CAMERA+167) into a screen buffer. a5 = the block ids (16 to a row), a4 = the buffer.
+| Draws a screen's whole playfield (208 lines, stride 160, x from byte 16) into a buffer. a5 = the block ids (16 to a row), a4 = the buffer.
 | Clobbers d0-d7, a0-a3, a6.
 draw_playfield:
     lea block_index(%pc), %a2
     lea block_images(%pc), %a3
     moveq #0, %d6                           | window line
-4:  move.w %d6, %d0
-    addi.w #CAMERA, %d0                     | line of the playfield
+4:  move.w %d6, %d0                         | line of the playfield
     move.w %d0, %d1
     lsr.w #4, %d1                           | block row
     andi.w #15, %d0                         | line inside the block
@@ -512,7 +529,6 @@ draw_playfield:
     lsl.w #4, %d1
     lea (%a5,%d1.w), %a1                    | the block ids of this row
     move.w %d6, %d3
-    addi.w #HUD_LINES, %d3
     mulu.w #STRIDE, %d3
     lea LEFT_BYTES(%a4,%d3.l), %a0          | where the line goes
     moveq #0, %d4                           | block column
@@ -536,7 +552,7 @@ draw_playfield:
     cmpi.w #16, %d4
     blt.s 5b
     addq.w #1, %d6
-    cmpi.w #WINDOW_LINES, %d6
+    cmpi.w #208, %d6
     blt 4b
     rts
 
@@ -605,7 +621,7 @@ do_scroll:
     lea scroll_target(%pc), %a0
     move.w %d0, (%a0)
     move.l %a4, -(%sp)
-    movea.l buf_next(%pc), %a4              | the screen scrolled to, drawn once into its own buffer
+    movea.l next_ptr(%pc), %a4              | the screen scrolled to, drawn once into its own buffer
     mulu.w #208, %d0
     lea screen_data(%pc), %a5
     adda.l %d0, %a5
@@ -620,10 +636,10 @@ do_scroll:
     bsr.w scroll_bg_step
     bsr.w wait_vbl
     moveq #0, %d0
-    bsr.w copy_bg_half
+    bsr.w copy_window_half
     bsr.w wait_vbl
     moveq #1, %d0
-    bsr.w copy_bg_half
+    bsr.w copy_window_half
     bsr.w wait_vbl
     move.w %d7, %d0
     bsr.w scroll_hero
@@ -635,7 +651,8 @@ do_scroll:
     addq.w #1, %d7
     cmpi.w #17, %d7
     blt.s 2b
-    | arrived: the background is the new screen; the other screen gets it too
+    | arrived: the new playfield is the one in next_ptr (the shifted old one is rubbish now)
+    bsr.w swap_playfields
     lea cur_screen(%pc), %a0
     move.w scroll_target(%pc), (%a0)
     lea pending_offset(%pc), %a0
@@ -647,14 +664,7 @@ do_scroll:
     move.w #HERO_X_MAX, (%a0)
 3:  clr.w 6(%a0)
     clr.w 8(%a0)
-    moveq #0, %d0
-    bsr.w copy_bg_half
-    bsr.w wait_vbl
-    moveq #1, %d0
-    bsr.w copy_bg_half
-    bsr.w wait_vbl
-    bsr.w draw_hero
-    bsr.w present_swap
+    bsr.w refresh_screens
     lea scroll_dir(%pc), %a0
     clr.w (%a0)
     movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5-%a6
@@ -664,10 +674,13 @@ do_scroll:
 | comes in at the other end.
 scroll_bg_step:
     movem.l %d0-%d2/%d7/%a0-%a3, -(%sp)
-    movea.l buf_bg(%pc), %a0
-    adda.l #HUD_LINES*STRIDE+LEFT_BYTES, %a0
-    movea.l buf_next(%pc), %a1
-    adda.l #HUD_LINES*STRIDE+LEFT_BYTES, %a1
+    move.w camera(%pc), %d2                 | the window's lines of the playfield: the others are not needed (the new playfield replaces it)
+    mulu.w #STRIDE, %d2
+    addi.l #LEFT_BYTES, %d2
+    movea.l pf_ptr(%pc), %a0
+    adda.l %d2, %a0
+    movea.l next_ptr(%pc), %a1
+    adda.l %d2, %a1
     move.w #WINDOW_LINES-1, %d7
     move.w scroll_dir(%pc), %d1
     beq.s 4f
@@ -703,23 +716,25 @@ scroll_bg_step:
 9:  movem.l (%sp)+, %d0-%d2/%d7/%a0-%a3
     rts
 
-| d0 = 0: the top half of the window (84 lines), 1: the bottom half, copied from the clean background to the screen a4. Whole lines.
-copy_bg_half:
-    movem.l %d0/%a0-%a1, -(%sp)
-    movea.l buf_bg(%pc), %a0
-    adda.l #HUD_LINES*STRIDE, %a0
+| d0 = 0: the top half of the window (84 lines), 1: the bottom half: copied from the playfield (from the camera line on) to the screen a4.
+copy_window_half:
+    movem.l %d0-%d1/%a0-%a1, -(%sp)
+    move.w camera(%pc), %d1
     lea HUD_LINES*STRIDE(%a4), %a1
     tst.w %d0
     beq.s 1f
-    adda.l #(WINDOW_LINES/2)*STRIDE, %a0
+    addi.w #WINDOW_LINES/2, %d1
     adda.l #(WINDOW_LINES/2)*STRIDE, %a1
-1:  move.w #((WINDOW_LINES/2)*STRIDE/16)-1, %d0
+1:  mulu.w #STRIDE, %d1
+    movea.l pf_ptr(%pc), %a0
+    adda.l %d1, %a0
+    move.w #((WINDOW_LINES/2)*STRIDE/16)-1, %d0
 2:  move.l (%a0)+, (%a1)+
     move.l (%a0)+, (%a1)+
     move.l (%a0)+, (%a1)+
     move.l (%a0)+, (%a1)+
     dbra %d0, 2b
-    movem.l (%sp)+, %d0/%a0-%a1
+    movem.l (%sp)+, %d0-%d1/%a0-%a1
     rts
 
 | d0 = the step (1-16): the hero where the picture has moved him to (he stays where he was in the world and the picture moves under
@@ -743,6 +758,31 @@ scroll_hero:
     clr.w 4(%a0)
 2:  movem.l (%sp)+, %d0-%d1/%a0
     bra.w draw_hero
+
+| The two playfields change places (the screen scrolled to is the one on show now).
+swap_playfields:
+    movem.l %d0-%d1, -(%sp)
+    lea pf_ptr(%pc), %a0
+    move.l (%a0), %d0
+    move.l 4(%a0), %d1
+    move.l %d1, (%a0)
+    move.l %d0, 4(%a0)
+    movem.l (%sp)+, %d0-%d1
+    rts
+
+| The screen being drawn into (a4) gets the window of the playfield and the hero, and is shown (three frames). Does not touch the other one.
+refresh_screens:
+    moveq #0, %d0
+    bsr.w copy_window_half
+    bsr.w wait_vbl
+    moveq #1, %d0
+    bsr.w copy_window_half
+    bsr.w wait_vbl
+    bsr.w draw_hero
+    bra.w present_swap
+
+camera_follow:
+    rts
 
 hud_load_state:
     lea hud_state(%pc), %a1
@@ -799,10 +839,12 @@ buf_a:
     .long 0
 buf_b:
     .long 0
-buf_bg:
-    .long 0
-buf_next:
-    .long 0
+pf_ptr:
+    .long 0                                 | the playfield (208 lines) of the screen on show, without sprites or HUD
+next_ptr:
+    .long 0                                 | the one of the screen scrolled to
+camera:
+    .word CAMERA                            | the playfield line shown on the window's first line
 slot_index:
     .word 0
 rect_slots:
