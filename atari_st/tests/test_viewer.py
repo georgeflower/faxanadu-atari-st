@@ -200,6 +200,110 @@ class ViewerTests(unittest.TestCase):
         self.assertGreaterEqual(len(seen), 5, f"offsets seen: {sorted(seen)}")
         self.assertEqual(late[-1], late[0], f"frames that took longer than 20 ms during the scroll: {late}")
 
+    def test_walking_off_the_top_scrolls_to_the_screen_above(self) -> None:
+        self.vscroll_test(False)
+
+    def test_walking_off_the_bottom_scrolls_to_the_screen_below(self) -> None:
+        self.vscroll_test(True)
+
+    def vscroll_test(self, down: bool) -> None:
+        """Trunk (area 1): screen 3 has screen 4 above it (and 4 has 3 below). The hero stands at the top (or the bottom) and the stick is
+        pushed (poked): the picture is captured at several moments; each must be the two playfields one above the other, the window
+        from the line the program reports (shown_vtop), the hero fixed where the game puts him (y 192 going up, 0 going down), and
+        at the end the new screen with the camera of its hero."""
+        import faxanadu_rom as fr
+        import hatari_shot as hs
+        import re
+        import st_convert as sc
+
+        start, target = (4, 3) if down else (3, 4)
+        hero_start = "144,192,0,255,0,0,1" if down else "144,0,0,255,0,0,1"
+        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=1", f"SCREEN={start}", f"CAMERA={40 if down else 0}", f"HERO={hero_start}"], check=True, capture_output=True)
+        nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
+        sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
+        image = (ROOT / "build" / "viewer.bin").read_bytes()
+        work = ROOT / "build" / "shots_vscroll"
+        work.mkdir(parents=True, exist_ok=True)
+        prg = ROOT / "build" / "VIEWER.PRG"
+        hatari = shutil.which("hatari")
+        (work / "c0.ini").write_text(f"savebin {work / 'ram0.bin'} 0 $80000\ncont\n", encoding="utf-8")
+        hs.run_hatari(hatari, TOS, prg, work, 500, "0", f"b VBL > 499 :once :file {work / 'c0.ini'}\n", None)
+        base = (work / "ram0.bin").read_bytes().find(image[sym["start"]:sym["start"] + 48]) - sym["start"]
+        self.assertGreater(base, 0)
+        joy = base + sym["input_state"] + 259
+        (work / "go.ini").write_text(f"memwrite ${joy:x} {'0x02' if down else '0x01'}\ncont\n", encoding="utf-8")
+        (work / "let_go.ini").write_text(f"memwrite ${joy:x} 0x00\ncont\n", encoding="utf-8")
+        moments = [610, 625, 640, 655, 670, 685, 700, 715, 730, 760]
+        for v in moments:
+            (work / f"cap{v}.ini").write_text(f"savebin {work / f'ram{v}.bin'} 0 $80000\nm $ff8200-$ff8260\ncont\n", encoding="utf-8")
+        script = f"b VBL > 599 :once :file {work / 'go.ini'}\nb VBL > 602 :once :file {work / 'let_go.ini'}\n"
+        script += "".join(f"b VBL > {v} :once :file {work / f'cap{v}.ini'}\n" for v in moments)
+        log = hs.run_hatari(hatari, TOS, prg, work, moments[-1] + 1, "0", script, None)
+        bases = [(int(m.group(2), 16) << 16) | (int(m.group(4), 16) << 8)
+                 for m in re.finditer(r"^00FF8200: ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2})", log, re.M)]
+        self.assertEqual(len(bases), len(moments))
+        rom = fr.Rom(ROM)
+        state = dict(hp=16, mp=0, experience=0, gold=0, seconds=0)
+        seen, late = [], []
+        for v, shown in zip(moments, bases):
+            ram = (work / f"ram{v}.bin").read_bytes()
+            word = lambda name: int.from_bytes(ram[base + sym[name]:base + sym[name] + 2], "big", signed=True)
+            top, cur = word("shown_vtop"), word("cur_screen")
+            late.append(int.from_bytes(ram[base + sym["late_frames"]:base + sym["late_frames"] + 4], "big"))
+            rows = hs.decode_screen(ram, shown)
+            if top == -1 and cur == 0:
+                continue                                           # not started yet
+            seen.append(top)
+            if top != -1:
+                hero = sc.Hero(144, 0 if down else 192, 0, 255, 0, 0, True)
+                expected = sc.expected_vscroll_screen(rom, 1, start, target, down, top, 0 if down else 40, state=state, hero=hero)
+            else:
+                hero = sc.Hero(144, 0 if down else 192, 0, 255, 0, 0, True)
+                expected = sc.expected_screen(rom, 1, target, 0 if down else 40, state=state, hero=hero)
+            bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
+            self.assertEqual(bad[:5], [], f"VBL {v}, top {top}, screen {cur}: {len(bad)} pixels differ")
+        self.assertGreaterEqual(len(seen), 5, f"tops seen: {seen}")
+        self.assertEqual(seen[-1], -1, f"tops seen: {seen}")
+        self.assertEqual(late[-1], late[0], f"frames that took longer than 20 ms during the scroll: {late}")
+
+    def test_the_window_follows_the_hero_up_the_screen(self) -> None:
+        """He starts low (camera 40) and the stick is pushed up (poked): once his y is below 56 the window moves to camera 0 (both screens
+        are redrawn) and the picture is the converter's, with him where he stands."""
+        import faxanadu_rom as fr
+        import hatari_shot as hs
+        import st_convert as sc
+
+        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=0", "SCREEN=1", "CAMERA=40", "HERO=144,100,0,255,0,0,1"], check=True, capture_output=True)
+        nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
+        sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
+        image = (ROOT / "build" / "viewer.bin").read_bytes()
+        work = ROOT / "build" / "shots_camera"
+        work.mkdir(parents=True, exist_ok=True)
+        prg = ROOT / "build" / "VIEWER.PRG"
+        hatari = shutil.which("hatari")
+        (work / "c0.ini").write_text(f"savebin {work / 'ram0.bin'} 0 $80000\ncont\n", encoding="utf-8")
+        hs.run_hatari(hatari, TOS, prg, work, 500, "0", f"b VBL > 499 :once :file {work / 'c0.ini'}\n", None)
+        base = (work / "ram0.bin").read_bytes().find(image[sym["start"]:sym["start"] + 48]) - sym["start"]
+        self.assertGreater(base, 0)
+        joy = base + sym["input_state"] + 259
+        (work / "go.ini").write_text(f"memwrite ${joy:x} 0x01\ncont\n", encoding="utf-8")
+        (work / "let_go.ini").write_text(f"memwrite ${joy:x} 0x00\ncont\n", encoding="utf-8")
+        (work / "cap.ini").write_text(f"savebin {work / 'ram1.bin'} 0 $80000\nm $ff8200-$ff8260\ncont\n", encoding="utf-8")
+        script = f"b VBL > 599 :once :file {work / 'go.ini'}\nb VBL > 650 :once :file {work / 'let_go.ini'}\nb VBL > 720 :once :file {work / 'cap.ini'}\n"
+        log = hs.run_hatari(hatari, TOS, prg, work, 721, "0", script, None)
+        import re
+        m = re.search(r"^00FF8200: ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2})", log, re.M)
+        shown = (int(m.group(2), 16) << 16) | (int(m.group(4), 16) << 8)
+        ram = (work / "ram1.bin").read_bytes()
+        word = lambda name: int.from_bytes(ram[base + sym[name]:base + sym[name] + 2], "big", signed=True)
+        self.assertEqual(word("camera"), 0)
+        self.assertLess(word("hero_y"), 56)
+        hero = sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 0, word("hero_frame"), bool(word("hero_flip")))
+        expected = sc.expected_screen(fr.Rom(ROM), 0, 1, 0, state=dict(hp=16, mp=0, experience=0, gold=0, seconds=0), hero=hero)
+        rows = hs.decode_screen(ram, shown)
+        bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
+        self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
+
 
 if __name__ == "__main__":
     unittest.main()

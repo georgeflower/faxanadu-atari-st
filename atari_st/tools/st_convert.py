@@ -350,6 +350,28 @@ def expected_scroll_screen(rom: fr.Rom, area_index: int, from_screen: int, to_sc
     return out
 
 
+def expected_vscroll_screen(rom: fr.Rom, area_index: int, from_screen: int, to_screen: int, going_down: bool, top: int, camera: int,
+                            state: dict | None = None, hero: Hero | None = None) -> list[list[int]]:
+    """The ST screen while the picture scrolls up or down between two screens: the playfields one above the other (going up the new one
+    on top), the window cut out of them from line `top` of the 416, the HUD as it is. `camera` is the new screen's camera (the hero is
+    drawn with it)."""
+    a = fm.area(rom, area_index)
+    pal = a.palette_index
+    plan = plan_for_set(rom, pal)
+    old = expected_window(rom, area_index, from_screen, 0, 208)
+    new = expected_window(rom, area_index, to_screen, 0, 208)
+    both = old + new if going_down else new + old
+    out = expected_screen(rom, area_index, from_screen, camera, state=state)
+    for y in range(168):
+        out[32 + y][32:288] = both[top + y]
+    if hero is not None:
+        for (x, line), slot in hero_layer(rom, hero, pal, plan).items():
+            y = line - camera
+            if ST_TOP <= y < 200 and ST_LEFT <= x < ST_LEFT + 256:
+                out[y][x] = slot
+    return out
+
+
 def expected_screen(rom: fr.Rom, area_index: int, screen: int, camera: int, palette_index: int | None = None,
                     state: dict | None = None, hero: Hero | None = None) -> list[list[int]]:
     """The whole 320x200 ST screen as slot numbers: the HUD in lines 0-31, then the playfield window of 168 lines, both 256 wide

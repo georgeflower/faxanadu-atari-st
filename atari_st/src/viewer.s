@@ -19,10 +19,11 @@
     .equ BUFFER_BYTES, 2*SCREEN_BYTES+2*REGION_BYTES+256 | two screens and two playfields, the first on a 256-byte boundary
     .equ HERO_X_MIN, 8                      | where he is at the left edge: scrolls to the screen on the left
     .equ HERO_X_MAX, 241                    | and at the right edge
-    .equ HERO_Y_MIN, 40                     | at the top of the screen: scrolls to the screen above
-    .equ HERO_Y_MAX, 200                    | and at the bottom
-    .equ CAMERA_TOP, 48                     | the hero's top line stays between these (lines on the screen, 32 is the first of the window)
-    .equ CAMERA_BOTTOM, 120
+    .equ HERO_Y_MIN, 0                      | at the top of the playfield (the game's Player_PosY): scrolls to the screen above
+    .equ HERO_Y_MAX, 192                    | and at the bottom ($C1 and more: the screen below; the demo stops at $C0)
+    .equ CAMERA_UP, 56                      | the camera is 0 while the hero's y is below this (he is at the top)
+    .equ CAMERA_DOWN, 120                   | and 40 while it is above this; in between it stays
+    .equ CAMERA_MAX, 40
     .equ VIDEO_BASE_HI, 0xFFFF8201
     .equ VIDEO_BASE_MID, 0xFFFF8203
 
@@ -122,6 +123,7 @@ start:
     movea.l pf_ptr(%pc), %a4
     bsr.w draw_playfield                    | into the playfield buffer ...
     movea.l (%sp)+, %a4
+    bsr.w set_view
     moveq #0, %d0
     bsr.w copy_window_half                  | ... and its window into the first screen
     moveq #1, %d0
@@ -404,12 +406,12 @@ hero_step:
 5:  cmpi.w #HERO_X_MAX, (%a1)
     ble.s 6f
     move.w #HERO_X_MAX, (%a1)
-6:  cmpi.w #56, 2(%a1)
+6:  cmpi.w #HERO_Y_MIN, 2(%a1)
     bge.s 7f
-    move.w #56, 2(%a1)
-7:  cmpi.w #168, 2(%a1)
+    move.w #HERO_Y_MIN, 2(%a1)
+7:  cmpi.w #HERO_Y_MAX, 2(%a1)
     ble.s 8f
-    move.w #168, 2(%a1)
+    move.w #HERO_Y_MAX, 2(%a1)
 8:  tst.w %d2
     bne.s 9f
     cmpi.w #-1, 8(%a1)                      | standing (tick -1): the start pose stays until he has moved
@@ -565,6 +567,8 @@ present_swap:
     bsr.w show_screen
     lea shown_offset(%pc), %a0
     move.w pending_offset(%pc), (%a0)
+    lea shown_vtop(%pc), %a0
+    move.w pending_vtop(%pc), (%a0)
     lea hud_dirty(%pc), %a0
     tst.b (%a0)
     beq.s 1f
@@ -588,13 +592,13 @@ scroll_check:
     btst #0, %d0                            | right
     beq.s 1f
     cmpi.w #HERO_X_MAX, %d1
-    blt.s 3f
+    blt.s 4f
     moveq #1, %d1                           | the neighbour to the right
     bra.s 2f
 1:  btst #1, %d0                            | left
-    beq.s 3f
+    beq.s 4f
     cmpi.w #HERO_X_MIN, %d1
-    bgt.s 3f
+    bgt.s 4f
     moveq #0, %d1
 2:  moveq #0, %d0
     move.w cur_screen(%pc), %d0
@@ -603,10 +607,35 @@ scroll_check:
     lea neighbours(%pc), %a0
     move.b (%a0,%d0.w), %d0                 | its number in the table, $FF for none
     cmpi.b #0xFF, %d0
-    beq.s 3f
+    beq.s 5f
     andi.w #0xFF, %d0
     bsr.w do_scroll                         | d0 = the screen scrolled to, d1 = 1 right, 0 left
-3:  movem.l (%sp)+, %d0-%d1/%a0-%a1
+    bra.s 5f
+4:  btst #3, %d0                            | up
+    beq.s 6f
+    move.w hero_y(%pc), %d1
+    cmpi.w #HERO_Y_MIN, %d1
+    bgt.s 5f
+    moveq #2, %d1
+    bra.s 7f
+6:  btst #2, %d0                            | down
+    beq.s 5f
+    move.w hero_y(%pc), %d1
+    cmpi.w #HERO_Y_MAX, %d1
+    blt.s 5f
+    moveq #3, %d1
+7:  moveq #0, %d0
+    move.w cur_screen(%pc), %d0
+    lsl.w #2, %d0
+    add.w %d1, %d0
+    lea neighbours(%pc), %a0
+    move.b (%a0,%d0.w), %d0
+    cmpi.b #0xFF, %d0
+    beq.s 5f
+    andi.w #0xFF, %d0
+    subq.w #2, %d1                          | 0 up, 1 down
+    bsr.w do_vscroll
+5:  movem.l (%sp)+, %d0-%d1/%a0-%a1
     rts
 
 | ---------------------------------------------------------------------------------------------------------------------------- scrolling
@@ -670,6 +699,119 @@ do_scroll:
     movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5-%a6
     rts
 
+| d0 = the screen to scroll to, d1 = 1 for the screen below, 0 for the one above. The ROM does nothing to the hero but put him at the
+| bottom ($C0, going up) or the top (0, going down) of the new screen at once; the picture moves 208 lines at 4 a frame under him
+| (after the same wait). Here the two playfields lie one after the other in memory (above: the new one first) and the window is
+| copied from a line of them that moves 16 lines every 4 frames; the last step may be shorter.
+do_vscroll:
+    movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
+    move.w %d1, %d6                         | 1 down, 0 up
+    lea vscroll_down(%pc), %a0
+    move.w %d1, (%a0)
+    lea scroll_target(%pc), %a0
+    move.w %d0, (%a0)
+    | The playfields in the order the scroll needs: up: the new one at the lower address, down: the old one.
+    move.l pf_ptr(%pc), %d2
+    move.l next_ptr(%pc), %d3
+    tst.w %d6
+    bne.s 1f
+    cmp.l %d3, %d2
+    bhi.s 2f                                | up: the old one (pf) is the higher: right
+    bra.s 3f
+1:  cmp.l %d3, %d2
+    bcs.s 2f                                | down: the old one is the lower: right
+3:  movea.l %d2, %a0                        | on the wrong side: the old one moves to the other region
+    movea.l %d3, %a1
+    bsr.w copy_region
+    lea pf_ptr(%pc), %a0
+    move.l %d3, (%a0)+
+    move.l %d2, (%a0)
+2:  move.l %a4, -(%sp)
+    movea.l next_ptr(%pc), %a4
+    move.w scroll_target(%pc), %d0
+    mulu.w #208, %d0
+    lea screen_data(%pc), %a5
+    adda.l %d0, %a5
+    bsr.w draw_playfield
+    movea.l (%sp)+, %a4
+    moveq #13, %d7
+4:  bsr.w wait_vbl
+    bsr.w input_poll
+    dbra %d7, 4b
+    | the viewport: its top line T in the two playfields (416 lines): d4 now, d3 at the end; the camera and the hero of the end
+    move.w vscroll_down(%pc), %d6           | (draw_playfield clobbers the registers)
+    lea hero_x(%pc), %a0
+    move.w camera(%pc), %d4
+    tst.w %d6
+    bne.s 5f
+    addi.w #208, %d4                        | up: the old screen is the lower one
+    move.w #192, 2(%a0)                     | he is at the bottom of the new screen
+    moveq #CAMERA_MAX, %d5
+    move.w %d5, %d3                         | the end: the camera's line in the upper playfield
+    bra.s 6f
+5:  clr.w 2(%a0)                            | down: at the top of the new screen
+    moveq #0, %d5
+    move.w #208, %d3
+6:  lea camera(%pc), %a1
+    move.w %d5, (%a1)                       | the camera of the new screen: the hero is drawn with it
+    clr.w 6(%a0)
+    clr.w 8(%a0)
+    movea.l pf_ptr(%pc), %a2                | the lower playfield: up: next_ptr, down: pf_ptr
+    tst.w %d6
+    bne.s 7f
+    movea.l next_ptr(%pc), %a2
+7:  move.w %d3, %d0
+    sub.w %d4, %d0                          | what is left (signed)
+    beq.s 12f
+    bpl.s 9f
+    neg.w %d0
+    moveq #16, %d1
+    cmp.w %d1, %d0
+    bcc.s 10f
+    move.w %d0, %d1
+10: sub.w %d1, %d4                          | up: T goes down
+    bra.s 11f
+9:  moveq #16, %d1
+    cmp.w %d1, %d0
+    bcc.s 13f
+    move.w %d0, %d1
+13: add.w %d1, %d4
+11: move.w %d4, %d0
+    mulu.w #STRIDE, %d0
+    add.l %a2, %d0
+    lea view_src(%pc), %a0
+    move.l %d0, (%a0)
+    bsr.w wait_vbl
+    moveq #0, %d0
+    bsr.w copy_window_half
+    bsr.w wait_vbl
+    moveq #1, %d0
+    bsr.w copy_window_half
+    bsr.w wait_vbl
+    bsr.w draw_hero
+    lea pending_vtop(%pc), %a0
+    move.w %d4, (%a0)
+    bsr.w present_swap
+    bra.s 7b
+12: bsr.w swap_playfields                   | the new playfield is the one on show now
+    lea pending_vtop(%pc), %a0
+    move.w #-1, (%a0)
+    lea cur_screen(%pc), %a0
+    move.w scroll_target(%pc), (%a0)
+    bsr.w refresh_screens
+    movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5-%a6
+    rts
+
+| a0 = the playfield to copy, a1 = where to (a whole region of 208 lines). Clobbers d0, a0-a1.
+copy_region:
+    move.w #(REGION_BYTES/16)-1, %d0
+1:  move.l (%a0)+, (%a1)+
+    move.l (%a0)+, (%a1)+
+    move.l (%a0)+, (%a1)+
+    move.l (%a0)+, (%a1)+
+    dbra %d0, 1b
+    rts
+
 | d0 = the step (1-16): the clean background moves 16 pixels towards the screen it scrolls from, and the next group of the new screen
 | comes in at the other end.
 scroll_bg_step:
@@ -716,25 +858,23 @@ scroll_bg_step:
 9:  movem.l (%sp)+, %d0-%d2/%d7/%a0-%a3
     rts
 
-| d0 = 0: the top half of the window (84 lines), 1: the bottom half: copied from the playfield (from the camera line on) to the screen a4.
+| d0 = 0: the top half of the window (84 lines), 1: the bottom half: copied from view_src (the window's first line in the playfield, or
+| in two playfields one after the other while scrolling up and down) to the screen a4.
 copy_window_half:
-    movem.l %d0-%d1/%a0-%a1, -(%sp)
-    move.w camera(%pc), %d1
+    movem.l %d0/%a0-%a1, -(%sp)
+    movea.l view_src(%pc), %a0
     lea HUD_LINES*STRIDE(%a4), %a1
     tst.w %d0
     beq.s 1f
-    addi.w #WINDOW_LINES/2, %d1
+    adda.l #(WINDOW_LINES/2)*STRIDE, %a0
     adda.l #(WINDOW_LINES/2)*STRIDE, %a1
-1:  mulu.w #STRIDE, %d1
-    movea.l pf_ptr(%pc), %a0
-    adda.l %d1, %a0
-    move.w #((WINDOW_LINES/2)*STRIDE/16)-1, %d0
+1:  move.w #((WINDOW_LINES/2)*STRIDE/16)-1, %d0
 2:  move.l (%a0)+, (%a1)+
     move.l (%a0)+, (%a1)+
     move.l (%a0)+, (%a1)+
     move.l (%a0)+, (%a1)+
     dbra %d0, 2b
-    movem.l (%sp)+, %d0-%d1/%a0-%a1
+    movem.l (%sp)+, %d0/%a0-%a1
     rts
 
 | d0 = the step (1-16): the hero where the picture has moved him to (he stays where he was in the world and the picture moves under
@@ -772,6 +912,7 @@ swap_playfields:
 
 | The screen being drawn into (a4) gets the window of the playfield and the hero, and is shown (three frames). Does not touch the other one.
 refresh_screens:
+    bsr.w set_view
     moveq #0, %d0
     bsr.w copy_window_half
     bsr.w wait_vbl
@@ -781,8 +922,45 @@ refresh_screens:
     bsr.w draw_hero
     bra.w present_swap
 
-camera_follow:
+| view_src = the window's first line in the playfield: pf_ptr + camera * 160.
+set_view:
+    move.l %a0, -(%sp)
+    move.l %d0, -(%sp)
+    move.w camera(%pc), %d0
+    mulu.w #STRIDE, %d0
+    add.l pf_ptr(%pc), %d0
+    lea view_src(%pc), %a0
+    move.l %d0, (%a0)
+    move.l (%sp)+, %d0
+    movea.l (%sp)+, %a0
     rts
+
+| The window of the playfield follows the hero up and down: camera 0 while he is high (y below CAMERA_UP), 40 while he is low (above
+| CAMERA_DOWN), unchanged in between. Only once he has moved (the start position decides the start camera). A change needs both screens
+| redrawn (a copy of the window each, six frames): the hero stands still for a moment.
+camera_follow:
+    movem.l %d0-%d1/%a0, -(%sp)
+    move.w hero_tick(%pc), %d0
+    cmpi.w #-1, %d0
+    beq.s 9f
+    move.w hero_y(%pc), %d0
+    move.w camera(%pc), %d1
+    cmpi.w #CAMERA_UP, %d0
+    bge.s 1f
+    moveq #0, %d0
+    bra.s 3f
+1:  cmpi.w #CAMERA_DOWN, %d0
+    ble.s 9f
+    moveq #CAMERA_MAX, %d0
+3:  cmp.w %d1, %d0
+    beq.s 9f
+    lea camera(%pc), %a0
+    move.w %d0, (%a0)
+    bsr.w refresh_screens
+    bsr.w refresh_screens
+9:  movem.l (%sp)+, %d0-%d1/%a0
+    rts
+
 
 hud_load_state:
     lea hud_state(%pc), %a1
@@ -833,6 +1011,12 @@ scroll_target:
     .word 0
 pending_offset:
     .word 0
+vscroll_down:
+    .word 0
+pending_vtop:
+    .word -1                                | the viewport's top line in the two playfields while scrolling up or down (-1: not)
+shown_vtop:
+    .word -1
 shown_offset:
     .word 0                                 | the picture on show has moved this many pixels (0 when not scrolling)
 buf_a:
@@ -843,6 +1027,8 @@ pf_ptr:
     .long 0                                 | the playfield (208 lines) of the screen on show, without sprites or HUD
 next_ptr:
     .long 0                                 | the one of the screen scrolled to
+view_src:
+    .long 0                                 | where the window's lines come from (copy_window_half)
 camera:
     .word CAMERA                            | the playfield line shown on the window's first line
 slot_index:
