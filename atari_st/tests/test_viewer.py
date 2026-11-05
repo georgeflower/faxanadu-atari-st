@@ -64,8 +64,8 @@ class ViewerTests(unittest.TestCase):
                 self.check(0, 1, 40, hud=first, hud2=second)
 
     def test_the_hero_walks_when_the_stick_is_pushed_and_leaves_no_trail(self) -> None:
-        """Hold the stick right (poked into the program's input state through Hatari's debugger) from VBL 600 to 650, let go, and
-        capture at 700: he stands facing right at his limit, x = 224, in the first walk frame, and the rest of the picture is clean."""
+        """Hold the stick right (poked into the program's input state through Hatari's debugger) from VBL 600 to 640, let go, and
+        capture at 700: he stands facing right (the sprite flip bit set) at his limit, x = 224, in the first walk frame, and the rest of the picture is clean."""
         import faxanadu_rom as fr
         import hatari_shot as hs
         import st_convert as sc
@@ -87,11 +87,11 @@ class ViewerTests(unittest.TestCase):
         (work / "right.ini").write_text(f"memwrite ${joy:x} 0x08\ncont\n", encoding="utf-8")
         (work / "stop.ini").write_text(f"memwrite ${joy:x} 0x00\ncont\n", encoding="utf-8")
         (work / "cap.ini").write_text(f"savebin {work / 'ram1.bin'} 0 $80000\n" "m $ff8200-$ff8260\ncont\n", encoding="utf-8")
-        script = "".join(f"b VBL > {v} :once :file {work / f}\n" for v, f in ((599, "right.ini"), (649, "stop.ini"), (699, "cap.ini")))
+        script = "".join(f"b VBL > {v} :once :file {work / f}\n" for v, f in ((599, "right.ini"), (639, "stop.ini"), (699, "cap.ini")))
         log = hs.run_hatari(hatari, TOS, prg, work, 700, "0", script, None)
         ram = (work / "ram1.bin").read_bytes()
         rows = hs.decode_screen(ram, hs.video_base(log))
-        expected = sc.expected_screen(fr.Rom(ROM), 0, 1, 40, hero=sc.Hero(224, 144, 0, 255, 0, 0, False))
+        expected = sc.expected_screen(fr.Rom(ROM), 0, 1, 40, hero=sc.Hero(224, 144, 0, 255, 0, 0, True))
         bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
 
@@ -127,6 +127,74 @@ class ViewerTests(unittest.TestCase):
             rows = hs.decode_screen(ram, address)
             bad = [(x, y) for y in range(32) for x in range(320) if rows[y][x] != expected[y][x]]
             self.assertEqual(bad[:5], [], f"{name}: {len(bad)} HUD pixels differ")
+
+    def test_walking_off_the_right_edge_scrolls_to_the_next_screen_in_steps_of_16_pixels(self) -> None:
+        self.scroll_test(True)
+
+    def test_walking_off_the_left_edge_scrolls_to_the_next_screen_in_steps_of_16_pixels(self) -> None:
+        self.scroll_test(False)
+
+    def scroll_test(self, to_the_right: bool) -> None:
+        """He stands at the right edge of Eolis screen 1 and the stick is pushed right (poked): the picture is captured at several moments
+        of the scroll; each must be the two screens side by side moved by what the program says (shown_offset), the hero as the ROM
+        places him (257 - offset), and at the end the new screen with the hero at its left edge."""
+        import faxanadu_rom as fr
+        import faxanadu_maps as fm
+        import hatari_shot as hs
+        import re
+        import st_convert as sc
+
+        subprocess.run(["make", "-C", str(ROOT), "viewer"], check=True, capture_output=True)
+        nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
+        sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
+        image = (ROOT / "build" / "viewer.bin").read_bytes()
+        work = ROOT / "build" / "shots_scroll"
+        work.mkdir(parents=True, exist_ok=True)
+        prg = ROOT / "build" / "VIEWER.PRG"
+        hatari = shutil.which("hatari")
+        (work / "c0.ini").write_text(f"savebin {work / 'ram0.bin'} 0 $80000\ncont\n", encoding="utf-8")
+        hs.run_hatari(hatari, TOS, prg, work, 500, "0", f"b VBL > 499 :once :file {work / 'c0.ini'}\n", None)
+        base = (work / "ram0.bin").read_bytes().find(image[sym["start"]:sym["start"] + 48]) - sym["start"]
+        self.assertGreater(base, 0)
+        joy, hero_x = base + sym["input_state"] + 259, base + sym["hero_x"]
+        (work / "go.ini").write_text(f"memwrite ${hero_x:x} 0x00 {'0xf1' if to_the_right else '0x08'}\nmemwrite ${joy:x} {'0x08' if to_the_right else '0x04'}\ncont\n", encoding="utf-8")
+        (work / "let_go.ini").write_text(f"memwrite ${joy:x} 0x00\ncont\n", encoding="utf-8")
+        moments = [625, 640, 652, 665, 690, 705, 730, 760, 790, 820]
+        for v in moments:
+            (work / f"cap{v}.ini").write_text(f"savebin {work / f'ram{v}.bin'} 0 $80000\nm $ff8200-$ff8260\ncont\n", encoding="utf-8")
+        script = f"b VBL > 599 :once :file {work / 'go.ini'}\nb VBL > 602 :once :file {work / 'let_go.ini'}\n"
+        script += "".join(f"b VBL > {v} :once :file {work / f'cap{v}.ini'}\n" for v in moments)
+        log = hs.run_hatari(hatari, TOS, prg, work, moments[-1] + 1, "0", script, None)
+        bases = [(int(m.group(2), 16) << 16) | (int(m.group(4), 16) << 8)
+                 for m in re.finditer(r"^00FF8200: ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2})", log, re.M)]
+        self.assertEqual(len(bases), len(moments))
+        rom = fr.Rom(ROM)
+        a = fm.area(rom, 0)
+        left, right = fm.neighbours(rom, a, 1)[:2]
+        target = right if to_the_right else left
+        seen, late = set(), []
+        for v, shown in zip(moments, bases):
+            ram = (work / f"ram{v}.bin").read_bytes()
+            word = lambda name: int.from_bytes(ram[base + sym[name]:base + sym[name] + 2], "big")
+            offset, cur = word("shown_offset"), word("cur_screen")
+            late.append(int.from_bytes(ram[base + sym["late_frames"]:base + sym["late_frames"] + 4], "big"))
+            rows = hs.decode_screen(ram, shown)
+            if cur == 0 and offset == 0:                          # not scrolling yet (or the hero still walks)
+                continue
+            seen.add(offset)
+            if offset % 16:
+                self.fail(f"offset {offset}")
+            if cur == 0:
+                step = offset // 16
+                hero = sc.Hero(261 - offset if to_the_right else offset - 20, 144, 0, 255, 0, step & 1, to_the_right)
+                expected = sc.expected_scroll_screen(rom, 0, 1, target, offset, to_the_right, 40, hero=hero)
+            else:
+                hero = sc.Hero(1 if to_the_right else 241, 144, 0, 255, 0, 0, to_the_right)
+                expected = sc.expected_scroll_screen(rom, 0, target, target, 0, True, 40, hero=hero)
+            bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
+            self.assertEqual(bad[:5], [], f"VBL {v}, offset {offset}, screen {cur}: {len(bad)} pixels differ")
+        self.assertGreaterEqual(len(seen), 5, f"offsets seen: {sorted(seen)}")
+        self.assertEqual(late[-1], late[0], f"frames that took longer than 20 ms during the scroll: {late}")
 
 
 if __name__ == "__main__":

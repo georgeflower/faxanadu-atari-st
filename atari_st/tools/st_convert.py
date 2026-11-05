@@ -235,7 +235,7 @@ class Hero:
     shield: int = 255
     weapon: int = 0
     frame: int = 0
-    left: bool = True
+    left: bool = True        # the flip bit ($40 in Player_Flags, tiles mirrored): set when he faces RIGHT (the tiles are drawn facing left)
 
     def sprites(self, rom: fr.Rom) -> list[fs.Sprite]:
         return fs.hero_sprites(rom, self.x, self.y, self.armor, self.shield, self.weapon, self.frame, self.left)
@@ -293,7 +293,7 @@ ANIM_BASE = 128             # the pose lists are made with the hero here, so tha
 
 
 def hero_anim_assets(rom: fr.Rom, hero: Hero, palette_index: int, plan: PalettePlan) -> tuple[bytes, bytes]:
-    """(poses, images) for a walking hero: six poses, pose = frame (0-2) + 3 * faces-left, with the equipment of `hero`.
+    """(poses, images) for a walking hero: six poses, pose = frame (0-2) + 3 * flip bit, with the equipment of `hero`.
 
     poses is a table of six words (the offset of each pose record from the start of the table), then the records: the box the pose
     covers as four signed words (x0, x1 exclusive, y0, y1 exclusive) and the sprites as (x, line, image) words, ended by -1. All
@@ -328,6 +328,28 @@ def hero_anim_assets(rom: fr.Rom, hero: Hero, palette_index: int, plan: PaletteP
     return b"".join(o.to_bytes(2, "big") for o in offsets) + b"".join(records), b"".join(images)
 
 
+def expected_scroll_screen(rom: fr.Rom, area_index: int, from_screen: int, to_screen: int, offset: int, to_the_right: bool, camera: int,
+                           state: dict | None = None, hero: Hero | None = None) -> list[list[int]]:
+    """The ST screen while the picture has moved `offset` pixels (0-256, a multiple of 16) from one screen to the one on its right or left:
+    the HUD as it is, the playfield window cut out of the two screens side by side, the hero over it."""
+    a = fm.area(rom, area_index)
+    pal = a.palette_index
+    plan = plan_for_set(rom, pal)
+    old = expected_window(rom, area_index, from_screen, camera, 168)
+    new = expected_window(rom, area_index, to_screen, camera, 168)
+    out = expected_screen(rom, area_index, from_screen, camera, state=state)
+    for y in range(168):
+        row = old[y] + new[y] if to_the_right else new[y] + old[y]
+        start = offset if to_the_right else 256 - offset
+        out[32 + y][32:288] = row[start:start + 256]
+    if hero is not None:
+        for (x, line), slot in hero_layer(rom, hero, pal, plan).items():
+            y = line - camera
+            if ST_TOP <= y < 200 and ST_LEFT <= x < ST_LEFT + 256:
+                out[y][x] = slot
+    return out
+
+
 def expected_screen(rom: fr.Rom, area_index: int, screen: int, camera: int, palette_index: int | None = None,
                     state: dict | None = None, hero: Hero | None = None) -> list[list[int]]:
     """The whole 320x200 ST screen as slot numbers: the HUD in lines 0-31, then the playfield window of 168 lines, both 256 wide
@@ -345,6 +367,6 @@ def expected_screen(rom: fr.Rom, area_index: int, screen: int, camera: int, pale
     if hero is not None:
         for (x, line), slot in hero_layer(rom, hero, pal, plan).items():
             y = line - camera
-            if ST_TOP <= y < 200 and 0 <= x < 320:
+            if ST_TOP <= y < 200 and ST_LEFT <= x < ST_LEFT + 256:
                 out[y][x] = slot
     return out

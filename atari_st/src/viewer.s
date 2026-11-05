@@ -15,7 +15,9 @@
     .equ SPRITE_IMAGE_BYTES, 40
     .equ SCREEN_LINES, 200
     .equ SCREEN_BYTES, 32000
-    .equ BUFFER_BYTES, 3*SCREEN_BYTES+256   | two screens and the clean background, the first on a 256-byte boundary
+    .equ BUFFER_BYTES, 4*SCREEN_BYTES+256   | two screens, the clean background and the next screen, the first on a 256-byte boundary
+    .equ HERO_X_MIN, 8                      | where he is at the left edge: scrolls to the screen on the left
+    .equ HERO_X_MAX, 241                    | and at the right edge
     .equ VIDEO_BASE_HI, 0xFFFF8201
     .equ VIDEO_BASE_MID, 0xFFFF8203
 
@@ -95,7 +97,9 @@ start:
     addi.l #SCREEN_BYTES, %d0
     move.l %d0, (%a0)+                      | buf_b
     addi.l #SCREEN_BYTES, %d0
-    move.l %d0, (%a0)                       | buf_bg: the picture without sprites
+    move.l %d0, (%a0)+                      | buf_bg: the picture without sprites
+    addi.l #SCREEN_BYTES, %d0
+    move.l %d0, (%a0)                       | buf_next: the screen scrolled to
     movea.l buf_a(%pc), %a4
 
     | Clear the screen (32,000 bytes), then draw.
@@ -104,48 +108,8 @@ start:
 3:  clr.l (%a0)+
     dbra %d1, 3b
 
-    lea screen_data(%pc), %a5               | the screen's block ids, 16 to a row
-    lea block_index(%pc), %a2
-    lea block_images(%pc), %a3
-    moveq #0, %d6                           | window line
-4:  move.w %d6, %d0
-    addi.w #CAMERA, %d0                     | line of the playfield
-    move.w %d0, %d1
-    lsr.w #4, %d1                           | block row
-    andi.w #15, %d0                         | line inside the block
-    lsl.w #3, %d0                           | * 8 bytes a line
-    move.w %d1, %d2
-    andi.w #1, %d2
-    add.w %d2, %d2                          | the row's half of the corner (bit 1)
-    lsl.w #4, %d1
-    lea (%a5,%d1.w), %a1                    | the block ids of this row
-    move.w %d6, %d3
-    addi.w #HUD_LINES, %d3
-    mulu.w #STRIDE, %d3
-    lea LEFT_BYTES(%a4,%d3.l), %a0          | where the line goes
-    moveq #0, %d4                           | block column
-5:  moveq #0, %d5
-    move.b (%a1,%d4.w), %d5                 | block id
-    lsl.w #2, %d5
-    move.w %d4, %d7
-    andi.w #1, %d7
-    or.w %d2, %d7                           | corner: column parity | row parity << 1
-    add.w %d7, %d5
-    add.w %d5, %d5
-    move.w (%a2,%d5.w), %d5                 | image number
-    moveq #0, %d7
-    move.w %d5, %d7
-    lsl.l #7, %d7                           | * 128 bytes
-    add.w %d0, %d7
-    lea (%a3,%d7.l), %a6
-    move.l (%a6)+, (%a0)+
-    move.l (%a6)+, (%a0)+
-    addq.w #1, %d4
-    cmpi.w #16, %d4
-    blt.s 5b
-    addq.w #1, %d6
-    cmpi.w #WINDOW_LINES, %d6
-    blt 4b
+    lea screen_data(%pc), %a5               | the start screen's block ids (screen 0 of the table)
+    bsr.w draw_playfield
 
     | The HUD: first the state of the start screen, then the second state (to see that an update clears what was there).
     lea hud_states(%pc), %a0
@@ -189,27 +153,14 @@ start:
     bsr.w frame_init
 12: bsr.w input_poll
     bsr.w hero_step
+    bsr.w scroll_check                      | at the edge of the screen: scrolls to the next one (and comes back when it is done)
     lea rect_slots(%pc), %a0
     move.w slot_index(%pc), %d0
     lsl.w #3, %d0
     adda.w %d0, %a0                         | this screen's slot: where the hero was drawn in it
     bsr.w restore_rect
     bsr.w draw_hero
-    bsr.w wait_vbl
-    movea.l %a4, %a0
-    bsr.w show_screen
-    lea hud_dirty(%pc), %a0                 | the game changed the HUD: draw it into both screens and the background
-    tst.b (%a0)
-    beq.s 14f
-    clr.b (%a0)
-    bsr.w hud_update_all
-14: movea.l buf_a(%pc), %a0                 | the other screen is the next one to draw into
-    cmpa.l %a0, %a4
-    bne.s 13f
-    movea.l buf_b(%pc), %a0
-13: movea.l %a0, %a4
-    lea slot_index(%pc), %a0
-    eori.w #1, (%a0)
+    bsr.w present_swap
     lea input_state(%pc), %a0
     tst.b IN_QUIT(%a0)
     beq.s 12b
@@ -253,6 +204,10 @@ start:
 .endm
 
 blit_tile:
+    cmpi.w #LEFT_BYTES*2, %d0               | a tile that starts outside the playfield (x 32 to 287) is not drawn, as the game skips cells that
+    blt.w 9f                                | do not fit a byte; one that starts inside and reaches into the right margin is cut by clear_margins
+    cmpi.w #288, %d0
+    bge.w 9f
     moveq #8, %d7                           | lines to draw
     cmpi.w #HUD_LINES, %d1
     bge.s 1f
@@ -403,17 +358,17 @@ hero_step:
     movem.l %d0-%d2/%a0-%a1, -(%sp)
     lea input_state(%pc), %a0
     move.b IN_PAD(%a0), %d0
-    lea hero_x(%pc), %a1                    | hero_x, hero_y, hero_left, hero_frame, hero_tick
+    lea hero_x(%pc), %a1                    | hero_x, hero_y, hero_flip, hero_frame, hero_tick
     moveq #0, %d2                           | 1 when he moves
     btst #1, %d0                            | left
     beq.s 1f
     subq.w #2, (%a1)
-    move.w #1, 4(%a1)
+    clr.w 4(%a1)                            | facing left: the flip bit is clear (the tiles face left)
     moveq #1, %d2
 1:  btst #0, %d0                            | right
     beq.s 2f
     addq.w #2, (%a1)
-    clr.w 4(%a1)
+    move.w #1, 4(%a1)                       | facing right: flipped
     moveq #1, %d2
 2:  btst #3, %d0                            | up
     beq.s 3f
@@ -425,12 +380,12 @@ hero_step:
     moveq #1, %d2
 4:  tst.w %d2                               | the limits only apply to a hero who moves (the start position may lie outside)
     beq.s 8f
-    cmpi.w #16, (%a1)
+    cmpi.w #HERO_X_MIN, (%a1)
     bge.s 5f
-    move.w #16, (%a1)
-5:  cmpi.w #224, (%a1)
+    move.w #HERO_X_MIN, (%a1)
+5:  cmpi.w #HERO_X_MAX, (%a1)
     ble.s 6f
-    move.w #224, (%a1)
+    move.w #HERO_X_MAX, (%a1)
 6:  cmpi.w #56, 2(%a1)
     bge.s 7f
     move.w #56, 2(%a1)
@@ -461,9 +416,9 @@ hero_step:
 draw_hero:
     movem.l %d0-%d7/%a0-%a3/%a5, -(%sp)
     lea hero_anim(%pc), %a5
-    move.w hero_left(%pc), %d0
+    move.w hero_flip(%pc), %d0
     add.w %d0, %d0
-    add.w hero_left(%pc), %d0               | * 3
+    add.w hero_flip(%pc), %d0               | * 3
     add.w hero_frame(%pc), %d0              | the pose
     add.w %d0, %d0
     move.w (%a5,%d0.w), %d0
@@ -499,8 +454,295 @@ draw_hero:
     lea (%a3,%d2.l), %a1
     bsr.w blit_tile
     bra.s 1b
-2:  movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5
+2:  bsr.s clear_margins
+    movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5
     rts
+
+| The hero (or his box) reaches into a side margin: the playfield is x 32 to 287, so what was drawn outside it is cleared again (the margins are
+| black). Uses the box in this screen's slot; clobbers d0-d3, a0-a1.
+clear_margins:
+    lea rect_slots(%pc), %a0
+    move.w slot_index(%pc), %d0
+    lsl.w #3, %d0
+    adda.w %d0, %a0
+    movem.w (%a0), %d0-%d3                  | x0, x1, y0, y1
+    cmpi.w #LEFT_BYTES*2, %d0
+    blt.s 1f
+    cmpi.w #320-LEFT_BYTES*2, %d1
+    ble.s 9f
+1:  cmpi.w #HUD_LINES, %d2
+    bge.s 2f
+    move.w #HUD_LINES, %d2
+2:  cmpi.w #SCREEN_LINES, %d3
+    ble.s 3f
+    move.w #SCREEN_LINES, %d3
+3:  sub.w %d2, %d3
+    ble.s 9f
+    subq.w #1, %d3
+    mulu.w #STRIDE, %d2
+    lea (%a4,%d2.l), %a1
+    moveq #0, %d0
+4:  move.l %d0, (%a1)+
+    move.l %d0, (%a1)+
+    move.l %d0, (%a1)+
+    move.l %d0, (%a1)+
+    lea STRIDE-32(%a1), %a1
+    move.l %d0, (%a1)+
+    move.l %d0, (%a1)+
+    move.l %d0, (%a1)+
+    move.l %d0, (%a1)+
+    dbra %d3, 4b
+9:  rts
+
+| Draws a screen's playfield window (CAMERA..CAMERA+167) into a screen buffer. a5 = the block ids (16 to a row), a4 = the buffer.
+| Clobbers d0-d7, a0-a3, a6.
+draw_playfield:
+    lea block_index(%pc), %a2
+    lea block_images(%pc), %a3
+    moveq #0, %d6                           | window line
+4:  move.w %d6, %d0
+    addi.w #CAMERA, %d0                     | line of the playfield
+    move.w %d0, %d1
+    lsr.w #4, %d1                           | block row
+    andi.w #15, %d0                         | line inside the block
+    lsl.w #3, %d0                           | * 8 bytes a line
+    move.w %d1, %d2
+    andi.w #1, %d2
+    add.w %d2, %d2                          | the row's half of the corner (bit 1)
+    lsl.w #4, %d1
+    lea (%a5,%d1.w), %a1                    | the block ids of this row
+    move.w %d6, %d3
+    addi.w #HUD_LINES, %d3
+    mulu.w #STRIDE, %d3
+    lea LEFT_BYTES(%a4,%d3.l), %a0          | where the line goes
+    moveq #0, %d4                           | block column
+5:  moveq #0, %d5
+    move.b (%a1,%d4.w), %d5                 | block id
+    lsl.w #2, %d5
+    move.w %d4, %d7
+    andi.w #1, %d7
+    or.w %d2, %d7                           | corner: column parity | row parity << 1
+    add.w %d7, %d5
+    add.w %d5, %d5
+    move.w (%a2,%d5.w), %d5                 | image number
+    moveq #0, %d7
+    move.w %d5, %d7
+    lsl.l #7, %d7                           | * 128 bytes
+    add.w %d0, %d7
+    lea (%a3,%d7.l), %a6
+    move.l (%a6)+, (%a0)+
+    move.l (%a6)+, (%a0)+
+    addq.w #1, %d4
+    cmpi.w #16, %d4
+    blt.s 5b
+    addq.w #1, %d6
+    cmpi.w #WINDOW_LINES, %d6
+    blt 4b
+    rts
+
+
+| a4 = the screen just drawn: waits for the VBL, shows it, makes the other screen the one to draw into (a4 and slot_index), and draws
+| the HUD again if the game changed it (right after the VBL, before the beam gets to it). pending_offset becomes shown_offset.
+present_swap:
+    bsr.w wait_vbl
+    movea.l %a4, %a0
+    bsr.w show_screen
+    lea shown_offset(%pc), %a0
+    move.w pending_offset(%pc), (%a0)
+    lea hud_dirty(%pc), %a0
+    tst.b (%a0)
+    beq.s 1f
+    clr.b (%a0)
+    bsr.w hud_update_all
+1:  movea.l buf_a(%pc), %a0                 | the other screen is the next one to draw into
+    cmpa.l %a0, %a4
+    bne.s 2f
+    movea.l buf_b(%pc), %a0
+2:  movea.l %a0, %a4
+    lea slot_index(%pc), %a0
+    eori.w #1, (%a0)
+    rts
+
+| Walked to the edge of the screen with the stick pushed that way, and there is a screen there: scroll to it.
+scroll_check:
+    movem.l %d0-%d1/%a0-%a1, -(%sp)
+    lea input_state(%pc), %a0
+    move.b IN_PAD(%a0), %d0
+    move.w hero_x(%pc), %d1
+    btst #0, %d0                            | right
+    beq.s 1f
+    cmpi.w #HERO_X_MAX, %d1
+    blt.s 3f
+    moveq #1, %d1                           | the neighbour to the right
+    bra.s 2f
+1:  btst #1, %d0                            | left
+    beq.s 3f
+    cmpi.w #HERO_X_MIN, %d1
+    bgt.s 3f
+    moveq #0, %d1
+2:  moveq #0, %d0
+    move.w cur_screen(%pc), %d0
+    lsl.w #2, %d0
+    add.w %d1, %d0                          | screen * 4 + 0 (left) or 1 (right)
+    lea neighbours(%pc), %a0
+    move.b (%a0,%d0.w), %d0                 | its number in the table, $FF for none
+    cmpi.b #0xFF, %d0
+    beq.s 3f
+    andi.w #0xFF, %d0
+    bsr.w do_scroll                         | d0 = the screen scrolled to, d1 = 1 right, 0 left
+3:  movem.l (%sp)+, %d0-%d1/%a0-%a1
+    rts
+
+| ---------------------------------------------------------------------------------------------------------------------------- scrolling
+| d0 = the screen to scroll to (its number in the table), d1 = 1 for the right neighbour, 0 for the left. The ROM waits 14 frames and then
+| moves the picture 4 pixels a frame for 64 frames, hero included, with nothing else going on. The ST moves it 16 pixels every 4 frames:
+| the clean background shifts one group of 16 pixels (in place, one frame), the window is copied into the screen being drawn (two frames),
+| the hero is drawn and the screen shown (one frame). a4 and slot_index come back as present_swap leaves them; everything else is kept.
+do_scroll:
+    movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
+    lea scroll_dir(%pc), %a0
+    move.w %d1, (%a0)
+    lea scroll_target(%pc), %a0
+    move.w %d0, (%a0)
+    move.l %a4, -(%sp)
+    movea.l buf_next(%pc), %a4              | the screen scrolled to, drawn once into its own buffer
+    mulu.w #208, %d0
+    lea screen_data(%pc), %a5
+    adda.l %d0, %a5
+    bsr.w draw_playfield
+    movea.l (%sp)+, %a4
+    moveq #13, %d7
+1:  bsr.w wait_vbl
+    bsr.w input_poll
+    dbra %d7, 1b
+    moveq #1, %d7                           | the step: 1 to 16
+2:  move.w %d7, %d0
+    bsr.w scroll_bg_step
+    bsr.w wait_vbl
+    moveq #0, %d0
+    bsr.w copy_bg_half
+    bsr.w wait_vbl
+    moveq #1, %d0
+    bsr.w copy_bg_half
+    bsr.w wait_vbl
+    move.w %d7, %d0
+    bsr.w scroll_hero
+    move.w %d7, %d0
+    lsl.w #4, %d0
+    lea pending_offset(%pc), %a0
+    move.w %d0, (%a0)
+    bsr.w present_swap
+    addq.w #1, %d7
+    cmpi.w #17, %d7
+    blt.s 2b
+    | arrived: the background is the new screen; the other screen gets it too
+    lea cur_screen(%pc), %a0
+    move.w scroll_target(%pc), (%a0)
+    lea pending_offset(%pc), %a0
+    clr.w (%a0)
+    lea hero_x(%pc), %a0                    | he stands where the new screen puts him
+    move.w #1, (%a0)
+    move.w scroll_dir(%pc), %d0
+    bne.s 3f
+    move.w #HERO_X_MAX, (%a0)
+3:  clr.w 6(%a0)
+    clr.w 8(%a0)
+    moveq #0, %d0
+    bsr.w copy_bg_half
+    bsr.w wait_vbl
+    moveq #1, %d0
+    bsr.w copy_bg_half
+    bsr.w wait_vbl
+    bsr.w draw_hero
+    bsr.w present_swap
+    lea scroll_dir(%pc), %a0
+    clr.w (%a0)
+    movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5-%a6
+    rts
+
+| d0 = the step (1-16): the clean background moves 16 pixels towards the screen it scrolls from, and the next group of the new screen
+| comes in at the other end.
+scroll_bg_step:
+    movem.l %d0-%d2/%d7/%a0-%a3, -(%sp)
+    movea.l buf_bg(%pc), %a0
+    adda.l #HUD_LINES*STRIDE+LEFT_BYTES, %a0
+    movea.l buf_next(%pc), %a1
+    adda.l #HUD_LINES*STRIDE+LEFT_BYTES, %a1
+    move.w #WINDOW_LINES-1, %d7
+    move.w scroll_dir(%pc), %d1
+    beq.s 4f
+    move.w %d0, %d2                         | to the right: group m-1 of the new screen comes in at the right
+    subq.w #1, %d2
+    lsl.w #3, %d2
+1:  lea 8(%a0), %a2
+    movea.l %a0, %a3
+    .rept 30
+    move.l (%a2)+, (%a3)+
+    .endr
+    lea (%a1,%d2.w), %a2
+    move.l (%a2)+, (%a3)+
+    move.l (%a2)+, (%a3)+
+    lea STRIDE(%a0), %a0
+    lea STRIDE(%a1), %a1
+    dbra %d7, 1b
+    bra.s 9f
+4:  moveq #16, %d2                          | to the left: group 16-m of the new screen comes in at the left
+    sub.w %d0, %d2
+    lsl.w #3, %d2
+5:  lea 120(%a0), %a2                       | the groups move one place to the right, from the right
+    lea 128(%a0), %a3
+    .rept 30
+    move.l -(%a2), -(%a3)
+    .endr
+    lea (%a1,%d2.w), %a2
+    move.l (%a2)+, (%a0)
+    move.l (%a2)+, 4(%a0)
+    lea STRIDE(%a0), %a0
+    lea STRIDE(%a1), %a1
+    dbra %d7, 5b
+9:  movem.l (%sp)+, %d0-%d2/%d7/%a0-%a3
+    rts
+
+| d0 = 0: the top half of the window (84 lines), 1: the bottom half, copied from the clean background to the screen a4. Whole lines.
+copy_bg_half:
+    movem.l %d0/%a0-%a1, -(%sp)
+    movea.l buf_bg(%pc), %a0
+    adda.l #HUD_LINES*STRIDE, %a0
+    lea HUD_LINES*STRIDE(%a4), %a1
+    tst.w %d0
+    beq.s 1f
+    adda.l #(WINDOW_LINES/2)*STRIDE, %a0
+    adda.l #(WINDOW_LINES/2)*STRIDE, %a1
+1:  move.w #((WINDOW_LINES/2)*STRIDE/16)-1, %d0
+2:  move.l (%a0)+, (%a1)+
+    move.l (%a0)+, (%a1)+
+    move.l (%a0)+, (%a1)+
+    move.l (%a0)+, (%a1)+
+    dbra %d0, 2b
+    movem.l (%sp)+, %d0/%a0-%a1
+    rts
+
+| d0 = the step (1-16): the hero where the picture has moved him to (he stays where he was in the world and the picture moves under
+| him: x = 261 - 16 m for a scroll to the right and 16 m - 20 to the left: where the ROM's sprites are in the pictures it shows, found from jsnes), in the next walk frame.
+scroll_hero:
+    movem.l %d0-%d1/%a0, -(%sp)
+    lea hero_x(%pc), %a0
+    move.w %d0, %d1
+    andi.w #1, %d1
+    move.w %d1, 6(%a0)                      | hero_frame: 0 and 1 in turn
+    lsl.w #4, %d0
+    move.w scroll_dir(%pc), %d1
+    beq.s 1f
+    neg.w %d0
+    addi.w #261, %d0                        | right
+    move.w %d0, (%a0)
+    move.w #1, 4(%a0)                       | facing right: flipped
+    bra.s 2f
+1:  subi.w #20, %d0                         | left
+    move.w %d0, (%a0)
+    clr.w 4(%a0)
+2:  movem.l (%sp)+, %d0-%d1/%a0
+    bra.w draw_hero
 
 hud_load_state:
     lea hud_state(%pc), %a1
@@ -532,6 +774,8 @@ palette_data:
     .incbin "palette.bin"
 screen_data:
     .incbin "screen.bin"
+neighbours:
+    .incbin "neighbours.bin"
     .even
 block_index:
     .incbin "block_index.bin"
@@ -541,11 +785,23 @@ block_images:
     .section .data
 orig_screen:
     .long 0
+cur_screen:
+    .word 0                                 | the screen shown: its number in the table (0 is the one the viewer starts with)
+scroll_dir:
+    .word 0                                 | 1 scrolling to the right, 0 to the left (or not scrolling)
+scroll_target:
+    .word 0
+pending_offset:
+    .word 0
+shown_offset:
+    .word 0                                 | the picture on show has moved this many pixels (0 when not scrolling)
 buf_a:
     .long 0
 buf_b:
     .long 0
 buf_bg:
+    .long 0
+buf_next:
     .long 0
 slot_index:
     .word 0
@@ -555,8 +811,8 @@ hero_x:
     .word HERO_X
 hero_y:
     .word HERO_Y
-hero_left:
-    .word HERO_LEFT
+hero_flip:
+    .word HERO_FLIP
 hero_frame:
     .word HERO_FRAME
 hero_tick:
@@ -566,6 +822,6 @@ hud_tiles:
 bench_result:
     .long 0
 
-    .section .stack,"aw",@progbits
+    .section .data                          | the stack sits with the variables, within reach of the boot code however much data follows
     .space 4096
 stack_end:
