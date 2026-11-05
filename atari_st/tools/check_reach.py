@@ -35,13 +35,14 @@ BRANCH = re.compile(r"^(bsr|bra|b[a-z]{2})(?:\.([bswl]))?\s+([A-Za-z_][A-Za-z0-9
 PC_OPERAND = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)(?:[+-]\d+)?\(%pc[,)]")
 
 
-def check_displacements(listing: Path, symbols: dict[str, int]) -> tuple[list[str], int, list[tuple[int, str]]]:
+def check_displacements(listing: Path, symbols: dict[str, int], text_base: str = "game_start") -> tuple[list[str], int, list[tuple[int, str]]]:
     """The 68000 branches and PC-relative operands span a signed 16 bits (a short branch 8). GNU as does not
     complain when a displacement does not fit: it wraps, and the program jumps into the wrong place (it once sent
     the main loop's `bsr draw_hud` into low RAM and crashed at start). The listing gives every instruction's offset
     in .text, `game_start` is the link address of offset 0, and the symbols give the targets, so the real distance
-    can be computed. Returns the failures, how many were checked, and the tightest few (slack, where)."""
-    base = {"text": symbols["game_start"]}
+    can be computed (`text_base` names the symbol at offset 0 of .text: `game_start` when .text begins with the boot jump, otherwise
+    the first label after the data that the linker puts in front of it). Returns the failures, how many were checked, and the tightest few (slack, where)."""
+    base = {"text": symbols[text_base]}
     section = "text"
     failures: list[str] = []
     checked = 0
@@ -84,6 +85,7 @@ def main() -> None:
     parser.add_argument("elf", type=Path)
     parser.add_argument("sources", type=Path, nargs="+")
     parser.add_argument("--nm", default="m68k-linux-gnu-nm")
+    parser.add_argument("--text-base", default="game_start", help="the symbol at the start of .text in the listing")
     parser.add_argument("--listing", type=Path, help="the assembler listing of main.s (as -al=FILE)")
     args = parser.parse_args()
     symbols = symbol_addresses(args.nm, args.elf)
@@ -109,7 +111,7 @@ def main() -> None:
         sys.exit("Tables the code names but the image lacks:\n  " + "\n  ".join(bad))
     reach = ""
     if args.listing:
-        failures, checked, tight = check_displacements(args.listing, symbols)
+        failures, checked, tight = check_displacements(args.listing, symbols, args.text_base)
         if failures:
             sys.exit("Branches and PC-relative operands too far for 16 bits (route a branch through a *_far stub in "
                      "main.s):\n  " + "\n  ".join(failures))

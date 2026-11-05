@@ -29,6 +29,8 @@ def main() -> int:
     parser.add_argument("--camera", type=int, default=40, help="first line of the 208-line playfield shown in the 168-line window (0-40)")
     parser.add_argument("--hero", default="144,144,0,255,0,0,1",
                         help="the hero: x,y,armour,shield,weapon,frame,faces-left (default: where he stands after the castle door, start equipment)")
+    parser.add_argument("--hud", default="16,0,0,0,0", help="the HUD first drawn: power,magic,experience,gold,seconds")
+    parser.add_argument("--hud2", default="", help="a second HUD state drawn over the first (default: the same)")
     parser.add_argument("--out", type=Path, default=Path(__file__).resolve().parents[1] / "build" / "generated")
     args = parser.parse_args()
     if not args.rom.is_file():
@@ -45,7 +47,11 @@ def main() -> int:
     (args.out / "block_index.bin").write_bytes(b"".join(v.to_bytes(2, "big") for v in table))
     (args.out / "screen.bin").write_bytes(bytes(blocks))
     pal_index = a.palette_index
-    start = sc.HUD_START
+    keys = ("hp", "mp", "experience", "gold", "seconds")
+    start = dict(zip(keys, (int(v) for v in args.hud.split(","))))
+    second = dict(zip(keys, (int(v) for v in args.hud2.split(",")))) if args.hud2 else start
+    (args.out / "hud_states.bin").write_bytes(sc.hud_state_bytes(start) + sc.hud_state_bytes(second))
+    (args.out / "hud_partial.bin").write_bytes(sc.hud_partial_images(rom, pal_index, plan))
     hero = sc.Hero(*[bool(v) if i == 6 else v for i, v in enumerate(int(t) for t in args.hero.split(","))])
     hero_list, hero_images = sc.hero_assets(rom, hero, pal_index, plan, args.camera)
     (args.out / "hero_list.bin").write_bytes(hero_list)

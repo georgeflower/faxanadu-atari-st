@@ -132,40 +132,13 @@ start:
     cmpi.w #WINDOW_LINES, %d6
     blt 4b
 
-    | The HUD: rows 2 and 3 of its 32x4 tiles (lines 16 to 31); rows 0 and 1 are blank. A tile is 8 lines of four plane bytes; on the
-    | screen it is the left or right byte of each plane word of a 16-pixel group.
-    lea hud_layout+64(%pc), %a5
-    lea hud_tiles(%pc), %a3
-    moveq #2, %d6                           | tile row
-7:  moveq #0, %d4                           | tile column
-8:  moveq #0, %d0
-    move.b (%a5)+, %d0                      | tile id
-    beq.s 12f                               | tile 0 is blank and the screen is clear
-    lsl.w #5, %d0
-    lea (%a3,%d0.w), %a6                    | its 32 bytes
-    move.w %d6, %d1
-    mulu.w #(8 * STRIDE), %d1
-    move.w %d4, %d2
-    lsr.w #1, %d2
-    lsl.w #3, %d2                           | 8 bytes a 16-pixel group
-    add.w %d2, %d1
-    move.w %d4, %d2
-    andi.w #1, %d2
-    add.w %d2, %d1                          | left or right byte of the plane words
-    lea LEFT_BYTES(%a4,%d1.w), %a0
-    moveq #7, %d3
-9:  move.b (%a6)+, (%a0)                    | plane 0
-    move.b (%a6)+, 2(%a0)
-    move.b (%a6)+, 4(%a0)
-    move.b (%a6)+, 6(%a0)
-    lea STRIDE(%a0), %a0
-    dbra %d3, 9b
-12: addq.w #1, %d4
-    cmpi.w #32, %d4
-    blt.s 8b
-    addq.w #1, %d6
-    cmpi.w #4, %d6
-    blt.s 7b
+    | The HUD: first the state of the start screen, then the second state (to see that an update clears what was there).
+    lea hud_states(%pc), %a0
+    bsr.w hud_load_state
+    bsr.w hud_update
+    lea hud_states+10(%pc), %a0
+    bsr.w hud_load_state
+    bsr.w hud_update
 
     | The hero (and later every other sprite): the list is x, line, image number for each tile, ended by a word of -1.
     lea hero_list(%pc), %a5
@@ -261,6 +234,15 @@ blit_tile:
     dbra %d7, 3b
 9:  rts
 
+hud_load_state:
+    lea hud_state(%pc), %a1
+    move.l (%a0)+, (%a1)+
+    move.l (%a0)+, (%a1)+
+    move.w (%a0)+, (%a1)+
+    rts
+
+    .include "hud.s"
+
     .section .rodata
 hero_list:
     .incbin "hero_list.bin"
@@ -269,8 +251,10 @@ hero_images:
     .incbin "hero_images.bin"
 hud_layout:
     .incbin "hud_layout.bin"
-hud_tiles:
-    .incbin "hud_tiles.bin"
+hud_partial:
+    .incbin "hud_partial.bin"
+hud_states:
+    .incbin "hud_states.bin"
 palette_data:
     .incbin "palette.bin"
 screen_data:
@@ -280,6 +264,10 @@ block_index:
     .incbin "block_index.bin"
 block_images:
     .incbin "blocks.bin"
+
+    .section .data
+hud_tiles:
+    .incbin "hud_tiles.bin"
 
     .section .stack,"aw",@progbits
     .space 4096

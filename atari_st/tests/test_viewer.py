@@ -20,20 +20,22 @@ TOS = Path(os.environ.get("TOS") or os.environ.get("TOS_PAL") or "")
 @unittest.skipUnless(ROM.is_file() and shutil.which("hatari") and shutil.which("m68k-linux-gnu-as") and shutil.which("ca65") and TOS.is_file(),
                      "needs the ROM, cc65, hatari, the m68k binutils and a TOS image (TOS or TOS_PAL)")
 class ViewerTests(unittest.TestCase):
-    def run_viewer(self, area: int, screen: int, camera: int, hero: str) -> bytes:
-        subprocess.run(["make", "-C", str(ROOT), "viewer", f"AREA={area}", f"SCREEN={screen}", f"CAMERA={camera}", f"HERO={hero}"], check=True,
+    def run_viewer(self, area: int, screen: int, camera: int, hero: str, hud: str, hud2: str) -> bytes:
+        subprocess.run(["make", "-C", str(ROOT), "viewer", f"AREA={area}", f"SCREEN={screen}", f"CAMERA={camera}", f"HERO={hero}", f"HUD={hud}", f"HUD2={hud2}"], check=True,
                        capture_output=True)
         rows = ROOT / "build" / "viewer_test.rows"
         subprocess.run([sys.executable, str(ROOT / "tools" / "hatari_shot.py"), "--tos", str(TOS), "--prg", str(ROOT / "build" / "VIEWER.PRG"),
                         "--out", str(ROOT / "build" / "viewer_test.png"), "--rows", str(rows)], check=True, capture_output=True, timeout=600)
         return rows.read_bytes()
 
-    def check(self, area: int, screen: int, camera: int, hero: str = "144,144,0,255,0,0,1") -> None:
+    def check(self, area: int, screen: int, camera: int, hero: str = "144,144,0,255,0,0,1", hud: str = "16,0,0,0,0", hud2: str = "") -> None:
         import faxanadu_rom as fr
         import st_convert as sc
 
-        got = self.run_viewer(area, screen, camera, hero)
-        expected = sc.expected_screen(fr.Rom(ROM), area, screen, camera, hero=sc.Hero(*[bool(v) if i == 6 else v for i, v in enumerate(int(t) for t in hero.split(','))]))
+        got = self.run_viewer(area, screen, camera, hero, hud, hud2)
+        keys = ('hp', 'mp', 'experience', 'gold', 'seconds')
+        state = dict(zip(keys, (int(v) for v in (hud2 or hud).split(','))))
+        expected = sc.expected_screen(fr.Rom(ROM), area, screen, camera, state=state, hero=sc.Hero(*[bool(v) if i == 6 else v for i, v in enumerate(int(t) for t in hero.split(','))]))
         bad = [(x, y) for y in range(200) for x in range(320) if got[y * 320 + x] != expected[y][x]]
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
 
@@ -54,6 +56,12 @@ class ViewerTests(unittest.TestCase):
     def test_the_hero_is_cut_under_the_hud_and_at_the_bottom_of_the_screen(self) -> None:
         self.check(0, 1, 40, "144,20,1,1,1,0,1")
         self.check(0, 1, 0, "144,170,3,3,3,0,0")
+
+    def test_the_hud_is_drawn_from_its_state_and_updates_clear_what_was_there(self) -> None:
+        states = ["16,0,0,0,0", "80,80,65535,16777215,99", "35,13,4242,1234567,7", "7,1,10000,100000,10", "0,79,9,655360,60", "81,200,1,1,5"]
+        for first, second in zip(states, states[1:] + states[:1]):
+            with self.subTest(first=first, second=second):
+                self.check(0, 1, 40, hud=first, hud2=second)
 
 
 if __name__ == "__main__":

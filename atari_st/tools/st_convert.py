@@ -165,23 +165,40 @@ def ui_palette_row(rom: fr.Rom, palette_index: int) -> int:
     return rom.prg(11)[0x1F0 + palette_index]
 
 
+def st_tile_image(raw: bytes, palette: list[int], plan: PalettePlan) -> bytes:
+    """A background tile (16 bytes) for the ST: 8 lines of four plane bytes (32 bytes), drawn with a palette of NES colours."""
+    px = rs.decode_tile(raw)
+    out = bytearray()
+    for y in range(8):
+        slots = [plan.slot[palette[v] & 0x3F] for v in px[y]]
+        for plane in range(4):
+            byte = 0
+            for slot in slots:
+                byte = (byte << 1) | ((slot >> plane) & 1)
+            out.append(byte)
+    return bytes(out)
+
+
 def hud_tile_images(rom: fr.Rom, palette_index: int, plan: PalettePlan, hp: int, mp: int) -> bytes:
     """The HUD tiles for the ST: 8 lines of four plane bytes (32 bytes a tile), in the set's HUD palette. The 60 tiles of bank 10 are
     followed by four blank ones: the item box uses tiles $3C-$3F for the item's picture, which is blank when no item is selected."""
     bg, _ = palette_set(rom, palette_index)
     palette = bg[ui_palette_row(rom, palette_index)]
-    out = bytearray()
-    for raw in gfx.hud_tile_data(rom, hp, mp):
-        px = rs.decode_tile(raw)
-        for y in range(8):
-            slots = [plan.slot[palette[v] & 0x3F] for v in px[y]]
-            for plane in range(4):
-                byte = 0
-                for slot in slots:
-                    byte = (byte << 1) | ((slot >> plane) & 1)
-                out.append(byte)
-    out += bytes(32 * (HUD_TILES_ST - gfx.HUD_TILE_COUNT))
-    return bytes(out)
+    out = b"".join(st_tile_image(raw, palette, plan) for raw in gfx.hud_tile_data(rom, hp, mp))
+    return out + bytes(32 * (HUD_TILES_ST - gfx.HUD_TILE_COUNT))
+
+
+def hud_partial_images(rom: fr.Rom, palette_index: int, plan: PalettePlan) -> bytes:
+    """The partial bar tile for every value & 7 (8 of 32 bytes), first of the power bar, then of the magic bar (its halves swapped)."""
+    bg, _ = palette_set(rom, palette_index)
+    palette = bg[ui_palette_row(rom, palette_index)]
+    return b"".join(st_tile_image(gfx.partial_tile(rom, v, bar), palette, plan) for bar in (0, 1) for v in range(8))
+
+
+def hud_state_bytes(state: dict) -> bytes:
+    """The viewer's state block: power, magic (bytes), experience (word), gold (long), seconds (byte), a pad byte."""
+    return (bytes([state["hp"], state["mp"]]) + state["experience"].to_bytes(2, "big") + state["gold"].to_bytes(4, "big")
+            + bytes([state["seconds"], 0]))
 
 
 def hud_pixels(rom: fr.Rom, palette_index: int, plan: PalettePlan, state: dict | None = None) -> list[list[int]]:

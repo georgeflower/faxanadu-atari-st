@@ -85,6 +85,7 @@ The iNES header of the Europe ROM: NES 2.0, mapper 1 (MMC1), 16 PRG banks (256 K
 - **16 colours are enough.** A palette set (four background and four sprite palettes of four NES colours, `tools/st_convert.py`) has 9 to 19 different colours after rounding to the ST's 3 bits a channel. Merging the closest pairs down to 16 changes at most three colours, each by one step in one or two channels (squared distance 2 at most), in all 28 sets. So **one 16-colour palette per palette set**, slot 0 black, no raster tricks. Enemy sprite palettes that the screen loads on top (`Screen_LoadSpritePalette`) are not counted yet.
 - **Block images**: a 16x16 block as 16 lines of four plane words (128 bytes), made for each (block id, corner) pair a screen uses, because the attribute byte gives a block a different palette in each corner (parity of column and row). Eolis screen 1 needs 59 images (7.5 KB); all nine Eolis screens 282 (36 KB).
 - **The viewer** (`make viewer AREA=0 SCREEN=1 CAMERA=40`, `src/viewer.s`, data from `tools/build_assets.py` into `build/generated/`) draws the HUD (as at the start of a game) and under it the playfield window, 256 pixels wide in the middle of 320. It equals the converter's expected picture pixel for pixel in Hatari (`tests/test_viewer.py`, needs a TOS image in `TOS`). It is a plain loop (block by block, line by line), not tuned.
+- **The HUD updates from a state block** (`src/hud.s`, `hud_update`): `hud_state` is 10 bytes (HP.b, MP.b, experience.w, gold.l, seconds.b, pad.b; `st_convert.hud_state_bytes`). The routine builds the 128 tile ids of the HUD layout (bars of 10 tiles + end tile, digits as tile $30+n, partial bar tiles from `hud_partial` copied into slots $0C/$0D), and draws only tiles that differ from `hud_shown` (the two partial tiles always). Test: `tests/test_viewer.py` cycles six states and compares with `expected_screen`. The viewer shows state A then B (`make viewer HUD=.. HUD2=..`).
 
 ## 5e. The hero's sprites [verified against jsnes: tiles, sprite list frame by frame, picture pixel for pixel]
 
@@ -107,7 +108,7 @@ src/main.s              the start-up check (will become the game)
 src/overscan_test.s     the overscan test: a 240-line screen with the bottom border open (`make overscan`)
 tools/make_prg.py       the .PRG header (a flat image, no relocation: PC-relative code only)
 tools/make_disk.py      a 720 KB .st image for the Gotek
-tools/check_reach.py    the 16-bit reach check
+tools/check_reach.py    the 16-bit reach check (`--text-base SYMBOL`: `.data` is linked before `.text`, so the viewer uses `start`)
 tools/hatari_shot.py    runs a PRG headless (--trace for Hatari trace flags, --lines 240 for the overscan screen) in Hatari and renders the screen to a PNG; prints a frame hash
 tools/rom_diff.py       Europe ROM against the US build, counts only
 tools/ram_labels.py     the disassembly's RAM labels as JSON (names and addresses only)
