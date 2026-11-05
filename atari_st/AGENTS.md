@@ -10,7 +10,7 @@ It follows the Zelda 1 port (`georgeflower/zelda1-atarist`): same method, same t
 
 The rest of the repository is chipx86's labelled disassembly of the **US** version (`src/*.asm`, builds with `make` in the root). It is the **spec for every behaviour**: when you need a number (speed, timer, damage, tile id, table), read it there, never guess.
 
-Status: set-up, the ROM harness, the map data decoder and a viewer that draws one screen with its HUD on the ST. `src/main.s` is a start-up check that shows 16 colour bars. What comes next is in `PLAN.md`.
+Status: set-up, the ROM harness, the map data decoder and a viewer that draws one screen with its HUD and the hero on the ST. `src/main.s` is a start-up check that shows 16 colour bars. What comes next is in `PLAN.md`.
 
 ## 2. Rules
 
@@ -71,7 +71,7 @@ The iNES header of the Europe ROM: NES 2.0, mapper 1 (MMC1), 16 PRG banks (256 K
 - **Block properties** [verified against the game's RAM]: 256 bytes a area (one per block id, value 0-15; the game packs them two to a byte). Eolis uses 0, 1, 3 and 4. From chipx86's notes (not checked here): 0 air, 1 solid, 2 ladder, 3 door, 10-13 the screen transitions (up, down, left, right).
 - **Doors**: records of four bytes ended by `$FF` in the area's door locations: screen, block position (row*16+column), destination index, start position (high nibble Y/16, low nibble X/16: where the hero stands on arrival). The destination (four bytes at index*4 in the door destinations; area 3 is 32 too high): new screen, palette, key requirement, and a byte not read yet. Verified for the castle door of Eolis (screen 0, block 156 -> screen 1, hero at 144,144); indices of 32 and up (doors into buildings) are decoded the same way but not checked. A new screen's **palette** comes from the door; scrolling between screens keeps it.
 - **HUD and letter tiles**: 60 tiles at `HUD_TILES_START` in bank 10 are written to the background pattern table's first 60 tiles. They equal the game's CHR RAM except tiles 12 and 13, the bar tiles, which the game draws into CHR RAM as the bars fill.
-- Still to find: the sprite tiles (banks 6-8, with the sprite info and palettes in bank 11) and the per-screen sprite placements, what the other property values mean, doors into buildings, text (banks 12 and 13 differ in Europe).
+- Still to find: the enemy and NPC sprite tiles (banks 6-8) and the per-screen sprite placements, what the other property values mean, doors into buildings, text (banks 12 and 13 differ in Europe).
 
 ## 5c. The HUD [verified against the game's own drawing and a jsnes picture]
 
@@ -85,6 +85,17 @@ The iNES header of the Europe ROM: NES 2.0, mapper 1 (MMC1), 16 PRG banks (256 K
 - **16 colours are enough.** A palette set (four background and four sprite palettes of four NES colours, `tools/st_convert.py`) has 9 to 19 different colours after rounding to the ST's 3 bits a channel. Merging the closest pairs down to 16 changes at most three colours, each by one step in one or two channels (squared distance 2 at most), in all 28 sets. So **one 16-colour palette per palette set**, slot 0 black, no raster tricks. Enemy sprite palettes that the screen loads on top (`Screen_LoadSpritePalette`) are not counted yet.
 - **Block images**: a 16x16 block as 16 lines of four plane words (128 bytes), made for each (block id, corner) pair a screen uses, because the attribute byte gives a block a different palette in each corner (parity of column and row). Eolis screen 1 needs 59 images (7.5 KB); all nine Eolis screens 282 (36 KB).
 - **The viewer** (`make viewer AREA=0 SCREEN=1 CAMERA=40`, `src/viewer.s`, data from `tools/build_assets.py` into `build/generated/`) draws the HUD (as at the start of a game) and under it the playfield window, 256 pixels wide in the middle of 320. It equals the converter's expected picture pixel for pixel in Hatari (`tests/test_viewer.py`, needs a TOS image in `TOS`). It is a plain loop (block by block, line by line), not tuned.
+
+## 5e. The hero's sprites [verified against jsnes: tiles, sprite list frame by frame, picture pixel for pixel]
+
+`tools/faxanadu_sprites.py` follows the game's own routines and needs nothing but the ROM.
+
+- **Tiles.** The hero has no fixed set of pictures. `Player_LoadArmorTilesToPPU` and its kin copy tiles from bank 8 to the sprite pattern table: a list of tile ids per armour (`TILES_PLAYER_ARMOR_ADDRS_INDEX`, entry = armour*2, plus 1 with a shield; the Battle Suit has one list; the count is `PLAYER_ARMOR_TILE_COUNTS` + 1) to pattern tile 0 on, the shield (`TILES_SHIELDS_ADDRS_INDEX`, 6 tiles) to tile `$30` and the weapon (`TILES_PLAYER_WEAPON_ADDRS_INDEX`) to tile `$38` (`$34` for the Dragon Slayer). A tile id is an index of 16-byte tiles from `TILES_ARMOR_START`, `TILES_SHIELDS_START` or `TILES_WEAPONS_START`.
+- **Frames** ("appearances", `TILEINFO_PLAYER_ADDRS`, bank 7, entries are the address minus `$8000`): a four-byte header (rows-1 and columns-1 in the nibbles, x offset, y offset, pivot) then the cells, row by row: a tile number and an attribute, or the single byte `$FF` for an empty cell. Frame number: body = `PLAYER_BODY_TILEINFO_START_OFFSETS[armour*2 + shield bit]` + 0-7 (0-2 walking, 3 crouching or in the air, 4-6 attacking, 7 climbing); weapon `$40 + 8 * weapon` + the same frame; shield `MAYBE_SHIELD_SPRITE_PPU_OFFSETS[frame]` (`$60-$62`, `$42`); at the third attack frame an extra arm piece (`$63-$6A`) 8 pixels behind or 16 in front. Facing left ($40 in `Player_Flags`) flips each tile and mirrors the cells around the pivot.
+- **Position.** A sprite's y is the OAM value: the hero's `Player_PosY` + the frame's y offset + 32 (the HUD) + 8 per row; the NES shows it one line lower. The game draws before it moves, so a snapshot of the state after a frame is one step ahead of the sprites.
+- **Colours.** Sprite palettes 0 and 1 (attribute bits 0-1) from bank 11 (`$1C0` outside, `$1D0` inside); colour 0 is see-through. Where parts overlap, later drawn is in front: body, weapon, shield (all seven equipments agree with jsnes' picture; the game's OAM order itself is shuffled by its slot allocation).
+- **Not done yet:** climbing (frame 7 and its flip every 16 ticks is coded from the disassembly, never compared with a ladder in the harness), the sprite being drawn behind background blocks (`Player_CalculateVisibility`: blocks of type 4, 9 and 13), death and magic casting frames, the inside sprite palette.
+- **On the ST** (`src/viewer.s`, `blit_tile`): a sprite tile is 8 lines of a mask and four plane bytes (40 bytes), made by `tools/st_convert.py` for each (tile, palette, flip) the pose uses; it is shifted into the plane words and cut at the top of the window and the bottom of the screen. Pixel-exact in Hatari (`tests/test_viewer.py`: five pixel phases, cut at the top and the bottom). **Budget: this blitter takes about 600 cycles a line, 5,000 a tile, 50,000 for a hero: too slow for a frame with the background put back. For the game: compose a pose once into a mask and four planes (about 24x32 pixels) and shift that, or keep sprites word aligned.** Measure first.
 
 ## 6. Tools and layout
 
@@ -105,10 +116,11 @@ tools/faxanadu_maps.py  areas, screens, blocks, neighbours, block properties, do
 tools/faxanadu_gfx.py   the HUD and letter tiles
 tools/render_screen.py  draw a screen from the ROM's data; compare with a jsnes picture
 tools/nes_palette.py    the 64 NES colours as jsnes shows them
-tools/st_convert.py     NES to ST: one 16-colour palette per palette set, planar block images
+tools/faxanadu_sprites.py the hero: tiles, frames, positions (checked against jsnes)
+tools/st_convert.py     NES to ST: one 16-colour palette per palette set, planar block images, sprite images
 tools/build_assets.py   the ST data of one screen from the ROM, for the viewer
-src/viewer.s            draws one screen on the ST (`make viewer`)
-tools/refnes/           the jsnes ROM harness: read RAM by label, press buttons, take pictures, probes (see its README)
+src/viewer.s            draws one screen with the HUD and the hero on the ST (`make viewer HERO=x,y,armour,shield,weapon,frame,left`)
+tools/refnes/           the jsnes ROM harness: read RAM by label, press buttons, take pictures, probes (see its README); heroshot.mjs and herowalk.mjs record the hero
 tests/                  unit tests; test_start.py runs main.s on machine68k with GEMDOS stubs
 build/                  output (gitignored)
 ```

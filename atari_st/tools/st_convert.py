@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import faxanadu_gfx as gfx
 import faxanadu_maps as fm
 import faxanadu_rom as fr
+import faxanadu_sprites as fs
 import render_screen as rs
 from nes_palette import NES_RGB
 
@@ -201,8 +202,78 @@ def hud_pixels(rom: fr.Rom, palette_index: int, plan: PalettePlan, state: dict |
     return rows
 
 
+# -------------------------------------------------------------------------------------------------------------------- hero
+SPRITE_IMAGE_BYTES = 40     # 8 lines of: mask, plane 0, plane 1, plane 2, plane 3 (one byte each, leftmost pixel in the top bit)
+ST_LEFT = 32                # the playfield's left edge on the 320-pixel screen
+ST_TOP = 32                 # the first line below the HUD
+
+
+@dataclass(frozen=True)
+class Hero:
+    """Where and how the hero stands: his position (`Player_PosX_Block`, `Player_PosY`), equipment (armour 0-3, shield 0-2 or 255,
+    weapon 0-3 or 255), the frame (0-7) and which way he faces."""
+    x: int = 144
+    y: int = 144
+    armor: int = 0
+    shield: int = 255
+    weapon: int = 0
+    frame: int = 0
+    left: bool = True
+
+    def sprites(self, rom: fr.Rom) -> list[fs.Sprite]:
+        return fs.hero_sprites(rom, self.x, self.y, self.armor, self.shield, self.weapon, self.frame, self.left)
+
+
+def sprite_palettes(rom: fr.Rom, palette_index: int) -> list[list[int]]:
+    return palette_set(rom, palette_index)[1]
+
+
+def hero_layer(rom: fr.Rom, hero: Hero, palette_index: int, plan: PalettePlan) -> dict[tuple[int, int], int]:
+    """The hero as {(ST x, ST line before the camera): slot}: x already moved to the 320-pixel screen, lines still as on the NES screen."""
+    tiles = fs.pattern_tiles(rom, hero.armor, hero.shield, hero.weapon)
+    layer = fs.sprite_layer(hero.sprites(rom), tiles, sprite_palettes(rom, palette_index))
+    return {(x + ST_LEFT, line): plan.slot[c & 0x3F] for (x, line), c in layer.items()}
+
+
+def sprite_image(raw: bytes, hflip: bool, palette: list[int], plan: PalettePlan) -> bytes:
+    """One 8x8 sprite tile for the ST: 8 lines of mask and four plane bytes in the sprite palette (colour 0 is see-through)."""
+    px = fs.tile_pixels(raw, hflip)
+    out = bytearray()
+    for row in px:
+        mask, planes = 0, [0, 0, 0, 0]
+        for v in row:
+            mask <<= 1
+            for p in range(4):
+                planes[p] <<= 1
+            if v:
+                mask |= 1
+                slot = plan.slot[palette[v] & 0x3F]
+                for p in range(4):
+                    planes[p] |= (slot >> p) & 1
+        out += bytes([mask, *planes])
+    return bytes(out)
+
+
+def hero_assets(rom: fr.Rom, hero: Hero, palette_index: int, plan: PalettePlan, camera: int) -> tuple[bytes, bytes]:
+    """(sprite list, images) for the viewer. The list is 6 bytes a sprite: ST x, ST line (word, signed), image number (word), ended by
+    a word of -1; the images are 40 bytes each, made for each different (tile, palette, flip) the pose uses."""
+    tiles = fs.pattern_tiles(rom, hero.armor, hero.shield, hero.weapon)
+    palettes = sprite_palettes(rom, palette_index)
+    images: list[bytes] = []
+    index: dict[tuple, int] = {}
+    entries = bytearray()
+    for s in hero.sprites(rom):
+        key = (s.tile, s.attr & 3, bool(s.attr & 0x40))
+        if key not in index:
+            index[key] = len(images)
+            images.append(sprite_image(tiles.get(s.tile, bytes(16)), key[2], palettes[key[1]], plan))
+        entries += (s.x + ST_LEFT).to_bytes(2, "big") + (s.y + 1 - camera).to_bytes(2, "big", signed=True) + index[key].to_bytes(2, "big")
+    entries += b"\xff\xff"
+    return bytes(entries), b"".join(images)
+
+
 def expected_screen(rom: fr.Rom, area_index: int, screen: int, camera: int, palette_index: int | None = None,
-                    state: dict | None = None) -> list[list[int]]:
+                    state: dict | None = None, hero: Hero | None = None) -> list[list[int]]:
     """The whole 320x200 ST screen as slot numbers: the HUD in lines 0-31, then the playfield window of 168 lines, both 256 wide
     and 32 pixels from the left."""
     a = fm.area(rom, area_index)
@@ -215,4 +286,9 @@ def expected_screen(rom: fr.Rom, area_index: int, screen: int, camera: int, pale
         out[y][32:288] = hud[y]
     for y in range(168):
         out[32 + y][32:288] = window[y]
+    if hero is not None:
+        for (x, line), slot in hero_layer(rom, hero, pal, plan).items():
+            y = line - camera
+            if ST_TOP <= y < 200 and 0 <= x < 320:
+                out[y][x] = slot
     return out

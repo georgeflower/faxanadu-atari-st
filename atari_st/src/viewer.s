@@ -12,6 +12,8 @@
     .equ HUD_LINES, 32
     .equ WINDOW_LINES, 168
     .equ LEFT_BYTES, 16                     | 32 pixels
+    .equ SPRITE_IMAGE_BYTES, 40
+    .equ SCREEN_LINES, 200
 
     .text
     .globl _start
@@ -165,6 +167,18 @@ start:
     cmpi.w #4, %d6
     blt.s 7b
 
+    | The hero (and later every other sprite): the list is x, line, image number for each tile, ended by a word of -1.
+    lea hero_list(%pc), %a5
+    lea hero_images(%pc), %a3
+10: move.w (%a5)+, %d0                      | x on the screen
+    bmi.s 11f
+    move.w (%a5)+, %d1                      | line (may be above or below the window)
+    move.w (%a5)+, %d2
+    mulu.w #SPRITE_IMAGE_BYTES, %d2
+    lea (%a3,%d2.l), %a1
+    bsr.w blit_tile
+    bra.s 10b
+11:
     move.w #7, -(%sp)
     trap #1                                 | Crawcin: wait for a key
     addq.l #2, %sp
@@ -185,7 +199,74 @@ start:
     clr.w -(%sp)
     trap #1
 
+| One 8x8 sprite tile over the picture. In: d0 = x, d1 = line (signed), a1 = image (8 lines of mask and four plane bytes), a4 = screen.
+| The tile is cut at the top of the window (under the HUD) and at the bottom of the screen. Keeps a3, a5, a4; clobbers d0-d7, a0-a2.
+.macro PLANE off
+    moveq #0, %d3
+    move.b (%a1)+, %d3
+    ror.l #8, %d3
+    lsr.l %d0, %d3                          | the plane byte at its pixel position: high word the first group, low word the next
+    move.w %d3, %d4
+    swap %d3
+    move.w \off(%a0), %d5
+    and.w %d2, %d5
+    or.w %d3, %d5
+    move.w %d5, \off(%a0)
+    move.w \off+8(%a0), %d5
+    and.w %d6, %d5
+    or.w %d4, %d5
+    move.w %d5, \off+8(%a0)
+.endm
+
+blit_tile:
+    moveq #8, %d7                           | lines to draw
+    cmpi.w #HUD_LINES, %d1
+    bge.s 1f
+    move.w #HUD_LINES, %d2
+    sub.w %d1, %d2                          | lines above the window
+    sub.w %d2, %d7
+    ble.w 9f
+    move.w %d2, %d3
+    lsl.w #2, %d3
+    add.w %d2, %d3                          | * 5 bytes a line
+    adda.w %d3, %a1
+    move.w #HUD_LINES, %d1
+1:  move.w #SCREEN_LINES, %d2
+    sub.w %d1, %d2                          | lines left to the bottom of the screen
+    ble.w 9f
+    cmp.w %d2, %d7
+    ble.s 2f
+    move.w %d2, %d7
+2:  subq.w #1, %d7
+    mulu.w #STRIDE, %d1
+    movea.l %a4, %a0
+    adda.l %d1, %a0
+    move.w %d0, %d1
+    lsr.w #4, %d1
+    lsl.w #3, %d1                           | 8 bytes a 16-pixel group
+    adda.w %d1, %a0
+    andi.w #15, %d0                         | the shift inside the group
+3:  moveq #0, %d2
+    move.b (%a1)+, %d2
+    ror.l #8, %d2
+    lsr.l %d0, %d2                          | the mask, shifted
+    not.l %d2
+    move.w %d2, %d6                         | what to keep in the next group
+    swap %d2                                | and in the first
+    PLANE 0
+    PLANE 2
+    PLANE 4
+    PLANE 6
+    lea STRIDE(%a0), %a0
+    dbra %d7, 3b
+9:  rts
+
     .section .rodata
+hero_list:
+    .incbin "hero_list.bin"
+    .even
+hero_images:
+    .incbin "hero_images.bin"
 hud_layout:
     .incbin "hud_layout.bin"
 hud_tiles:

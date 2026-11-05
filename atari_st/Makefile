@@ -75,13 +75,15 @@ overscan:
 AREA ?= 0
 SCREEN ?= 1
 CAMERA ?= 40
+# the hero: x,y,armour,shield,weapon,frame,faces-left (default: after the castle door, start equipment)
+HERO ?= 144,144,0,255,0,0,1
 ROM_FILE ?= ../ext/Faxanadu_Europe.nes
 GENERATED := $(BUILD_DIR)/generated
 VIEWER_PRG := $(BUILD_DIR)/VIEWER.PRG
 .PHONY: viewer
 viewer:
 	@mkdir -p $(BUILD_DIR)
-	$(PYTHON) $(TOOLS_DIR)/build_assets.py --rom $(ROM_FILE) --area $(AREA) --screen $(SCREEN) --camera $(CAMERA) --out $(GENERATED)
+	$(PYTHON) $(TOOLS_DIR)/build_assets.py --rom $(ROM_FILE) --area $(AREA) --screen $(SCREEN) --camera $(CAMERA) --hero $(HERO) --out $(GENERATED)
 	$(AS) -m68000 -I $(GENERATED) -I $(SRC_DIR) -al=$(BUILD_DIR)/viewer.lst -o $(BUILD_DIR)/viewer.o $(SRC_DIR)/viewer.s
 	$(LD) $(LDFLAGS) -o $(BUILD_DIR)/viewer.elf $(BUILD_DIR)/viewer.o
 	$(PYTHON) $(TOOLS_DIR)/check_reach.py --nm $(NM) --listing $(BUILD_DIR)/viewer.lst $(BUILD_DIR)/viewer.elf $(SRC_DIR)/viewer.s

@@ -3,7 +3,7 @@
 
     build_assets.py [--rom ext/Faxanadu_Europe.nes] [--area 0] [--screen 1] [--camera 40] [--out build/generated]
 
-Writes hud_tiles.bin (the 60 HUD tiles, 32 bytes each) and hud_layout.bin (its 4 rows of 32 tile ids, as at the start of a game),
+Writes hero_list.bin and hero_images.bin (the hero's sprites for the ST), hud_tiles.bin (the 60 HUD tiles, 32 bytes each) and hud_layout.bin (its 4 rows of 32 tile ids, as at the start of a game),
 palette.bin (16 ST colour words), blocks.bin (the 128-byte block images the screen uses), block_index.bin (1024 words:
 image number of (block id * 4 + corner), $FFFF for none), screen.bin (the screen's 13 rows of 16 block ids) and assets.inc
 (the numbers the assembly needs). Nothing here is committed: it all comes from the ROM and is rebuilt on each build.
@@ -27,6 +27,8 @@ def main() -> int:
     parser.add_argument("--area", type=int, default=0)
     parser.add_argument("--screen", type=int, default=1)
     parser.add_argument("--camera", type=int, default=40, help="first line of the 208-line playfield shown in the 168-line window (0-40)")
+    parser.add_argument("--hero", default="144,144,0,255,0,0,1",
+                        help="the hero: x,y,armour,shield,weapon,frame,faces-left (default: where he stands after the castle door, start equipment)")
     parser.add_argument("--out", type=Path, default=Path(__file__).resolve().parents[1] / "build" / "generated")
     args = parser.parse_args()
     if not args.rom.is_file():
@@ -44,6 +46,10 @@ def main() -> int:
     (args.out / "screen.bin").write_bytes(bytes(blocks))
     pal_index = a.palette_index
     start = sc.HUD_START
+    hero = sc.Hero(*[bool(v) if i == 6 else v for i, v in enumerate(int(t) for t in args.hero.split(","))])
+    hero_list, hero_images = sc.hero_assets(rom, hero, pal_index, plan, args.camera)
+    (args.out / "hero_list.bin").write_bytes(hero_list)
+    (args.out / "hero_images.bin").write_bytes(hero_images)
     (args.out / "hud_tiles.bin").write_bytes(sc.hud_tile_images(rom, pal_index, plan, start["hp"], start["mp"]))
     layout = gfx.hud_layout(start["hp"], start["mp"], start["experience"], start["gold"], start["seconds"])
     (args.out / "hud_layout.bin").write_bytes(bytes(t for row in layout for t in row))

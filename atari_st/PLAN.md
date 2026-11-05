@@ -1,36 +1,83 @@
 # Plan
 
-The order follows the Zelda port. Each step is one or a few commits straight to `main` that build and are tested (in Hatari once there is something to see) and, when worth playing, get a disk image.
+The order follows the Zelda port. Each step is one or a few commits straight to `main` that build and are tested (in Hatari once there is something to see) and, when worth playing, get a disk image. The ROM harness (jsnes) is the reference: every behaviour is first written down from the disassembly, then compared with the harness, then built on the ST.
 
 ## Done
 
 - [x] 1. Set-up: `atari_st/` with the build, the tools, a start-up check that runs in Hatari on a 512 KB machine, tests, this briefing.
 - [x] 2. ROM harness: jsnes plays the Europe ROM from RAM labels; scroll measured (64 frames of 4 px); labels checked.
-
-- [x] 3a. The map data: areas, screens, blocks, tilesets and palettes read from the ROM; a screen drawn from them equals jsnes, pixel for pixel.
-
+- [x] 3a. Map data: areas, screens, blocks, tilesets and palettes read from the ROM; a screen drawn from them equals jsnes, pixel for pixel.
 - [x] 3a'. Block properties, screen neighbours, doors and the HUD and letter tiles, checked against the game's RAM.
+- [x] 4a. A screen on the ST: playfield, HUD (as at the start of a game) and the hero, pixel-exact in Hatari (`make viewer`). 16 colours are enough for all 28 palette sets.
+- [x] 3b-hero. The hero's tiles, frames, offsets and colours decoded and checked against jsnes (`tools/faxanadu_sprites.py`).
 
-## Next
+## Order of work
 
-3b. **The rest of the data.** The HUD layout, the sprite tiles and their info and palettes (banks 6-8, 11) and per-screen sprite placements, doors into buildings, text (banks 12 and 13 differ in Europe: read the Europe ROM). Then convert tiles, blocks and maps to ST planar form and map the NES colours to 16 (see the Zelda port).
-4. **Display and scroll.** Decided: 320x200, HUD on top (32 lines), then a 168-line window of the 208-line playfield that follows the hero vertically (see `AGENTS.md`; overscan is shelved).
-   - 4a. Converting the ROM's tiles, blocks and maps to ST form and showing a screen on the ST: done for the playfield (`make viewer`, pixel-exact in Hatari; all 28 palette sets fit 16 colours). The HUD is on it too (`hud_tiles.bin`, pixel-exact). To do: the hero, then the HUD updating from the game state.
-   - 4b. Scroll between screens (256 px in 64 frames at 4 px, measured; nothing else runs): measure a 16-pixel step every four frames from a pre-composed wider buffer, the 8-line vertical steps through the video base for up and down, the camera that follows the hero vertically, and what the hero does during it (`Game_UpdatePlayerOnScroll`, and the two other `Screen_HandleScroll` callers).
-   - Data volume: tilesets 16 KB and maps about 54 KB, so a whole area fits.
-5. **Hero, collision, physics**, matched against the disassembly with harness comparisons (jump arc, speeds, ladders, stairs).
-6. **Enemies and bosses**, in groups by area, each with a golden scene.
-7. **Towns, buildings, shops, NPCs**: a small interpreter for the ROM's interaction scripts, and the scripts themselves read from the ROM.
-8. **HUD, items, magic, inventory.**
-9. **Title, start screen, intro, ending.**
-10. **Music and sound** from the ROM's own sound engine (bank 5; the Europe bank differs, so rip from the Europe ROM). Independent of the rest; can start any time after 3.
-11. **Password** (the ROM's format) and a save file as a convenience.
-12. **Disk layout**, the final image, checks on the real 520 STFM after each step.
+The numbers are the order I intend to work in. A step is done when its tests pass and `AGENTS.md` says what was learned. **Unattended** means it can be done without Göran: the harness gives the answer. **Needs Göran** means a real machine, a choice or a file.
+
+### A. Frame loop and the HUD (next)
+
+- A1. **HUD that updates** (unattended): HP, MP, experience, gold, time and the item box drawn from a state block by a routine, not from a fixed picture. The bars' partial tiles (8 values each, the magic bar with its halves swapped) come from the ROM. Test: Hatari picture equals `st_convert.hud_pixels` for several states (the five states of `hudshot.mjs`).
+- A2. **The frame loop** (unattended): VBL interrupt (50 Hz), one game tick per VBL, a double screen buffer or a drawn-under-the-beam scheme (decide after measuring), joystick and keyboard read through the IKBD (joystick port 1 as the NES pad; keyboard keys as an option), a frame counter. Test in Hatari with injected key events; measure cycles per frame with Hatari's profiler or a timer-B border colour.
+- A3. **Sprite engine** (unattended): draw and erase sprites over a still background (save-under or redraw of the touched blocks), the hero composed once per pose and shifted (see `AGENTS.md` 5e for the budget), a sprite list with the NES's priority rules and the per-frame limits the game has (`Sprites_SlotsFull`), "behind the background" for the hero. Measure: hero + 8 sprites inside 60,000 cycles.
+
+### B. Moving between screens (the display risk)
+
+- B1. **Horizontal scroll between screens** (unattended to build, **needs Göran** to judge on the real machine): 64 frames of 4 px = 16 px every 4 frames. Pre-compose the neighbour screen into a wider buffer and move the picture 16 px at a time with word-aligned copies; nothing else runs during the scroll (checked in the harness). Measure the copy cost (about 168 lines x 256 px x 4 planes = 21 KB a step, a few hundred thousand cycles if done naively: this is the main budget problem; options are a 4-step cache, or scrolling by redrawing only the new column of blocks and moving the rest with `movem`).
+- B2. **Vertical scroll** (up/down screens, 208-line wrap): through the video base address in 8-line steps; the camera window follows the hero between scrolls.
+- B3. **Screen setup**: loading a screen from the area data on entry (block ids, tiles, palette from the door, neighbours), area changes, the other two `Screen_HandleScroll` callers, `Game_UpdatePlayerOnScroll`. Compare the first frame after every kind of move with jsnes.
+- B4. **Palette per screen**: one 16-colour palette per palette set, set from the door's palette index; sprite palettes loaded on top by `Screen_LoadSpritePalette` (enemy colours) counted into the 16.
+
+### C. The hero plays
+
+- C1. **Input and walking**: speeds, the movement tick, facing, animation frames, crouch.
+- C2. **Collision with blocks**: block properties (0 air, 1 solid, 2 ladder, 3 door, 4/9/13 pass-behind, 10-13 screen transitions, the rest to read), the hero's 16x32 box, ledges.
+- C3. **Jump and fall**: the arc and the fall speed, compared frame by frame with the harness.
+- C4. **Ladders and stairs**: climbing frame 7 with its flip, `Player_IsClimbing`; check it against a real ladder in the harness (not done yet).
+- C5. **Attack**: weapon frames, hit boxes (`MAYBE_WEAPON_RANGES`), the arm piece, magic casting frames, damage taken, knock-back, death animation and game over.
+- Each of C1-C5 gets a "golden run": a recorded button sequence from the harness and the hero's x, y and frame per tick; the ST code (run under Hatari or an emulator in the tests) must reproduce it.
+
+### D. Enemies, items, bosses
+
+- D1. **Sprite data**: all enemy and NPC tiles, frames and palettes (banks 6-8, 11), converted as for the hero; per-screen sprite placements; the sprite entity tables (`SPRITE_ENTITY_*`: hit points, damage, drop values, ranges).
+- D2. **Enemy behaviours** (about 60 kinds, `SpriteBehavior`): group them by movement pattern; one at a time, each with a golden scene from the harness. Spawning, respawn rules, drops, experience and gold.
+- D3. **Items and magic**: pickups, the inventory, equipment changes (re-load the hero's tiles), magic spells and their sprites, keys and doors that need them.
+- D4. **Bosses**: one each, after the normal enemies; their rooms and music cues.
+
+### E. Towns, buildings, text
+
+- E1. **Doors into buildings** and the building screens (tileset 6, palettes), moving in and out, the hero's start position.
+- E2. **Text and the font**: banks 12 and 13 of the **Europe** ROM (they differ from the US); the font tiles; string decoding; text boxes and the portrait pictures (`TILEINFO_PORTRAITS_ADDRS`).
+- E3. **Interaction scripts**: a small interpreter for the ROM's script language (`IScripts_*`, `IScriptAction_*`) and the scripts read from the Europe ROM; shops, guru, the King, the hospital, the key sellers.
+- E4. **Passwords** (`IScriptAction_ShowPassword`, the ROM's format) and a save file as a convenience (floppy or the Gotek image).
+
+### F. The rest of the game
+
+- F1. **Title screen, start screen, intro, ending, credits** (bank 12 differs in Europe: the start screen's code).
+- F2. **Music and sound** from the ROM's own sound engine (bank 5; the Europe bank differs, so read the Europe ROM): a converter from the NES's two pulse, triangle and noise channels to the YM2149's three channels and its envelope, run from a VBL interrupt. Independent of the rest: can start at any time. The Zelda port's sound code is the reference for the YM side.
+- F3. **Game flow**: death, continue, the time counter, area transitions that change music and palette, the final boss.
+
+### G. Making it a product
+
+- G1. **Memory map**: all areas, tiles, sprite images, music and text must fit 512 KB with the program, two screens and the buffers. Estimate now, verify at each step. Load areas from disk when entering them if needed (the Gotek is a floppy: keep loads short and put them in doorways).
+- G2. **Disk layout**, the final image, naming of images (a rule for no-PR numbering is still to be agreed with Göran), loading screen, a README for the disk.
+- G3. **Real hardware checks** after each of A, B, C: Göran runs the image on the 520 STFM and reports (speed, flicker, tearing, colours, sound). These are the real acceptance tests; Hatari timing is not exact.
+- G4. **Polish**: ST-specific options (joystick or keyboard, colour palette tweak, speed option) written in `AGENTS.md` section 8 as deliberate differences.
+
+## Cross-cutting work
+
+- **Cycle budget** (rule 5): one table in `AGENTS.md` with the measured cost of each per-frame routine; a frame is about 160,000 cycles at 50 Hz and the scroll and the sprites are the two big spenders.
+- **Tests**: golden pictures (frame hashes) per screen and state, golden runs per behaviour, unit tests for decoders; `make check` runs all of it in a few minutes. Needs `TOS` (an EmuTOS image) and the ROM.
+- **Harness gaps**: climbing, a screen with a ladder, an enemy of each kind, a shop, the title screen; each needs a short "how to get there" script in `tools/refnes/`.
+- **Europe versus US**: whenever a table from banks 5, 12 or 13 is used, read it from the Europe ROM, not from the US offsets.
+- **Disk images**: only built and run images are delivered; names to be decided with Göran.
 
 ## Known risks
 
-- Scrolling and the display size (step 4).
-- Colour: Faxanadu's per-area palettes against 16 colours.
-- Data volume: 272 screens in eight areas and a lot of text. The maps are about 54 KB in the ROM's compressed form (about 200 bytes a screen; the biggest area, Mist, 17 KB); all tilesets together are 16 KB. Small enough to keep a whole area in memory.
-- The script interpreter: all NPC behaviour depends on it being exact.
+- Scrolling and the display size (step B): the biggest.
+- Sprite cost on a machine with no blitter (A3).
+- Colour: Faxanadu's per-area palettes against 16 colours, and enemy sprite palettes on top (B4).
+- Data volume: 272 screens in eight areas and a lot of text. The maps are about 54 KB in the ROM's compressed form (about 200 bytes a screen; the biggest area, Mist, 17 KB); all tilesets together are 16 KB. Small enough to keep a whole area in memory, but sprite images (several variants each) and music add up: see G1.
+- The script interpreter (E3): all NPC behaviour depends on it being exact.
 - Bank 5 (music) and bank 12 (texts) differ between the US and Europe ROMs: the disassembly does not describe those bytes exactly.
+- Only Göran can run the real machine: plan G3 checks so each one is a short, specific question.
