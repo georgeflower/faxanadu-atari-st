@@ -152,9 +152,14 @@ start:
     bsr.w blit_tile
     bra.s 10b
 11:
-    move.w #7, -(%sp)
-    trap #1                                 | Crawcin: wait for a key
-    addq.l #2, %sp
+    | The frame loop: one pass a VBL until Esc.
+    bsr.w frame_init
+12: bsr.w wait_vbl
+    bsr.w input_poll
+    lea input_state(%pc), %a0
+    tst.b IN_QUIT(%a0)
+    beq.s 12b
+    bsr.w frame_exit
 
     movea.l #PALETTE, %a2
     lea saved_palette(%pc), %a1
@@ -242,6 +247,7 @@ hud_load_state:
     rts
 
     .include "hud.s"
+    .include "frame.s"
 
     .section .rodata
 hero_list:
