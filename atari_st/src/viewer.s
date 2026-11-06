@@ -377,13 +377,38 @@ restore_rect:
 | The hero's walking as the ROM does it (tools/hero_physics.py is the reference, tests/test_hero_physics.py checks it against the game):
 | x in 8.8 fixed point (hero_x and hero_frac), an acceleration (hero_acc) that starts at $C0 when he starts walking and grows by 2 a frame
 | to $180 (rank group 0; 4, 6, 8 for the higher ranks: not here yet), a wall stops him on a block edge. Up and down are still the demo's.
-| Fields at hero_x: x 0, y 2, flip 4, frame 6, tick 8, frac 10, acc 12, moving 14.
+| Fields at hero_x: x 0, y 2, flip 4, frame 6, tick 8, frac 10, acc 12, moving 14, jump 16, air 18 (the ROM's Player_Flags bits: 1 jumping,
+| 2 holding to climb, 4 falling).
 hero_step:
     movem.l %d0-%d4/%a0-%a2, -(%sp)
     lea input_state(%pc), %a0
     move.b IN_PAD(%a0), %d0
+    moveq #0, %d4
+    move.b %d0, %d4                         | the pad, kept (d0 becomes the horizontal choice)
     lea hero_x(%pc), %a1
     moveq #0, %d2                           | 1 when he moves
+    | Up or down held: the demo's way up and down (until the ladders are there), no gravity. Otherwise the ROM's jump, fall and landing.
+    btst #3, %d0
+    bne.s 50f
+    btst #2, %d0
+    bne.s 50f
+    bsr.w hero_vertical
+    bra.s 51f
+50: clr.w 16(%a1)
+    clr.w 18(%a1)
+51: move.w %d4, %d0                         | (the pad again, and no move yet: hero_vertical used d0 and d2)
+    moveq #0, %d2
+    move.w 18(%a1), %d1                     | in the air (jumping or falling) he cannot turn: he goes on the way he went
+    andi.w #5, %d1
+    beq.s 52f
+    moveq #0, %d0
+    tst.w 14(%a1)
+    beq.s 52f
+    moveq #2, %d0
+    tst.w 4(%a1)
+    beq.s 52f
+    moveq #1, %d0
+52:
     btst #0, %d0                            | right
     bne.s 20f
     btst #1, %d0                            | left
@@ -440,11 +465,11 @@ hero_step:
     andi.w #0xF0, %d1                       | a wall: the next block edge to the right
     addi.w #16, %d1
     move.w %d1, (%a1)
-40: btst #3, %d0                            | up (the demo's)
+40: btst #3, %d4                            | up (the demo's)
     beq.s 43f
     subq.w #2, 2(%a1)
     moveq #1, %d2
-43: btst #2, %d0                            | down
+43: btst #2, %d4                            | down
     beq.s 44f
     addq.w #2, 2(%a1)
     moveq #1, %d2
@@ -517,6 +542,182 @@ column_blocked:
     bge.s 3f
     or.b (%a2,%d2.w), %d0
 3:  tst.b %d0
+    rts
+
+| d1 = 0 left, 1 right, 2 above, 3 below. Out: d0 = the neighbour's number in the table, $FF for none. Clobbers d0, a2.
+neighbour_of:
+    moveq #0, %d0
+    move.w cur_screen(%pc), %d0
+    lsl.w #2, %d0
+    add.w %d1, %d0
+    lea neighbours(%pc), %a2
+    move.b (%a2,%d0.w), %d0
+    rts
+
+| d1 = a pixel line below $D0 (relative to the screen's top): is there a block under the middle of the hero (x + 4), and under the next column
+| when he stands over two (Area_CanMoveImmediatelyRight)? Out: d0 and Z (Z: free). Clobbers d1-d3, a2.
+body_blocked:
+    move.w cur_screen(%pc), %d2
+    mulu.w #208, %d2
+    lea blocking(%pc), %a2
+    adda.l %d2, %a2
+    lsr.w #4, %d1
+    lsl.w #4, %d1                           | the row's first flag
+    move.w hero_x(%pc), %d2
+    move.w %d2, %d3
+    addq.w #4, %d2
+    lsr.w #4, %d2
+    add.w %d2, %d1                          | the flag
+    moveq #0, %d0
+    or.b (%a2,%d1.w), %d0
+    andi.w #15, %d3
+    subq.w #4, %d3
+    cmpi.w #8, %d3
+    bcc.s 1f                                | x & 15 from 4 to 11: he stands over the next column too
+    addq.w #1, %d1
+    cmpi.w #208, %d1
+    bge.s 1f
+    or.b (%a2,%d1.w), %d0
+1:  tst.b %d0
+    rts
+
+| a2 = 16 flags of a row of another screen: the one(s) under the hero's x (Player_CheckIfPassable beyond the screen). Out: d0 and Z.
+edge_row:
+    move.w hero_x(%pc), %d1
+    move.w %d1, %d3
+    lsr.w #4, %d1
+    moveq #0, %d0
+    or.b (%a2,%d1.w), %d0
+    andi.w #15, %d3
+    beq.s 1f
+    addq.w #1, %d1
+    cmpi.w #16, %d1
+    bge.s 1f
+    or.b (%a2,%d1.w), %d0
+1:  tst.b %d0
+    rts
+
+| Is there something under his feet (the 32 lines of the hero down)? Out: d0 and Z (Z: free). Clobbers d1-d3, a2.
+blocked_below:
+    move.w hero_y(%pc), %d1
+    addi.w #32, %d1
+    andi.w #0xFF, %d1
+    cmpi.w #0xD0, %d1
+    bcs.w body_blocked
+    moveq #3, %d1                           | below the screen: the first row of the screen below
+    bsr.w neighbour_of
+    cmpi.b #0xFF, %d0
+    beq.s 1f
+    andi.w #0xFF, %d0
+    mulu.w #208, %d0
+    lea blocking(%pc), %a2
+    adda.l %d0, %a2
+    bra.w edge_row
+1:  moveq #0, %d0
+    rts
+
+| Is there something just over his head (the line above his y)? Out: d0 and Z. Clobbers d1-d3, a2.
+blocked_above:
+    move.w hero_y(%pc), %d1
+    subq.w #1, %d1
+    andi.w #0xFF, %d1
+    cmpi.w #0xF0, %d1
+    bcs.w body_blocked
+    moveq #2, %d1                           | above the screen: the last row of the screen above
+    bsr.w neighbour_of
+    cmpi.b #0xFF, %d0
+    beq.s 1f
+    andi.w #0xFF, %d0
+    mulu.w #208, %d0
+    lea blocking(%pc), %a2
+    adda.l %d0, %a2
+    adda.w #192, %a2
+    bra.w edge_row
+1:  moveq #0, %d0
+    rts
+
+| Player_HandleVertLadderOrJump / Player_UpdateClimbOrJump for a hero who is not on a ladder (a1 = hero_x; tools/hero_physics.py is the reference):
+| a new A press on the ground starts a jump (unless something is just over his head); the jump follows PLAYER_JUMP_CURVE; with nothing
+| under his feet he falls 8 lines a frame; he lands on a block row. Over the top or the bottom of the screen he asks scroll_check for the
+| neighbour (vscroll_req), or stops at the edge. Keeps a1, d4; clobbers d0-d3, a0, a2.
+hero_vertical:
+    .ifdef NO_PHYSICS
+    rts                                     | (the tests that put him anywhere and want him to stay: make viewer VIEWER_DEFS='--defsym NO_PHYSICS=1')
+    .endif
+    cmpi.w #0x20, 16(%a1)
+    bcs.s 1f
+    andi.w #0xFFFE, 18(%a1)                 | the curve is over: not jumping
+1:  btst #0, 19(%a1)
+    bne.w 7f                                | jumping
+    bsr.w blocked_below
+    bne.s 3f
+    ori.w #4, 18(%a1)                       | nothing under his feet: falling
+    addq.w #8, 2(%a1)
+    cmpi.w #0xC1, 2(%a1)
+    bcs.s 2f
+    moveq #3, %d1                           | the bottom of the screen
+    bsr.w neighbour_of
+    cmpi.b #0xFF, %d0
+    beq.s 8f
+    lea vscroll_req(%pc), %a0
+    move.w #3, (%a0)
+    rts
+8:  move.w #0xC0, 2(%a1)                    | no screen below: he stops at the edge
+    andi.w #0xFFFB, 18(%a1)
+    rts
+2:  bsr.w blocked_below                     | landed on a block: on its top
+    beq.s 9f
+    andi.w #0xF0, 2(%a1)
+9:  rts
+3:  andi.w #0xFFFB, 18(%a1)                 | standing
+    lea input_state(%pc), %a0
+    btst #7, IN_PAD_NEW(%a0)                | A pressed just now?
+    bne.s 4f
+    andi.w #0xFFFC, 18(%a1)
+    rts
+4:  bsr.w blocked_above
+    bne.s 9b                                | no room to jump
+    ori.w #3, 18(%a1)
+    clr.w 16(%a1)
+    bra.s 6f
+7:  andi.w #0xFFFB, 18(%a1)
+6:  move.w 16(%a1), %d0
+    lea jump_curve(%pc), %a2
+    moveq #0, %d1
+    move.b (%a2,%d0.w), %d1                 | how far this frame
+    cmpi.w #16, %d0
+    bcc.s 20f
+    move.w 2(%a1), %d2                      | rising
+    sub.w %d1, %d2
+    bpl.s 11f
+    moveq #2, %d1                           | over the top of the screen
+    bsr.w neighbour_of
+    cmpi.b #0xFF, %d0
+    beq.s 12f
+    lea vscroll_req(%pc), %a0
+    move.w #2, (%a0)
+    andi.w #0xFFFE, 18(%a1)
+    rts
+12: clr.w 2(%a1)
+    bra.s 14f
+11: move.w %d2, 2(%a1)
+    bsr.w blocked_above
+    beq.s 15f
+    move.w 2(%a1), %d0                      | the head hits a block: below its edge, and down
+    move.w %d0, %d1
+    andi.w #15, %d1
+    beq.s 14f
+    andi.w #0xF0, %d0
+    addi.w #16, %d0
+    move.w %d0, 2(%a1)
+14: move.w #15, 16(%a1)
+15: addq.w #1, 16(%a1)
+    rts
+20: add.w %d1, 2(%a1)                       | falling
+    bsr.w blocked_below
+    beq.s 15b
+    andi.w #0xF0, 2(%a1)                    | landed
+    andi.w #0xFFFE, 18(%a1)
     rts
 
 | Draws the hero in the pose his state says, into screen a4, and notes the rectangle in this screen's slot.
@@ -673,7 +874,12 @@ present_swap:
 | Walked to the edge of the screen with the stick pushed that way, and there is a screen there: scroll to it.
 scroll_check:
     movem.l %d0-%d1/%a0-%a1, -(%sp)
-    lea input_state(%pc), %a0
+    move.w vscroll_req(%pc), %d1            | the hero went over the top or the bottom (jump, fall): 2 above, 3 below
+    beq.s 8f
+    lea vscroll_req(%pc), %a0
+    clr.w (%a0)
+    bra.w 7f
+8:  lea input_state(%pc), %a0
     move.b IN_PAD(%a0), %d0
     move.w hero_x(%pc), %d1
     btst #0, %d0                            | right
@@ -1140,6 +1346,15 @@ hero_acc:
     .word 0
 hero_moving:
     .word 0
+hero_jump:
+    .word 0                                 | Player_JumpCurveIndex
+hero_air:
+    .word 0                                 | Player_Flags: 1 jumping, 2 holding to climb, 4 falling
+vscroll_req:
+    .word 0                                 | 2 or 3: scroll_check is to scroll to the screen above or below
+jump_curve:
+    .byte 8, 4, 4, 4, 4, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0, 0       | PLAYER_JUMP_CURVE: up, then down
+    .byte 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 4, 4, 4, 4, 8
 hud_tiles:
     .incbin "hud_tiles.bin"
 bench_result:

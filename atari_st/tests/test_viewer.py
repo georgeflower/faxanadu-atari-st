@@ -21,7 +21,8 @@ TOS = Path(os.environ.get("TOS") or os.environ.get("TOS_PAL") or "")
                      "needs the ROM, cc65, hatari, the m68k binutils and a TOS image (TOS or TOS_PAL)")
 class ViewerTests(unittest.TestCase):
     def run_viewer(self, area: int, screen: int, camera: int, hero: str, hud: str, hud2: str) -> bytes:
-        subprocess.run(["make", "-C", str(ROOT), "viewer", f"AREA={area}", f"SCREEN={screen}", f"CAMERA={camera}", f"HERO={hero}", f"HUD={hud}", f"HUD2={hud2}"], check=True,
+        subprocess.run(["make", "-C", str(ROOT), "viewer", f"AREA={area}", f"SCREEN={screen}", f"CAMERA={camera}", f"HERO={hero}", f"HUD={hud}", f"HUD2={hud2}",
+                        "VIEWER_DEFS=--defsym NO_PHYSICS=1"], check=True,
                        capture_output=True)
         rows = ROOT / "build" / "viewer_test.rows"
         subprocess.run([sys.executable, str(ROOT / "tools" / "hatari_shot.py"), "--tos", str(TOS), "--prg", str(ROOT / "build" / "VIEWER.PRG"),
@@ -229,7 +230,8 @@ class ViewerTests(unittest.TestCase):
 
         start, target = (4, 3) if down else (3, 4)
         hero_start = "144,192,0,255,0,0,1" if down else "144,0,0,255,0,0,1"
-        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=1", f"SCREEN={start}", f"CAMERA={40 if down else 0}", f"HERO={hero_start}"], check=True, capture_output=True)
+        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=1", f"SCREEN={start}", f"CAMERA={40 if down else 0}", f"HERO={hero_start}",
+                        "VIEWER_DEFS=--defsym NO_PHYSICS=1"], check=True, capture_output=True)
         nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
         sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
         image = (ROOT / "build" / "viewer.bin").read_bytes()
@@ -284,7 +286,8 @@ class ViewerTests(unittest.TestCase):
         import hatari_shot as hs
         import st_convert as sc
 
-        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=0", "SCREEN=1", "CAMERA=40", "HERO=144,100,0,255,0,0,1"], check=True, capture_output=True)
+        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=0", "SCREEN=1", "CAMERA=40", "HERO=144,100,0,255,0,0,1",
+                        "VIEWER_DEFS=--defsym NO_PHYSICS=1"], check=True, capture_output=True)
         nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
         sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
         image = (ROOT / "build" / "viewer.bin").read_bytes()
@@ -314,6 +317,46 @@ class ViewerTests(unittest.TestCase):
         rows = hs.decode_screen(ram, shown)
         bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
+
+    def test_he_falls_to_the_floor_and_jumps_when_a_is_pressed(self) -> None:
+        """He starts in the air (y 40) in Eolis screen 1 and falls to the floor (y 144); a key held down (Space, the jump button: poked into the key table)
+        starts a jump, in the air his y is above the floor with the jumping bit set, and he lands on the floor again."""
+        import hatari_shot as hs
+
+        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=0", "SCREEN=1", "CAMERA=40", "HERO=144,40,0,255,0,0,1"], check=True, capture_output=True)
+        nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
+        sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
+        image = (ROOT / "build" / "viewer.bin").read_bytes()
+        work = ROOT / "build" / "shots_jump"
+        work.mkdir(parents=True, exist_ok=True)
+        prg = ROOT / "build" / "VIEWER.PRG"
+        hatari = shutil.which("hatari")
+        (work / "c0.ini").write_text(f"savebin {work / 'ram0.bin'} 0 $80000\ncont\n", encoding="utf-8")
+        hs.run_hatari(hatari, TOS, prg, work, 500, "0", f"b VBL > 499 :once :file {work / 'c0.ini'}\n", None)
+        base = (work / "ram0.bin").read_bytes().find(image[sym["start"]:sym["start"] + 48]) - sym["start"]
+        self.assertGreater(base, 0)
+        space = base + sym["input_state"] + 264 + 0x39
+        (work / "press.ini").write_text(f"memwrite ${space:x} 0x01\ncont\n", encoding="utf-8")
+        (work / "release.ini").write_text(f"memwrite ${space:x} 0x00\ncont\n", encoding="utf-8")
+        script = ""
+        moments = ((599, "press.ini"), (700, "release.ini"))
+        for v, f in moments:
+            script += f"b VBL > {v} :once :file {work / f}\n"
+        for v in (590, 610, 800):
+            (work / f"cap{v}.ini").write_text(f"savebin {work / f'ram{v}.bin'} 0 $80000\ncont\n", encoding="utf-8")
+            script += f"b VBL > {v} :once :file {work / f'cap{v}.ini'}\n"
+        hs.run_hatari(hatari, TOS, prg, work, 801, "0", script, None)
+
+        def state(v: int) -> tuple[int, int]:
+            ram = (work / f"ram{v}.bin").read_bytes()
+            word = lambda name: int.from_bytes(ram[base + sym[name]:base + sym[name] + 2], "big", signed=True)
+            return word("hero_y"), word("hero_air")
+
+        self.assertEqual(state(590), (144, 0), "fallen to the floor")
+        y, air = state(610)
+        self.assertLess(y, 144)
+        self.assertTrue(air & 1, "jumping")
+        self.assertEqual(state(800), (144, 0), "landed again")
 
 
 if __name__ == "__main__":
