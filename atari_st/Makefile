@@ -17,14 +17,17 @@ BIN := $(BUILD_DIR)/faxanadu_st.bin
 PRG := $(BUILD_DIR)/FAXANADU.PRG
 OBJ := $(BUILD_DIR)/faxanadu_st.o
 LISTING := $(BUILD_DIR)/faxanadu_st.lst
-DISK := $(BUILD_DIR)/FAXANADU.st
+# Disk images are named Fax###.st, ### = the build number = the number of commits on this branch (git rev-list --count HEAD), three digits.
+BUILD_NUMBER := $(shell printf '%03d' $$(git rev-list --count HEAD))
+DISK := $(BUILD_DIR)/Fax$(BUILD_NUMBER).st
+VIEWER_DISK := $(BUILD_DIR)/Fax$(BUILD_NUMBER).st
 
 MAIN_SRC := $(SRC_DIR)/main.s
 # main.s .includes the other modules, so one assembler run covers them all.
 SOURCES := $(wildcard $(SRC_DIR)/*.s)
 
 .DEFAULT_GOAL := all
-.PHONY: all disk check clean
+.PHONY: all disk viewerdisk check clean
 
 all: $(PRG)
 
@@ -44,6 +47,9 @@ $(PRG): $(BIN) $(TOOLS_DIR)/make_prg.py
 	$(PYTHON) $(TOOLS_DIR)/make_prg.py $< $@
 
 # A 720 KB floppy image for a Gotek, a real drive or an emulator.
+viewerdisk: viewer
+	$(PYTHON) $(TOOLS_DIR)/make_disk.py $(VIEWER_DISK) $(VIEWER_PRG)
+
 disk: all
 	$(PYTHON) $(TOOLS_DIR)/make_disk.py $(DISK) $(PRG)
 
