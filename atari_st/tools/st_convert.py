@@ -292,20 +292,24 @@ def hero_assets(rom: fr.Rom, hero: Hero, palette_index: int, plan: PalettePlan, 
 ANIM_BASE = 128             # the pose lists are made with the hero here, so that no sprite coordinate wraps at 8 bits
 
 
-def hero_anim_assets(rom: fr.Rom, hero: Hero, palette_index: int, plan: PalettePlan) -> tuple[bytes, bytes]:
-    """(poses, images) for a walking hero: six poses, pose = frame (0-2) + 3 * flip bit, with the equipment of `hero`.
+POSE_FRAMES = (0, 1, 2, 3, 7)      # the ROM's body frames the ST has poses for
 
-    poses is a table of six words (the offset of each pose record from the start of the table), then the records: the box the pose
+
+def hero_anim_assets(rom: fr.Rom, hero: Hero, palette_index: int, plan: PalettePlan) -> tuple[bytes, bytes]:
+    """(poses, images) for the hero: ten poses, pose = slot + 5 * flip bit, with the equipment of `hero`. The slots are the walk frames 0-2, the
+    frame in the air (3) and the climbing frame (the ROM's 7).
+
+    poses is a table of ten words (the offset of each pose record from the start of the table), then the records: the box the pose
     covers as four signed words (x0, x1 exclusive, y0, y1 exclusive) and the sprites as (x, line, image) words, ended by -1. All
     x is relative to the hero's NES x (the ST screen's left margin is in it), y to his NES y (the one-line shift of the sprites is in
-    it); the line on the screen is that y minus the camera. images are shared by the six poses."""
+    it); the line on the screen is that y minus the camera. images are shared by the poses."""
     tiles = fs.pattern_tiles(rom, hero.armor, hero.shield, hero.weapon)
     palettes = sprite_palettes(rom, palette_index)
     images: list[bytes] = []
     index: dict[tuple, int] = {}
     records = []
     for left in (False, True):
-        for frame in range(3):
+        for frame in POSE_FRAMES:
             pose = Hero(ANIM_BASE, ANIM_BASE, hero.armor, hero.shield, hero.weapon, frame, left)
             entries = []
             for sp in pose.sprites(rom):
@@ -321,7 +325,7 @@ def hero_anim_assets(rom: fr.Rom, hero: Hero, palette_index: int, plan: PaletteP
             for e in entries:
                 record += b"".join(v.to_bytes(2, "big", signed=True) for v in e)
             records.append(record + b"\xff\xff")
-    offsets, at = [], 12
+    offsets, at = [], 2 * len(records)
     for record in records:
         offsets.append(at)
         at += len(record)

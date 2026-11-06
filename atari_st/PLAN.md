@@ -33,7 +33,7 @@ The numbers are the order I intend to work in. A step is done when its tests pas
 - C1. **Input and walking** (walking DONE: acceleration, wall stops, matched to the ROM frame by frame; animation frames and crouch open): speeds, the movement tick, facing, animation frames, crouch.
 - C2. **Collision with blocks**: block properties (0 air, 1 solid, 2 ladder, 3 door, 4/9/13 pass-behind, 10-13 screen transitions, the rest to read), the hero's 16x32 box, ledges.
 - C3. **Jump and fall**: done. The arc, the fall, landing and ceilings match the harness frame by frame (the in-air pose and the screen change left and right in the air are open).
-- C4. **Ladders and stairs**: ladders done (model, golden run, viewer test); the climbing pose (frame 7 with its flip), the walk animation from the movement tick and stairs are open.
+- C4. **Ladders and stairs**: ladders done (model, golden run, viewer test), the poses in the air and on a ladder and the walk animation from the movement tick too; stairs are open.
 - C5. **Attack**: weapon frames, hit boxes (`MAYBE_WEAPON_RANGES`), the arm piece, magic casting frames, damage taken, knock-back, death animation and game over.
 - Each of C1-C5 gets a "golden run": a recorded button sequence from the harness and the hero's x, y and frame per tick; the ST code (run under Hatari or an emulator in the tests) must reproduce it.
 

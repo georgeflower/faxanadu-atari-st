@@ -350,6 +350,8 @@ class ViewerTests(unittest.TestCase):
         def state(v: int) -> tuple[int, int]:
             ram = (work / f"ram{v}.bin").read_bytes()
             word = lambda name: int.from_bytes(ram[base + sym[name]:base + sym[name] + 2], "big", signed=True)
+            if v == 610:
+                self.assertEqual(word("hero_frame"), 3, "the pose in the air")
             return word("hero_y"), word("hero_air")
 
         self.assertEqual(state(590), (144, 0), "fallen to the floor")
@@ -385,9 +387,9 @@ class ViewerTests(unittest.TestCase):
         for v, f in ((599, "up.ini"), (639, "stop.ini")):
             script += f"b VBL > {v} :once :file {work / f}\n"
         for v in (590, 700):
-            (work / f"cap{v}.ini").write_text(f"savebin {work / f'ram{v}.bin'} 0 $80000\ncont\n", encoding="utf-8")
+            (work / f"cap{v}.ini").write_text(f"savebin {work / f'ram{v}.bin'} 0 $80000\nm $ff8200-$ff8260\ncont\n", encoding="utf-8")
             script += f"b VBL > {v} :once :file {work / f'cap{v}.ini'}\n"
-        hs.run_hatari(hatari, TOS, prg, work, 701, "0", script, None)
+        log = hs.run_hatari(hatari, TOS, prg, work, 701, "0", script, None)
 
         def word(v: int, name: str) -> int:
             ram = (work / f"ram{v}.bin").read_bytes()
@@ -407,6 +409,18 @@ class ViewerTests(unittest.TestCase):
             reached.append(h.y)
         self.assertIn(word(700, "hero_y"), reached[36:44], f"y {word(700, 'hero_y')}: not what the ROM's climbing gives after about 40 frames")
         self.assertLess(word(700, "hero_y"), 170)
+        # hanging on the ladder after the climb: the climbing pose (the ROM's frame 7), mirrored every 16 movement ticks
+        import re
+        import st_convert as sc
+        self.assertEqual(word(700, "hero_frame"), 4)
+        m = re.findall(r"^00FF8200: ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2})", log, re.M)[-1]
+        shown = (int(m[1], 16) << 16) | (int(m[3], 16) << 8)
+        flip = word(700, "hero_flip") ^ ((word(700, "hero_mtick") >> 4) & 1)
+        expected = sc.expected_screen(rom, 2, 0, 40, state=dict(hp=16, mp=0, experience=0, gold=0, seconds=0),
+                                      hero=sc.Hero(word(700, "hero_x"), word(700, "hero_y"), 0, 255, 0, 7, bool(flip)))
+        rows = hs.decode_screen((work / "ram700.bin").read_bytes(), shown)
+        bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
+        self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
 
 
 if __name__ == "__main__":

@@ -524,7 +524,40 @@ hero_step:
     cmpi.w #3, 6(%a1)
     blt.s 10f
     clr.w 6(%a1)
-10: movem.l (%sp)+, %d0-%d4/%a0-%a2
+10: .ifndef NO_PHYSICS
+    bsr.w hero_pose
+    .endif
+    movem.l (%sp)+, %d0-%d4/%a0-%a2
+    rts
+
+| Player_GetBodySpriteFrameOffset: the pose from his state. 3 in the air (jumping), 4 (the ROM's frame 7) climbing, else the walk frames 0, 1, 2, 1
+| by the movement tick (every 8 ticks the next) while he walks and 0 standing. a1 = hero_x. Clobbers d0-d2.
+hero_pose:
+    move.w 18(%a1), %d0
+    moveq #3, %d1
+    btst #0, %d0
+    bne.s 9f                                | jumping
+    moveq #4, %d1
+    move.w %d0, %d2
+    andi.w #0x18, %d2
+    cmpi.w #0x18, %d2
+    bne.s 1f
+    move.w (%a1), %d2
+    andi.w #15, %d2
+    beq.s 9f                                | square on a ladder and climbing
+    btst #2, %d0
+    beq.s 9f                                | (falling off the ladder is not climbing)
+1:  moveq #0, %d1
+    tst.w 14(%a1)
+    beq.s 9f                                | not walking
+    move.w 22(%a1), %d2
+    lsr.w #3, %d2
+    andi.w #3, %d2
+    move.w %d2, %d1
+    cmpi.w #3, %d1
+    bne.s 9f
+    moveq #1, %d1
+9:  move.w %d1, 6(%a1)
     rts
 
 | a1 = hero_x. $C0 when he starts walking, then 2 more a frame until $180.
@@ -871,8 +904,16 @@ draw_hero:
     movem.l %d0-%d7/%a0-%a3/%a5, -(%sp)
     lea hero_anim(%pc), %a5
     move.w hero_flip(%pc), %d0
-    add.w %d0, %d0
-    add.w hero_flip(%pc), %d0               | * 3
+    move.w hero_frame(%pc), %d1
+    cmpi.w #4, %d1
+    bne.s 1f
+    move.w hero_mtick(%pc), %d1             | climbing: the picture is mirrored every 16 ticks
+    lsr.w #4, %d1
+    andi.w #1, %d1
+    eor.w %d1, %d0
+1:  move.w %d0, %d1
+    lsl.w #2, %d0
+    add.w %d1, %d0                          | * 5 (five poses: walk 0-2, in the air, climbing)
     add.w hero_frame(%pc), %d0              | the pose
     add.w %d0, %d0
     move.w (%a5,%d0.w), %d0
