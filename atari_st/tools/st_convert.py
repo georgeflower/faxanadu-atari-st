@@ -238,7 +238,7 @@ class Hero:
     left: bool = True        # the flip bit ($40 in Player_Flags, tiles mirrored): set when he faces RIGHT (the tiles are drawn facing left)
 
     def sprites(self, rom: fr.Rom) -> list[fs.Sprite]:
-        return fs.hero_sprites(rom, self.x, self.y, self.armor, self.shield, self.weapon, self.frame, self.left)
+        return fs.hero_sprites(rom, self.x, self.y, self.armor, self.shield, self.weapon, self.frame, self.left, attacking_frame=2 if self.frame == 6 else -1)
 
 
 def sprite_palettes(rom: fr.Rom, palette_index: int) -> list[list[int]]:
@@ -292,14 +292,13 @@ def hero_assets(rom: fr.Rom, hero: Hero, palette_index: int, plan: PalettePlan, 
 ANIM_BASE = 128             # the pose lists are made with the hero here, so that no sprite coordinate wraps at 8 bits
 
 
-POSE_FRAMES = (0, 1, 2, 3, 7)      # the ROM's body frames the ST has poses for
+POSE_FRAMES = tuple(range(8))      # the ROM's body frames: 0-2 walking, 3 in the air, 4-6 attacking, 7 climbing
 
 
 def hero_anim_assets(rom: fr.Rom, hero: Hero, palette_index: int, plan: PalettePlan) -> tuple[bytes, bytes]:
-    """(poses, images) for the hero: ten poses, pose = slot + 5 * flip bit, with the equipment of `hero`. The slots are the walk frames 0-2, the
-    frame in the air (3) and the climbing frame (the ROM's 7).
+    """(poses, images) for the hero: sixteen poses, pose = the ROM's body frame (0-7) + 8 * flip bit, with the equipment of `hero`.
 
-    poses is a table of ten words (the offset of each pose record from the start of the table), then the records: the box the pose
+    poses is a table of sixteen words (the offset of each pose record from the start of the table), then the records: the box the pose
     covers as four signed words (x0, x1 exclusive, y0, y1 exclusive) and the sprites as (x, line, image) words, ended by -1. All
     x is relative to the hero's NES x (the ST screen's left margin is in it), y to his NES y (the one-line shift of the sprites is in
     it); the line on the screen is that y minus the camera. images are shared by the poses."""

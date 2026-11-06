@@ -378,7 +378,7 @@ restore_rect:
 | x in 8.8 fixed point (hero_x and hero_frac), an acceleration (hero_acc) that starts at $C0 when he starts walking and grows by 2 a frame
 | to $180 (rank group 0; 4, 6, 8 for the higher ranks: not here yet), a wall stops him on a block edge. Up and down are still the demo's.
 | Fields at hero_x: x 0, y 2, flip 4, frame 6, tick 8, frac 10, acc 12, moving 14, jump 16, air 18 (the ROM's Player_Flags bits: 1 jumping,
-| 2 holding to climb, 4 falling, 8 can climb, $10 climbing), climb 20, mtick 22.
+| 2 holding to climb, 4 falling, 8 can climb, $10 climbing), climb 20, mtick 22, atk 24, atk timer 26, atk phase 28.
 hero_step:
     movem.l %d0-%d4/%a0-%a2, -(%sp)
     lea input_state(%pc), %a0
@@ -393,6 +393,9 @@ hero_step:
     bne.s 50f
     btst #2, %d0
     bne.s 50f
+    .endif
+    .ifndef NO_PHYSICS
+    bsr.w hero_attack
     .endif
     bsr.w hero_vertical
     bra.s 51f
@@ -413,6 +416,8 @@ hero_step:
 52: move.w 18(%a1), %d1                     | on the ground: walking counts the movement tick; up or down beside a ladder steps him to it
     andi.w #5, %d1
     bne.s 54f
+    btst #7, 19(%a1)                        | attacking on the ground: he stands still
+    bne.s 55f
     move.w %d0, %d1
     andi.w #3, %d1
     beq.s 53f
@@ -534,20 +539,25 @@ hero_step:
 | by the movement tick (every 8 ticks the next) while he walks and 0 standing. a1 = hero_x. Clobbers d0-d2.
 hero_pose:
     move.w 18(%a1), %d0
-    moveq #3, %d1
     btst #0, %d0
-    bne.s 9f                                | jumping
-    moveq #4, %d1
-    move.w %d0, %d2
+    beq.s 2f
+    moveq #3, %d1                           | jumping: the frame in the air, or the attack frame
+    btst #7, %d0
+    beq.s 9f
+    bra.s 3f
+2:  move.w %d0, %d2
     andi.w #0x18, %d2
     cmpi.w #0x18, %d2
     bne.s 1f
+    moveq #7, %d1
     move.w (%a1), %d2
     andi.w #15, %d2
     beq.s 9f                                | square on a ladder and climbing
     btst #2, %d0
     beq.s 9f                                | (falling off the ladder is not climbing)
-1:  moveq #0, %d1
+1:  btst #7, %d0
+    bne.s 3f
+    moveq #0, %d1
     tst.w 14(%a1)
     beq.s 9f                                | not walking
     move.w 22(%a1), %d2
@@ -557,8 +567,50 @@ hero_pose:
     cmpi.w #3, %d1
     bne.s 9f
     moveq #1, %d1
+    bra.s 9f
+3:  move.w 28(%a1), %d1                     | attacking: frame 4, 5 or 6 by the attack phase
+    addq.w #4, %d1
 9:  move.w %d1, 6(%a1)
     rts
+
+| Player_CheckHandleAttack: B pressed (not held) starts an attack of 8 + 3 + 8 frames (PLAYER_ATTACK_ANIMATION_PHASES) unless he climbs.
+| air bit $80 = attacking; fields: 24 B was down last frame (Player_StatusFlag bit 0), 26 phase timer, 28 phase. a1 = hero_x. Clobbers d0-d1, a0, a2.
+hero_attack:
+    btst #7, 19(%a1)
+    bne.s 5f                                | already attacking
+    btst #4, 19(%a1)                        | climbing: no attack
+    beq.s 1f
+    move.w (%a1), %d0
+    andi.w #15, %d0
+    beq.s 8f
+    btst #2, 19(%a1)
+    beq.s 8f
+1:  lea input_state(%pc), %a0
+    btst #6, IN_PAD_NEW(%a0)                | B pressed just now?
+    beq.s 8f
+    tst.w 24(%a1)
+    bne.s 9f
+    ori.w #0x80, 18(%a1)
+    move.w #1, 24(%a1)
+    clr.w 26(%a1)
+    clr.w 28(%a1)
+5:  addq.w #1, 26(%a1)
+    move.w 28(%a1), %d0
+    lea attack_phases(%pc), %a2
+    moveq #0, %d1
+    move.b (%a2,%d0.w), %d1
+    cmp.w 26(%a1), %d1
+    bhi.s 9f                                | the phase goes on
+    clr.w 26(%a1)
+    addq.w #1, %d0
+    cmpi.w #3, %d0
+    bcc.s 6f
+    move.w %d0, 28(%a1)
+    rts
+6:  andi.w #0xFF7F, 18(%a1)                 | done
+    rts
+8:  clr.w 24(%a1)
+9:  rts
 
 | a1 = hero_x. $C0 when he starts walking, then 2 more a frame until $180.
 hero_accelerate:
@@ -905,15 +957,13 @@ draw_hero:
     lea hero_anim(%pc), %a5
     move.w hero_flip(%pc), %d0
     move.w hero_frame(%pc), %d1
-    cmpi.w #4, %d1
+    cmpi.w #7, %d1
     bne.s 1f
     move.w hero_mtick(%pc), %d1             | climbing: the picture is mirrored every 16 ticks
     lsr.w #4, %d1
     andi.w #1, %d1
     eor.w %d1, %d0
-1:  move.w %d0, %d1
-    lsl.w #2, %d0
-    add.w %d1, %d0                          | * 5 (five poses: walk 0-2, in the air, climbing)
+1:  lsl.w #3, %d0                           | * 8: a pose for each of the ROM's body frames, both ways round
     add.w hero_frame(%pc), %d0              | the pose
     add.w %d0, %d0
     move.w (%a5,%d0.w), %d0
@@ -1545,7 +1595,15 @@ hero_air:
 hero_climb:
     .word 0                                 | Player_ClimbFlySpeedModifier: the fractions of a pixel the climbing adds up
 hero_mtick:
-    .word 0                                 | Player_MovementTick (walking, climbing; the animation will use it)
+    .word 0                                 | Player_MovementTick (walking, climbing; the animation uses it)
+hero_atk:
+    .word 0                                 | Player_StatusFlag bit 0: B was down at the last look
+hero_atk_timer:
+    .word 0                                 | Player_AttackPhaseTimer
+hero_atk_phase:
+    .word 0                                 | Player_AttackPhaseAnimFrame
+attack_phases:
+    .byte 8, 3, 8, 0                        | PLAYER_ATTACK_ANIMATION_PHASES: thrust out, wait, withdraw
 vscroll_req:
     .word 0                                 | 2 or 3: scroll_check is to scroll to the screen above or below
 jump_curve:

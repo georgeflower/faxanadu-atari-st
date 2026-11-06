@@ -412,7 +412,7 @@ class ViewerTests(unittest.TestCase):
         # hanging on the ladder after the climb: the climbing pose (the ROM's frame 7), mirrored every 16 movement ticks
         import re
         import st_convert as sc
-        self.assertEqual(word(700, "hero_frame"), 4)
+        self.assertEqual(word(700, "hero_frame"), 7)
         m = re.findall(r"^00FF8200: ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2})", log, re.M)[-1]
         shown = (int(m[1], 16) << 16) | (int(m[3], 16) << 8)
         flip = word(700, "hero_flip") ^ ((word(700, "hero_mtick") >> 4) & 1)
@@ -421,6 +421,53 @@ class ViewerTests(unittest.TestCase):
         rows = hs.decode_screen((work / "ram700.bin").read_bytes(), shown)
         bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
+
+    def test_the_sword_is_swung_in_three_phases(self) -> None:
+        """B (Alternate, poked into the key table) held from VBL 600: the attack frames 4, 5 and 6 follow one another (8, 3 and 8 frames) and the
+        picture in each is the converter's, with the sword; afterwards he stands again."""
+        import re
+        import faxanadu_rom as fr
+        import hatari_shot as hs
+        import st_convert as sc
+
+        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=0", "SCREEN=1", "CAMERA=40", "HERO=144,144,0,255,0,0,1"], check=True, capture_output=True)
+        nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
+        sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
+        image = (ROOT / "build" / "viewer.bin").read_bytes()
+        work = ROOT / "build" / "shots_attack"
+        work.mkdir(parents=True, exist_ok=True)
+        prg = ROOT / "build" / "VIEWER.PRG"
+        hatari = shutil.which("hatari")
+        (work / "c0.ini").write_text(f"savebin {work / 'ram0.bin'} 0 $80000\ncont\n", encoding="utf-8")
+        hs.run_hatari(hatari, TOS, prg, work, 500, "0", f"b VBL > 499 :once :file {work / 'c0.ini'}\n", None)
+        base = (work / "ram0.bin").read_bytes().find(image[sym["start"]:sym["start"] + 48]) - sym["start"]
+        self.assertGreater(base, 0)
+        key = base + sym["input_state"] + 264 + 0x38
+        (work / "press.ini").write_text(f"memwrite ${key:x} 0x01\ncont\n", encoding="utf-8")
+        (work / "release.ini").write_text(f"memwrite ${key:x} 0x00\ncont\n", encoding="utf-8")
+        script = f"b VBL > 599 :once :file {work / 'press.ini'}\nb VBL > 640 :once :file {work / 'release.ini'}\n"
+        moments = (604, 609, 614, 626, 700)
+        for v in moments:
+            (work / f"cap{v}.ini").write_text(f"savebin {work / f'ram{v}.bin'} 0 $80000\nm $ff8200-$ff8260\ncont\n", encoding="utf-8")
+            script += f"b VBL > {v} :once :file {work / f'cap{v}.ini'}\n"
+        log = hs.run_hatari(hatari, TOS, prg, work, 701, "0", script, None)
+        shots = re.findall(r"^00FF8200: ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2})", log, re.M)
+        rom = fr.Rom(ROM)
+        frames = []
+        for v, m in zip(moments, shots[-len(moments):]):
+            ram = (work / f"ram{v}.bin").read_bytes()
+            word = lambda name: int.from_bytes(ram[base + sym[name]:base + sym[name] + 2], "big", signed=True)
+            frames.append(word("hero_frame"))
+            shown = (int(m[1], 16) << 16) | (int(m[3], 16) << 8)
+            expected = sc.expected_screen(rom, 0, 1, 40, state=dict(hp=16, mp=0, experience=0, gold=0, seconds=0),
+                                          hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 0, word("hero_frame"), bool(word("hero_flip"))))
+            rows = hs.decode_screen(ram, shown)
+            bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
+            self.assertEqual(bad[:5], [], f"VBL {v}, frame {frames[-1]}: {len(bad)} pixels differ")
+        self.assertEqual(frames[0], 4, frames)
+        self.assertIn(5, frames, frames)
+        self.assertIn(6, frames, frames)
+        self.assertEqual(frames[-1], 0, frames)
 
 
 if __name__ == "__main__":
