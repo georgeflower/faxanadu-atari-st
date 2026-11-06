@@ -89,6 +89,7 @@ HUD2 ?=
 VIEWER_DEFS ?=
 # ALL=1: every screen of the area (scrolling and doors anywhere in it), not only those around SCREEN
 ALL ?=
+WORLD ?=
 ROM_FILE ?= ../ext/Faxanadu_Europe.nes
 GENERATED := $(BUILD_DIR)/generated
 VIEWER_PRG := $(BUILD_DIR)/VIEWER.PRG
@@ -101,7 +102,7 @@ viewer:
 	@mkdir -p $(BUILD_DIR)
 	$(PYTHON) $(TOOLS_DIR)/build_sound.py --record --out $(GENERATED)/sound.bin
 	rm -f $(GENERATED)/*.DAT
-	$(PYTHON) $(TOOLS_DIR)/build_assets.py --rom $(ROM_FILE) --area $(AREA) --screen $(SCREEN) --camera $(CAMERA) $(if $(ALL),--all) --hero $(HERO) --hud $(HUD) --hud2 '$(HUD2)' --out $(GENERATED)
+	$(PYTHON) $(TOOLS_DIR)/build_assets.py --rom $(ROM_FILE) --area $(AREA) --screen $(SCREEN) --camera $(CAMERA) $(if $(ALL),--all) $(if $(WORLD),--world $(WORLD)) --hero $(HERO) --hud $(HUD) --hud2 '$(HUD2)' --out $(GENERATED)
 	$(AS) -m68000 -I $(GENERATED) -I $(SRC_DIR) $(VIEWER_DEFS) -al=$(BUILD_DIR)/viewer.lst -o $(BUILD_DIR)/viewer.o $(SRC_DIR)/viewer.s
 	$(LD) $(LDFLAGS) -o $(BUILD_DIR)/viewer.elf $(BUILD_DIR)/viewer.o
 	$(PYTHON) $(TOOLS_DIR)/check_reach.py --nm $(NM) --text-base start --listing $(BUILD_DIR)/viewer.lst $(BUILD_DIR)/viewer.elf $(SRC_DIR)/viewer.s

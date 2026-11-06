@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Make the ST data of one Faxanadu screen from your ROM, for the viewer (src/viewer.s).
 
-    build_assets.py [--rom ext/Faxanadu_Europe.nes] [--area 0] [--screen 1] [--camera 40] [--out build/generated]
+    build_assets.py [--rom ext/Faxanadu_Europe.nes] [--area 0] [--screen 1] [--camera 40] [--world 0,1] [--out build/generated]
 
 Writes hero_list.bin and hero_images.bin (the hero's sprites for the ST), hud_tiles.bin (the 60 HUD tiles, 32 bytes each) and hud_layout.bin (its 4 rows of 32 tile ids, as at the start of a game),
 palette.bin (16 ST colour words), blocks.bin (the 128-byte block images the screen uses), block_index.bin (1024 words:
@@ -11,6 +11,7 @@ image number of (block id * 4 + corner), $FFFF for none), screen.bin (the screen
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sys
 from pathlib import Path
 
@@ -23,54 +24,81 @@ import st_convert as sc  # noqa: E402
 
 
 DOOR_BYTES = 8
+EDGE_BYTES = 5
 DOOR_SAME, DOOR_PALETTE, DOOR_BUILDING, DOOR_OUTSIDE = 0, 1, 2, 3
+BUILDING_AREA = 4
 
 
-def door_table(rom: fr.Rom, a: fm.Area, ids: list[int], palette_index: int | None = None) -> bytes:
+def door_table(rom: fr.Rom, a: fm.Area, ids: list[int], palette_index: int, world: dict[int, list[int]]) -> tuple[bytes, list[tuple]]:
     """The doors on the screens in `ids`, 8 bytes each: screen (its number in the tables), block (row * 16 + column), kind, the screen it
-    leads to (its number in the tables, or the ROM's for another area), where the hero stands there (Y/16 << 4 | X/16), the destination's palette,
-    the key it needs (`Game_RunDoorRequirementHandler`'s number), a pad. Kinds (`Player_CheckHandleEnterDoor`): 0 another screen of this area in
-    the area's palette, 1 the same with another palette, 2 a building (the destination index is 32 or more; area 3's are all), 3 back outside
-    (index $FE or $FF). Kind 0 or 1 is relative to `palette_index`, the palette set in use (the area's own by default). A door whose destination
-    screen is not in `ids` is left out."""
-    palette_index = a.palette_index if palette_index is None else palette_index
-    out = bytearray()
+    leads to (its number in the tables of the area it leads to), where the hero stands there (Y/16 << 4 | X/16), the palette set there, the key
+    it needs (`Game_RunDoorRequirementHandler`'s number), the area it leads to (for a building: its number, the screen being the building's
+    own). Kinds (`Player_CheckHandleEnterDoor`): 0 another screen of this area in this palette set, 1 the same with another palette set, 2 into
+    a building (destination index $20 or more; all of area 3's; the layout is the building's number, which is also the screen in the
+    building area; palette, tiles and start position come from the BUILDING_ tables), 3 out to another area (index $FE and $FF: the region
+    and screen from the transition tables, the area's own palette). `world` says which areas (and their screens) have data: a door
+    to anywhere else is left out. Also returns what the doors lead to, as (area, palette[, building])."""
+    out, targets = bytearray(), []
+    region = fm.area_region(rom, a.index)
     for d in fm.doors(rom, a):
         if d.screen not in ids:
             continue
+        source = ids.index(d.screen)
         if d.destination >= 0xFE:
-            out += bytes([ids.index(d.screen), d.block, DOOR_OUTSIDE, 0xFF, d.start, 0xFF, 0, 0])
+            if region is None:
+                continue
+            key, new_region, screen = fm.outside(rom, region, d.destination & 1)
+            dest = fm.region_area(rom, new_region)
+            if dest not in world or screen not in world[dest]:
+                continue
+            palette = fm.area(rom, dest).palette_index
+            out += bytes([source, d.block, DOOR_OUTSIDE, world[dest].index(screen), d.start, palette, key, dest])
+            targets.append((dest, palette))
             continue
+        screen, second, key, _ = fm.door_destination(rom, a, d)
         if d.destination >= 0x20 or a.index == 3:
-            building = d.destination
-            out += bytes([ids.index(d.screen), d.block, DOOR_BUILDING, building & 0xFF, d.start, 0xFF, 0, 0])
+            info = fm.building(rom, second)
+            out += bytes([source, d.block, DOOR_BUILDING, 0, info["start"], info["palette"], key, second])
+            targets.append((BUILDING_AREA, info["palette"], second))
             continue
-        screen, palette, key, _ = fm.door_destination(rom, a, d)
         if screen not in ids:
             continue
-        kind = DOOR_SAME if palette == palette_index else DOOR_PALETTE
-        out += bytes([ids.index(d.screen), d.block, kind, ids.index(screen), d.start, palette, key, 0])
-    return bytes(out)
+        kind = DOOR_SAME if second == palette_index else DOOR_PALETTE
+        out += bytes([source, d.block, kind, ids.index(screen), d.start, second, key, a.index])
+        targets.append((a.index, second))
+    return bytes(out), targets
 
 
-PACKAGE_PARTS = ("palette", "screens", "neighbours", "blocking", "ladders", "doors", "block_index", "blocks", "hud_tiles", "hud_partial",
+def edge_table(rom: fr.Rom, a: fm.Area, ids: list[int], world: dict[int, list[int]]) -> tuple[bytes, list[tuple]]:
+    """Walking off a side of a screen that has no neighbour (`fm.edges`): screen, new area, new screen, start position, palette set; only those
+    that lead to an area in `world`."""
+    out, targets = bytearray(), []
+    for screen, dest, dest_screen, start, palette in fm.edges(rom, a.index):
+        if screen in ids and dest in world and dest_screen in world[dest]:
+            out += bytes([ids.index(screen), dest, world[dest].index(dest_screen), start, palette])
+            targets.append((dest, palette))
+    return bytes(out), targets
+
+
+PACKAGE_PARTS = ("palette", "screens", "neighbours", "blocking", "ladders", "doors", "edges", "block_index", "blocks", "hud_tiles", "hud_partial",
                  "hero_list", "hero_images", "hero_anim", "hero_anim_images")
+HEADER_WORDS = ("door_count", "screen_count", "edge_count", "music")
 
 
 def package_name(area: int, palette: int) -> str:
     return f"A{area}P{palette:02d}.DAT"
 
 
-def make_package(parts: dict[str, bytes], door_count: int, screen_count: int) -> bytes:
-    """An area's data in one palette set as one block: a long offset from its start for each of PACKAGE_PARTS, the number of doors and of
-    screens (words), then the parts, each on a multiple of 4."""
-    head = 4 * len(PACKAGE_PARTS) + 4
+def make_package(parts: dict[str, bytes], counts: dict[str, int]) -> bytes:
+    """An area's data in one palette set as one block: a long offset from its start for each of PACKAGE_PARTS, the HEADER_WORDS (the numbers
+    of doors, screens and edges, and the music to play), then the parts, each on a multiple of 4."""
+    head = 4 * len(PACKAGE_PARTS) + 2 * len(HEADER_WORDS)
     offsets, body = [], bytearray()
     for name in PACKAGE_PARTS:
         offsets.append(head + len(body))
         body += parts[name]
         body += b"\0" * (-len(body) % 4)
-    return b"".join(o.to_bytes(4, "big") for o in offsets) + door_count.to_bytes(2, "big") + screen_count.to_bytes(2, "big") + bytes(body)
+    return (b"".join(o.to_bytes(4, "big") for o in offsets) + b"".join(counts[n].to_bytes(2, "big") for n in HEADER_WORDS) + bytes(body))
 
 
 def main() -> int:
@@ -82,7 +110,10 @@ def main() -> int:
     parser.add_argument("--hero", default="144,144,0,255,0,0,1",
                         help="the hero: x,y,armour,shield,weapon,frame,faces-left (default: where he stands after the castle door, start equipment)")
     parser.add_argument("--reach", type=int, default=2, help="screens within this many steps of --screen are included (the viewer can scroll between them)")
-    parser.add_argument("--all", action="store_true", help="every screen of the area (their numbers in the tables are the ROM's)")
+    parser.add_argument("--all", action="store_true", help="every screen of the start area (their numbers in the tables are the ROM's)")
+    parser.add_argument("--world", default="", help="more areas, comma separated (whole, ROM screen numbers): the doors and edges that lead there "
+                        "work, and so do those into buildings (their packages are small). The other areas' packages are written when the start area "
+                        "leads to them.")
     parser.add_argument("--hud", default="16,0,0,0,0", help="the HUD first drawn: power,magic,experience,gold,seconds")
     parser.add_argument("--hud2", default="", help="a second HUD state drawn over the first (default: the same)")
     parser.add_argument("--out", type=Path, default=Path(__file__).resolve().parents[1] / "build" / "generated")
@@ -106,50 +137,63 @@ def main() -> int:
                     ids.append(n)
                     step.append(n)
         frontier = step
-    blocks = b"".join(fm.decode_screen(rom, a, sid)[:fm.SCREEN_ROWS * fm.SCREEN_COLS] for sid in ids)
-    around = bytearray()
-    for sid in ids:
-        around += bytes(ids.index(n) if n in ids else 0xFF for n in fm.neighbours(rom, a, sid))
+    world = {args.area: ids}
+    for extra in (int(v) for v in args.world.split(",") if v.strip()):
+        if extra != args.area:
+            world[extra] = list(range(fm.screen_count(rom, fm.area(rom, extra))))
     args.out.mkdir(parents=True, exist_ok=True)
-    props = fm.block_properties(rom, a)
     keys = ("hp", "mp", "experience", "gold", "seconds")
     start = dict(zip(keys, (int(v) for v in args.hud.split(","))))
     second = dict(zip(keys, (int(v) for v in args.hud2.split(",")))) if args.hud2 else start
     (args.out / "hud_states.bin").write_bytes(sc.hud_state_bytes(start) + sc.hud_state_bytes(second))
     hero = sc.Hero(*[bool(v) if i == 6 else v for i, v in enumerate(int(t) for t in args.hero.split(","))])
 
-    def package(pal_index: int) -> tuple[bytes, int, bytes]:
-        """The data of this area in this palette set (everything that depends on the colours), as the file the viewer loads."""
-        doors = door_table(rom, a, ids, pal_index)
-        plan, table, images = sc.build_area_blocks(rom, args.area, palette_index=pal_index, screens=ids)
-        hero_list, hero_images = sc.hero_assets(rom, hero, pal_index, plan, args.camera)
-        anim, anim_images = sc.hero_anim_assets(rom, hero, pal_index, plan)
+    def package(area: int, pal_index: int, building: int | None = None) -> tuple[bytes, list[tuple], int]:
+        """The data of an area in a palette set (everything that depends on the colours), as the file the viewer loads: (file, what its doors and
+        edges lead to, number of block images). A building's package holds only its own screen, the hero without a weapon."""
+        ar = fm.area(rom, area)
+        if building is None:
+            screens, tiles_index, who, music = world[area], None, hero, fm.music_for(rom, area, pal_index)
+            doors, door_targets = door_table(rom, ar, screens, pal_index, world)
+            edges, edge_targets = edge_table(rom, ar, screens, world)
+        else:
+            info = fm.building(rom, building)
+            screens, tiles_index, who, music = [building], info["tiles"], dataclasses.replace(hero, weapon=255), info["music"]
+            doors, door_targets, edges, edge_targets = b"", [], b"", []
+        blocks = b"".join(fm.decode_screen(rom, ar, sid)[:fm.SCREEN_ROWS * fm.SCREEN_COLS] for sid in screens)
+        around = bytearray()
+        for sid in screens:
+            around += bytes(screens.index(n) if n in screens else 0xFF for n in fm.neighbours(rom, ar, sid))
+        props = fm.block_properties(rom, ar)
+        plan, table, images = sc.build_area_blocks(rom, area, palette_index=pal_index, screens=screens, tiles_index=tiles_index)
+        hero_list, hero_images = sc.hero_assets(rom, who, pal_index, plan, args.camera)
+        anim, anim_images = sc.hero_anim_assets(rom, who, pal_index, plan)
         parts = {
             "palette": plan.words(), "screens": bytes(blocks), "neighbours": bytes(around),
             "blocking": bytes(hp.IMPASSABLE[props[b] & 15] for b in blocks),          # 1 a block he cannot walk through
             "ladders": bytes(hp.CLIMBABLE[props[b] & 15] for b in blocks),             # 1 a ladder
-            "doors": doors, "block_index": b"".join(v.to_bytes(2, "big") for v in table), "blocks": b"".join(images),
+            "doors": doors, "edges": edges, "block_index": b"".join(v.to_bytes(2, "big") for v in table), "blocks": b"".join(images),
             "hud_tiles": sc.hud_tile_images(rom, pal_index, plan, start["hp"], start["mp"]), "hud_partial": sc.hud_partial_images(rom, pal_index, plan),
             "hero_list": hero_list, "hero_images": hero_images, "hero_anim": anim, "hero_anim_images": anim_images,
         }
-        return make_package(parts, len(doors) // DOOR_BYTES, len(ids)), len(images), doors
+        counts = dict(door_count=len(doors) // DOOR_BYTES, screen_count=len(screens), edge_count=len(edges) // EDGE_BYTES, music=music)
+        return make_package(parts, counts), door_targets + edge_targets, len(images)
 
-    pal_index = a.palette_index
-    initial, n_images, first_doors = package(pal_index)
-    names = [package_name(args.area, pal_index)]
+    first = (args.area, a.palette_index)
+    initial, targets, n_images = package(*first)
+    names, biggest = [package_name(*first)], len(initial)
     (args.out / names[0]).write_bytes(initial)
-    biggest = len(initial)
-    if args.all:        # the palettes the area's doors lead to, and those their doors lead to
-        pending = [first_doors]
-        while pending:
-            doors = pending.pop()
-            for d in range(0, len(doors), DOOR_BYTES):
-                if doors[d + 2] == DOOR_PALETTE and package_name(args.area, doors[d + 5]) not in names:
-                    names.append(package_name(args.area, doors[d + 5]))
-                    data, _, more = package(doors[d + 5])
-                    (args.out / names[-1]).write_bytes(data)
-                    biggest = max(biggest, len(data))
-                    pending.append(more)
+    pending, seen = list(targets), {first}
+    while pending:                                   # every package the doors and edges lead to, and those they lead to
+        target = pending.pop()
+        if target[:2] in seen:
+            continue
+        seen.add(target[:2])
+        data, more, _ = package(*target)
+        names.append(package_name(*target[:2]))
+        (args.out / names[-1]).write_bytes(data)
+        biggest = max(biggest, len(data))
+        pending += more
     layout = gfx.hud_layout(start["hp"], start["mp"], start["experience"], start["gold"], start["seconds"])
     (args.out / "hud_layout.bin").write_bytes(bytes(t for row in layout for t in row))
     (args.out / "assets.inc").write_text(
@@ -157,10 +201,10 @@ def main() -> int:
         f"    .equ CAMERA, {args.camera}\n"
         f"    .equ START_SCREEN, {ids.index(args.screen)}\n"
         f"    .equ AREA_INDEX, {args.area}\n"
-        f"    .equ PACKAGE_MAX, {biggest}\n    .equ PACKAGE_PALETTE, {pal_index}\n"
+        f"    .equ PACKAGE_MAX, {biggest}\n    .equ PACKAGE_AREA, {args.area}\n    .equ PACKAGE_PALETTE, {first[1]}\n"
         + "".join(f"    .equ PKG_{n.upper()}, {4 * i}\n" for i, n in enumerate(PACKAGE_PARTS))
-        + f"    .equ PKG_DOOR_COUNT, {4 * len(PACKAGE_PARTS)}\n    .equ PKG_SCREEN_COUNT, {4 * len(PACKAGE_PARTS) + 2}\n    .equ PKG_SIZE, {4 * len(PACKAGE_PARTS) + 4}\n"
-        f"    .equ PACKAGE_NAME_AREA, {args.area}\n"
+        + "".join(f"    .equ PKG_{n.upper()}, {4 * len(PACKAGE_PARTS) + 2 * i}\n" for i, n in enumerate(HEADER_WORDS))
+        + f"    .equ PKG_SIZE, {4 * len(PACKAGE_PARTS) + 2 * len(HEADER_WORDS)}\n"
         f"    .equ HERO_X, {hero.x}\n    .equ HERO_Y, {hero.y}\n    .equ HERO_FLIP, {int(hero.left)}\n    .equ HERO_FRAME, {hero.frame % 3}\n", encoding="ascii")
     print(f"area {args.area} screens {ids}: {n_images} block images ({n_images * sc.BLOCK_BYTES} bytes); packages {', '.join(names)} "
           f"(the biggest {biggest} bytes) -> {args.out}")

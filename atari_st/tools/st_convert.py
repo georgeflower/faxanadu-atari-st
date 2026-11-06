@@ -118,14 +118,15 @@ def used_block_corners(rom: fr.Rom, a: fm.Area, screens: list[int] | None = None
     return sorted(used)
 
 
-def build_area_blocks(rom: fr.Rom, area_index: int, palette_index: int | None = None, screens: list[int] | None = None):
+def build_area_blocks(rom: fr.Rom, area_index: int, palette_index: int | None = None, screens: list[int] | None = None,
+                      tiles_index: int | None = None):
     """(plan, image table, images): `images` is the list of 128-byte block images, `table[id * 4 + corner]` the number of the
     image or NO_IMAGE."""
     a = fm.area(rom, area_index)
     pal = a.palette_index if palette_index is None else palette_index
     bg, _ = palette_set(rom, pal)
     plan = plan_for_set(rom, pal)
-    tiles = rs.tileset(rom, a.tiles_index)
+    tiles = rs.tileset(rom, a.tiles_index if tiles_index is None else tiles_index)
     table = [NO_IMAGE] * 1024
     images: list[bytes] = []
     for block, corner in used_block_corners(rom, a, screens):
@@ -135,13 +136,13 @@ def build_area_blocks(rom: fr.Rom, area_index: int, palette_index: int | None = 
 
 
 def expected_window(rom: fr.Rom, area_index: int, screen: int, camera: int, lines: int, palette_index: int | None = None,
-                    screens: list[int] | None = None) -> list[list[int]]:
+                    screens: list[int] | None = None, tiles_index: int | None = None) -> list[list[int]]:
     """What the ST should show of a screen: `lines` lines of the 208-line playfield from line `camera`, 256 pixels wide, as slot numbers."""
     a = fm.area(rom, area_index)
     pal = a.palette_index if palette_index is None else palette_index
     bg, _ = palette_set(rom, pal)
     plan = plan_for_set(rom, pal)
-    tiles = rs.tileset(rom, a.tiles_index)
+    tiles = rs.tileset(rom, a.tiles_index if tiles_index is None else tiles_index)
     blocks = fm.decode_screen(rom, a, screen)
     rows = []
     for y in range(lines):
@@ -332,7 +333,7 @@ def hero_anim_assets(rom: fr.Rom, hero: Hero, palette_index: int, plan: PaletteP
 
 
 def expected_scroll_screen(rom: fr.Rom, area_index: int, from_screen: int, to_screen: int, offset: int, to_the_right: bool, camera: int,
-                           state: dict | None = None, hero: Hero | None = None) -> list[list[int]]:
+                           state: dict | None = None, hero: Hero | None = None, tiles_index: int | None = None) -> list[list[int]]:
     """The ST screen while the picture has moved `offset` pixels (0-256, a multiple of 16) from one screen to the one on its right or left:
     the HUD as it is, the playfield window cut out of the two screens side by side, the hero over it."""
     a = fm.area(rom, area_index)
@@ -354,7 +355,7 @@ def expected_scroll_screen(rom: fr.Rom, area_index: int, from_screen: int, to_sc
 
 
 def expected_vscroll_screen(rom: fr.Rom, area_index: int, from_screen: int, to_screen: int, going_down: bool, top: int, camera: int,
-                            state: dict | None = None, hero: Hero | None = None) -> list[list[int]]:
+                            state: dict | None = None, hero: Hero | None = None, tiles_index: int | None = None) -> list[list[int]]:
     """The ST screen while the picture scrolls up or down between two screens: the playfields one above the other (going up the new one
     on top), the window cut out of them from line `top` of the 416, the HUD as it is. `camera` is the new screen's camera (the hero is
     drawn with it)."""
@@ -376,14 +377,14 @@ def expected_vscroll_screen(rom: fr.Rom, area_index: int, from_screen: int, to_s
 
 
 def expected_screen(rom: fr.Rom, area_index: int, screen: int, camera: int, palette_index: int | None = None,
-                    state: dict | None = None, hero: Hero | None = None) -> list[list[int]]:
+                    state: dict | None = None, hero: Hero | None = None, tiles_index: int | None = None) -> list[list[int]]:
     """The whole 320x200 ST screen as slot numbers: the HUD in lines 0-31, then the playfield window of 168 lines, both 256 wide
     and 32 pixels from the left."""
     a = fm.area(rom, area_index)
     pal = a.palette_index if palette_index is None else palette_index
     plan = plan_for_set(rom, pal)
     hud = hud_pixels(rom, pal, plan, state)
-    window = expected_window(rom, area_index, screen, camera, 168, palette_index)
+    window = expected_window(rom, area_index, screen, camera, 168, palette_index, tiles_index=tiles_index)
     out = [[0] * 320 for _ in range(200)]
     for y in range(32):
         out[y][32:288] = hud[y]

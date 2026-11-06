@@ -146,5 +146,52 @@ def doors(rom: fr.Rom, a: Area) -> list[Door]:
 def door_destination(rom: fr.Rom, a: Area, door: Door) -> tuple[int, int, int, int]:
     """(screen, palette, key requirement, a fourth byte not read yet) for a door. In area 3 the index is 32 too high."""
     index = door.destination - (0x20 if a.index == 3 else 0)
-    o = a.door_destinations + 4 * index
+    o = a.door_destinations + ((4 * index) & 0xFF)      # the game's index register is 8 bits wide: $FE and $FF wrap to records 62 and 63
     return tuple(rom.prg(3)[o:o + 4])  # type: ignore[return-value]
+
+
+def edges(rom: fr.Rom, area_index: int) -> list[tuple[int, int, int, int, int]]:
+    """Leaving an area at the left or right edge of a screen with no neighbour (`Player_CheckSwitchScreen_SwitchAreaHoriz`): records of
+    five bytes (screen, new area, new screen, start position, palette), ended by $FF, one list a area (`AREA_TOWN_TRANSITIONS_DATA`).
+    Buildings (area 4) have none of their own: there the edge leads out of the building."""
+    table = rom.label("AREA_TOWN_TRANSITIONS_DATA").offset + 2 * area_index
+    pointer = rom.data[table] | (rom.data[table + 1] << 8)
+    b15 = rom.label("AREA_TOWN_TRANSITIONS_DATA")
+    o = b15.offset - b15.addr + pointer       # the fixed bank: CPU address to file offset
+    out = []
+    while rom.data[o] != 0xFF:
+        out.append(tuple(rom.data[o:o + 5]))
+        o += 5
+    return out
+
+
+def building(rom: fr.Rom, index: int) -> dict:
+    """What Player_EnterDoorToInside takes from the building tables: palette set, tileset, start position (Y/16 << 4 | X/16), music."""
+    return dict(palette=rom.byte("BUILDING_PALETTES", index), tiles=rom.byte("BUILDING_MAYBE_TILES_INDEXES", index),
+                start=rom.byte("BUILDING_START_POSITIONS", index), music=rom.byte("BUILDING_MUSIC", index))
+
+
+def outside(rom: fr.Rom, region: int, which: int) -> tuple[int, int, int]:
+    """A door to the outside ($FE is `which` 0, $FF 1) in a region: (key requirement, new region, new screen)."""
+    y = 2 * region + which
+    return rom.byte("DOOR_LOOKUP_REQUIREMENTS", y), rom.byte("MAYBE_REGION_TRANSITION_MAP", y), rom.byte("MAYBE_SCREEN_TRANSITION_MAP", y)
+
+
+# the area of each region (`DOOR_OUTSIDE_REGION_INDEXES`) and its default music (`AREA_TO_MUSIC_TABLE`); palettes that change the music
+# (`Palette_ARRAY_PRG15_MIRROR__e569`, `Music_ARRAY_PRG15_MIRROR__e570` in `Player_CheckHandleEnterDoor`)
+def region_area(rom: fr.Rom, region: int) -> int:
+    return rom.byte("DOOR_OUTSIDE_REGION_INDEXES", region)
+
+
+def area_region(rom: fr.Rom, area_index: int) -> int | None:
+    for r in range(6):
+        if region_area(rom, r) == area_index:
+            return r
+    return None
+
+
+def music_for(rom: fr.Rom, area_index: int, palette: int) -> int:
+    for i in range(7):
+        if rom.byte("Palette_ARRAY_PRG15_MIRROR__e569", i) == palette:
+            return rom.byte("Music_ARRAY_PRG15_MIRROR__e570", i)
+    return rom.byte("AREA_TO_MUSIC_TABLE", area_index)

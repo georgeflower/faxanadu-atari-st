@@ -546,6 +546,104 @@ class ViewerTests(unittest.TestCase):
         bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
 
+    def run_scenario(self, make_args: list[str], pokes: list[tuple[int, str, int]], capture: int, name: str):
+        """Builds the viewer, runs it in Hatari and pokes the stick (`joy`, a byte: 1 up, 2 down, 4 left, 8 right) or the hero's x (`x`, a word) at
+        the given VBLs; returns (RAM at the capture VBL, a reader for words by symbol, the Hatari log)."""
+        import hatari_shot as hs
+
+        subprocess.run(["make", "-C", str(ROOT), "viewer", *make_args], check=True, capture_output=True)
+        nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
+        sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
+        image = (ROOT / "build" / "viewer.bin").read_bytes()
+        work = ROOT / "build" / name
+        work.mkdir(parents=True, exist_ok=True)
+        prg = ROOT / "build" / "VIEWER.PRG"
+        hatari = shutil.which("hatari")
+        (work / "c0.ini").write_text(f"savebin {work / 'ram0.bin'} 0 $80000\ncont\n", encoding="utf-8")
+        hs.run_hatari(hatari, TOS, prg, work, 500, "0", f"b VBL > 499 :once :file {work / 'c0.ini'}\n", None)
+        base = (work / "ram0.bin").read_bytes().find(image[sym["start"]:sym["start"] + 48]) - sym["start"]
+        self.assertGreater(base, 0)
+        script = ""
+        for i, (vbl, what, value) in enumerate(pokes):
+            if what == "joy":
+                text = f"memwrite ${base + sym['input_state'] + 259:x} 0x{value:02x}\ncont\n"
+            else:
+                text = f"memwrite ${base + sym['hero_x']:x} 0x{value >> 8:02x} 0x{value & 255:02x}\ncont\n"
+            (work / f"poke{i}.ini").write_text(text, encoding="utf-8")
+            script += f"b VBL > {vbl} :once :file {work / f'poke{i}.ini'}\n"
+        (work / "cap.ini").write_text(f"savebin {work / 'ram1.bin'} 0 $80000\nm $ff8200-$ff8260\ncont\n", encoding="utf-8")
+        script += f"b VBL > {capture} :once :file {work / 'cap.ini'}\n"
+        log = hs.run_hatari(hatari, TOS, prg, work, capture + 1, "0", script, None)
+        ram = (work / "ram1.bin").read_bytes()
+        word = lambda name: int.from_bytes(ram[base + sym[name]:base + sym[name] + 2], "big", signed=True)
+        return ram, word, log
+
+    def assert_picture(self, rows, expected) -> None:
+        bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
+        self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
+
+    def test_up_at_a_building_door_goes_in_and_walking_off_the_side_comes_out(self) -> None:
+        """Eolis screen 1, the hero at the first door (x 48, block 147): a building (the ROM, in jsnes: area 4, screen 7's layout, palette 24,
+        tileset 7, hero at 224 and falling to 128 with no sword, facing left). Then he is put at x 240 and walks right off the side: he is back
+        in Eolis, at the block of the door (48,144) facing right, in Eolis's colours."""
+        import faxanadu_rom as fr
+        import hatari_shot as hs
+        import st_convert as sc
+
+        rom = fr.Rom(ROM)
+        args = ["ALL=1", "AREA=0", "SCREEN=1", "HERO=48,144,0,255,0,0,1", "WORLD=1"]
+        ram, word, log = self.run_scenario(args, [(599, "joy", 1), (602, "joy", 0)], 799, "shots_building")
+        self.assertEqual((word("cur_area"), word("cur_pal"), word("cur_screen")), (4, 24, 0))
+        self.assertEqual((word("hero_x"), word("hero_y"), word("hero_flip")), (224, 128, 0))
+        self.assertEqual(word("cur_music"), 15)                # BUILDING_MUSIC: the shop song
+        rows = hs.decode_screen(ram, hs.video_base(log))
+        self.assert_picture(rows, sc.expected_screen(rom, 4, 7, word("camera"), palette_index=24, tiles_index=7,
+                                                     hero=sc.Hero(224, 128, 0, 255, 255, 0, False)))
+        ram, word, log = self.run_scenario(args, [(599, "joy", 1), (602, "joy", 0), (699, "x", 240), (700, "joy", 8), (703, "joy", 0)], 899,
+                                           "shots_building_out")
+        self.assertEqual((word("cur_area"), word("cur_pal"), word("cur_screen")), (0, 0, 1))
+        self.assertEqual((word("hero_x"), word("hero_y"), word("hero_flip")), (48, 144, 1))
+        self.assertEqual(word("cur_music"), 7)                 # Eolis's song again
+        rows = hs.decode_screen(ram, hs.video_base(log))
+        self.assert_picture(rows, sc.expected_screen(rom, 0, 1, word("camera"), hero=sc.Hero(48, 144, 0, 255, 0, 0, True)))
+
+    def test_up_at_the_gate_of_eolis_leads_to_trunk(self) -> None:
+        """Eolis screen 8, the door at block 156 (a J key is needed: the viewer has all keys): the ROM (jsnes) puts him in Trunk screen 0 at
+        16,160 in Trunk's own palette."""
+        import faxanadu_rom as fr
+        import hatari_shot as hs
+        import st_convert as sc
+
+        rom = fr.Rom(ROM)
+        ram, word, log = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=8", "HERO=192,144,0,255,0,0,1", "WORLD=1"],
+                                           [(599, "joy", 1), (602, "joy", 0)], 799, "shots_outside")
+        self.assertEqual((word("cur_area"), word("cur_pal"), word("cur_screen")), (1, 6, 0))
+        self.assertEqual((word("hero_x"), word("hero_y")), (16, 160))
+        self.assertEqual(word("cur_music"), 3)                 # AREA_TO_MUSIC_TABLE: Trunk's song
+        rows = hs.decode_screen(ram, hs.video_base(log))
+        self.assert_picture(rows, sc.expected_screen(rom, 1, 0, word("camera"), hero=sc.Hero(16, 160, 0, 255, 0, 0, True)))
+
+    def test_walking_off_the_side_of_trunk_screen_7_leads_to_apolune(self) -> None:
+        """Trunk screen 7 has no screen to its right: the ROM's town table (AREA_TOWN_TRANSITIONS_DATA) sends him to area 3 (the towns) screen 0
+        at 32,144 in palette 27. (He is held at y 112 without physics, so that only the edge is tested.)"""
+        import faxanadu_rom as fr
+        import hatari_shot as hs
+        import st_convert as sc
+
+        rom = fr.Rom(ROM)
+        ram, word, log = self.run_scenario(["ALL=1", "AREA=1", "SCREEN=7", "HERO=240,112,0,255,0,0,1", "WORLD=3", "VIEWER_DEFS=--defsym NO_PHYSICS=1"],
+                                           [(599, "joy", 8), (602, "joy", 0)], 799, "shots_edge")
+        self.assertEqual((word("cur_area"), word("cur_pal"), word("cur_screen")), (3, 27, 0))
+        self.assertEqual((word("hero_x"), word("hero_y")), (32, 144))
+        rows = hs.decode_screen(ram, hs.video_base(log))
+        self.assert_picture(rows, sc.expected_screen(rom, 3, 0, word("camera"), hero=sc.Hero(32, 144, 0, 255, 0, 0, True)))
+
+    def test_a_door_that_needs_a_key_stays_shut_without_it(self) -> None:
+        """The gate of Eolis needs the J key (door requirement 4): with no keys (KEYS=0) Up does nothing."""
+        ram, word, log = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=8", "HERO=192,144,0,255,0,0,1", "WORLD=1", "VIEWER_DEFS=--defsym KEYS=0"],
+                                           [(599, "joy", 1), (602, "joy", 0)], 799, "shots_locked")
+        self.assertEqual((word("cur_area"), word("cur_screen")), (0, 8))
+
 
 if __name__ == "__main__":
     unittest.main()

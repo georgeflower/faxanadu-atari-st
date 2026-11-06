@@ -7,8 +7,9 @@
 
     .include "assets.inc"
 
-    .ifndef MUSIC
-    .equ MUSIC, 7                           | the song played: 0 none, 1-16 as the NES numbers them
+    | MUSIC=n plays song n (0 none, 1-16 as the NES numbers them) everywhere; without it every package plays its own (PKG_MUSIC).
+    .ifndef KEYS
+    .equ KEYS, 0x1FE                        | the keys and rings he has: bit n for door requirement n (there is no inventory yet; none is used up)
     .endif
 
     .equ PALETTE, 0xFF8240
@@ -25,6 +26,9 @@
     .equ HERO_X_MIN, 0                      | where he is at the left edge (he has walked off it): scrolls to the screen on the left
     .equ HERO_X_MAX, 241                    | and at the right edge
     .equ HERO_Y_MIN, 0                      | at the top of the playfield (the game's Player_PosY): scrolls to the screen above
+    .equ BUILDING_AREA, 4
+    .equ EDGE_BYTES, 5
+    .equ DOOR_BUILDING, 2                   | door kinds (build_assets.py): 0 same package, 1 other palette set, 2 into a building, 3 out to another area
     .equ HERO_Y_MAX, 192                    | and at the bottom ($C1 and more: the screen below; the demo stops at $C0)
     .equ CAMERA_UP, 56                      | the camera is 0 while the hero's y is below this (he is at the top)
     .equ CAMERA_DOWN, 120                   | and 40 while it is above this; in between it stays
@@ -112,7 +116,8 @@ start:
     moveq #15, %d1
 1:  move.w (%a2)+, (%a1)+
     dbra %d1, 1b
-    moveq #PACKAGE_PALETTE, %d0             | the first package is read from the disk like the others
+    moveq #PACKAGE_AREA, %d0                | the first package is read from the disk like the others
+    moveq #PACKAGE_PALETTE, %d1
     bsr.w load_package
     move.l pkg_result(%pc), %d0
     bpl.s 5f
@@ -191,8 +196,14 @@ start:
     lea game_start(%pc), %a0                | the songs are the last in the image (link.ld)
     adda.l #sound_start, %a0
     bsr.w sound_init
-    moveq #MUSIC, %d0                       | the area's song (7 is Eolis's); the F keys and the digit keys try the others (sound.s)
+    .ifdef MUSIC
+    moveq #MUSIC, %d0
+    .else
+    move.w pkg_ptr+PKG_MUSIC(%pc), %d0      | the area's song (7 is Eolis's); the F keys and the digit keys try the others (sound.s)
+    .endif
     bsr.w sound_play_music
+    lea cur_music(%pc), %a0
+    move.w %d0, (%a0)
     bsr.w frame_init
 12: bsr.w input_poll
     bsr.w sound_keys
@@ -1170,8 +1181,10 @@ scroll_check:
     movea.l pkg_ptr+PKG_NEIGHBOURS(%pc), %a0
     move.b (%a0,%d0.w), %d0                 | its number in the table, $FF for none
     cmpi.b #0xFF, %d0
-    beq.s 5f
-    andi.w #0xFF, %d0
+    bne.s 3f
+    bsr.w edge_leave                        | no neighbour: out of a building, or another area
+    bra.s 5f
+3:  andi.w #0xFF, %d0
     bsr.w do_scroll                         | d0 = the screen scrolled to, d1 = 1 right, 0 left
     bra.s 5f
 4:  .ifndef NO_PHYSICS
@@ -1569,21 +1582,29 @@ door_check:
 4:  lea DOOR_BYTES(%a1), %a1
     dbra %d0, 2b
     bra.s 9f
-5:  tst.b 6(%a1)                            | no key
-    bne.s 9f
-    moveq #0, %d0
-    move.b 3(%a1), %d0
+5:  moveq #0, %d2
+    move.b 6(%a1), %d2                      | the key he needs
+    beq.s 6f
+    move.w keys_owned(%pc), %d3
+    btst %d2, %d3
+    beq.w 9f                                | locked (the ROM runs an IScript with the message: not done)
+6:  moveq #0, %d0
+    move.b 3(%a1), %d0                      | the screen there
     moveq #0, %d1
-    move.b 4(%a1), %d1
-    move.b 2(%a1), %d2
-    beq.s 6f                                | kind 0: another screen of this package
-    cmpi.b #1, %d2
-    bne.s 9f                                | kinds 2 and 3 (buildings, outside) are not done
+    move.b 4(%a1), %d1                      | where he stands
     moveq #0, %d2
-    move.b 5(%a1), %d2                      | kind 1: the same area in another palette set, which is another package
-    bsr.w enter_package
+    move.b 7(%a1), %d2                      | the area there (for a building: its number)
+    moveq #0, %d3
+    move.b 5(%a1), %d3                      | the palette set there
+    move.b 2(%a1), %d4
+    beq.s 7f                                | kind 0: another screen of this package
+    cmpi.b #DOOR_BUILDING, %d4
+    beq.s 8f
+    bsr.w enter_world                       | kind 1 (same area, other palette set) and 3 (out to another area)
     bra.s 9f
-6:  bsr.w enter_screen
+7:  bsr.w enter_screen
+    bra.s 9f
+8:  bsr.w enter_building
 9:  movem.l (%sp)+, %d0-%d4/%a0-%a1
     rts
 
@@ -1646,19 +1667,20 @@ enter_screen:
     rts
 
 
-| d0 = the screen to go to, d1 = where the hero stands there, d2 = the palette set: the area's package for that palette is loaded from the
-| disk (A<area>P<palette>.DAT, the biggest thing the viewer waits for) and the screen is entered in it. The picture goes black first; the HUD
-| is drawn again, its tiles are in the colours of the package.
-enter_package:
-    movem.l %d0-%d2/%a0-%a2, -(%sp)
+| d0 = the screen to go to, d1 = where the hero stands there (Y/16 << 4 | X/16), d2 = the area, d3 = the palette set: the package of that area
+| and palette set is read from the disk (A<area>P<palette>.DAT, the biggest thing the viewer waits for; not when it is the one in use) and the
+| screen is entered in it. The picture goes black first; the HUD is drawn again, its tiles are in the colours of the new package.
+enter_world:
+    movem.l %d0-%d3/%a0-%a2, -(%sp)
     lea black_palette(%pc), %a0
     movea.l #PALETTE, %a1
     moveq #15, %d0
 1:  move.w (%a0)+, (%a1)+
     dbra %d0, 1b
-    move.l %d2, %d0
+    move.w %d2, %d0
+    move.w %d3, %d1
     bsr.w load_package
-    movem.l (%sp), %d0-%d2
+    movem.l (%sp), %d0-%d3
     lea hud_shown(%pc), %a0
     moveq #(3*128/4)-1, %d2
 2:  move.l #-1, (%a0)+
@@ -1666,18 +1688,96 @@ enter_package:
     lea hud_dirty(%pc), %a0
     move.b #1, (%a0)
     bsr.w enter_screen
-    movem.l (%sp)+, %d0-%d2/%a0-%a2
+    movem.l (%sp)+, %d0-%d3/%a0-%a2
     rts
 
 black_palette:
     .space 32
 
-| d0 = the palette set: loads A<area>P<d0>.DAT into pkg_buf and makes it the package in use. Silences the YM, and TOS's own VBL runs
-| while the disk is read (it switches the drive off again; ours would not).
+| d0 = the screen there (not used: a building is the only screen of its package), d1 = where he stands, d3 = the building's palette set. Remembers
+| the way back (Game_EnterBuilding: area, screen, palette set and the block he stood at) and goes in facing left; the sword is put away (the
+| building's package has the hero without one).
+enter_building:
+    movem.l %d0-%d3/%a0, -(%sp)
+    lea saved_area(%pc), %a0
+    move.w cur_area(%pc), (%a0)+
+    move.w cur_pal(%pc), (%a0)+
+    move.w cur_screen(%pc), (%a0)+
+    move.w hero_y(%pc), %d0
+    andi.w #0xF0, %d0
+    move.w hero_x(%pc), %d2
+    lsr.w #4, %d2
+    or.w %d2, %d0
+    move.w %d0, (%a0)                       | saved_pos
+    lea hero_flip(%pc), %a0
+    clr.w (%a0)
+    moveq #0, %d0
+    moveq #BUILDING_AREA, %d2
+    bsr.w enter_world
+    movem.l (%sp)+, %d0-%d3/%a0
+    rts
+
+| Walking off a side of a building: back out where he went in (Game_BeginExitBuilding), facing right.
+exit_building:
+    movem.l %d0-%d3/%a0, -(%sp)
+    lea saved_area(%pc), %a0
+    move.w (%a0)+, %d2
+    move.w (%a0)+, %d3
+    move.w (%a0)+, %d0
+    move.w (%a0), %d1
+    lea hero_flip(%pc), %a0
+    move.w #1, (%a0)
+    bsr.w enter_world
+    movem.l (%sp)+, %d0-%d3/%a0
+    rts
+
+| Off the side of a screen that has no neighbour: out of a building, or into another area where the ROM's table (AREA_TOWN_TRANSITIONS_DATA,
+| the package's edges) has one for this screen.
+edge_leave:
+    movem.l %d0-%d4/%a0, -(%sp)
+    move.w cur_area(%pc), %d0
+    cmpi.w #BUILDING_AREA, %d0
+    bne.s 1f
+    bsr.w exit_building
+    bra.s 9f
+1:  movea.l pkg_ptr+PKG_EDGES(%pc), %a0
+    move.w pkg_ptr+PKG_EDGE_COUNT(%pc), %d4
+    beq.s 9f
+    subq.w #1, %d4
+    move.w cur_screen(%pc), %d0
+2:  cmp.b (%a0), %d0
+    beq.s 3f
+    addq.l #EDGE_BYTES, %a0
+    dbra %d4, 2b
+    bra.s 9f
+3:  moveq #0, %d2
+    move.b 1(%a0), %d2                      | the area
+    moveq #0, %d0
+    move.b 2(%a0), %d0                      | the screen
+    moveq #0, %d1
+    move.b 3(%a0), %d1                      | where he stands
+    moveq #0, %d3
+    move.b 4(%a0), %d3                      | the palette set
+    bsr.w enter_world
+9:  movem.l (%sp)+, %d0-%d4/%a0
+    rts
+
+| d0.w = the area, d1.w = the palette set: loads A<area>P<palette>.DAT into pkg_buf and makes it the package in use (pkg_ptr), unless it is
+| the one in use. Silences the YM, and TOS's own VBL runs while the disk is read (it switches the drive off again; ours would not); then the
+| package's song is played if the frame loop is running.
 load_package:
     movem.l %d0-%d2/%a0-%a2, -(%sp)
+    cmp.w cur_area(%pc), %d0
+    bne.s 5f
+    cmp.w cur_pal(%pc), %d1
+    beq.w 10f
+5:  lea cur_area(%pc), %a0
+    move.w %d0, (%a0)+
+    move.w %d1, (%a0)
     lea pkg_name(%pc), %a0
-    move.b #'0'+PACKAGE_NAME_AREA, 1(%a0)
+    addi.b #'0', %d0
+    move.b %d0, 1(%a0)
+    move.w %d1, %d0
     ext.l %d0
     divu.w #10, %d0
     addi.b #'0', %d0
@@ -1723,6 +1823,14 @@ load_package:
     ori.w #0x0700, %sr
     move.l saved_vbl(%pc), VBL_VECTOR
     move.w (%sp)+, %sr
+    move.l old_vbl(%pc), %d2
+    beq.s 10f                               | the frame loop is not running yet: it plays the song itself
+    .ifndef MUSIC
+    move.w pkg_ptr+PKG_MUSIC(%pc), %d0
+    bsr.w sound_play_music
+    lea cur_music(%pc), %a0
+    move.w %d0, (%a0)
+    .endif
 10: movem.l (%sp)+, %d0-%d2/%a0-%a2
     rts
 
@@ -1736,7 +1844,8 @@ pkg_attach:
     add.l %a0, %d0
     move.l %d0, (%a1)+
     dbra %d1, 1b
-    move.l (%a2), (%a1)                     | the numbers of doors and screens
+    move.l (%a2)+, (%a1)+                   | the numbers of doors and screens
+    move.l (%a2), (%a1)                     | of edges, and the music
     movem.l (%sp)+, %d0-%d1/%a0-%a2
     rts
 
@@ -1766,6 +1875,22 @@ pkg_buf:
     .long 0
 pkg_result:
     .long 0
+cur_area:
+    .word -1                                | the package in use (-1: none yet)
+cur_pal:
+    .word -1
+cur_music:
+    .word 0
+saved_area:
+    .word 0                                 | the way back out of a building: area, palette set, screen, block (Y/16 << 4 | X/16)
+saved_pal:
+    .word 0
+saved_screen:
+    .word 0
+saved_pos:
+    .word 0
+keys_owned:
+    .word KEYS
 saved_vbl:
     .long 0
 pkg_name:
