@@ -80,8 +80,10 @@ def edge_table(rom: fr.Rom, a: fm.Area, ids: list[int], world: dict[int, list[in
     return bytes(out), targets
 
 
+# "blocking" and "ladders" hold no data: the program makes them (a flag a block position, in memory behind the package) from the screens and
+# "block_flags" (a byte a block id: 1 a block he cannot walk through, 2 a ladder) when it loads a package, which keeps the disk smaller.
 PACKAGE_PARTS = ("palette", "screens", "neighbours", "blocking", "ladders", "doors", "edges", "block_index", "blocks", "hud_tiles", "hud_partial",
-                 "hero_list", "hero_images", "hero_anim", "hero_anim_images", "hero_weapon", "magic_anim", "magic_images")
+                 "hero_list", "hero_images", "hero_anim", "hero_anim_images", "hero_weapon", "magic_anim", "magic_images", "block_flags")
 HEADER_WORDS = ("door_count", "screen_count", "edge_count", "music")
 
 
@@ -172,8 +174,8 @@ def main() -> int:
         magic, magic_images = sc.magic_anim_assets(rom, pal_index, plan)
         parts = {
             "palette": plan.words(), "screens": bytes(blocks), "neighbours": bytes(around),
-            "blocking": bytes(hp.IMPASSABLE[props[b] & 15] for b in blocks),          # 1 a block he cannot walk through
-            "ladders": bytes(hp.CLIMBABLE[props[b] & 15] for b in blocks),             # 1 a ladder
+            "blocking": b"", "ladders": b"",
+            "block_flags": bytes(hp.IMPASSABLE[props[b] & 15] | hp.CLIMBABLE[props[b] & 15] << 1 for b in range(256)),
             "doors": doors, "edges": edges, "block_index": b"".join(v.to_bytes(2, "big") for v in table), "blocks": b"".join(images),
             "hud_tiles": sc.hud_tile_images(rom, pal_index, plan, start["hp"], start["mp"]), "hud_partial": sc.hud_partial_images(rom, pal_index, plan),
             "hero_list": hero_list, "hero_images": hero_images, "hero_anim": anim, "hero_anim_images": anim_images,
@@ -185,6 +187,7 @@ def main() -> int:
     first = (args.area, a.palette_index)
     initial, targets, n_images = package(*first)
     names, biggest = [package_name(*first)], len(initial)
+    expand = 2 * 208 * int.from_bytes(initial[4 * len(PACKAGE_PARTS) + 2:4 * len(PACKAGE_PARTS) + 4], "big")
     (args.out / names[0]).write_bytes(initial)
     pending, seen = list(targets), {first}
     while pending:                                   # every package the doors and edges lead to, and those they lead to
@@ -196,6 +199,7 @@ def main() -> int:
         names.append(package_name(*target[:2]))
         (args.out / names[-1]).write_bytes(data)
         biggest = max(biggest, len(data))
+        expand = max(expand, 2 * 208 * int.from_bytes(data[4 * len(PACKAGE_PARTS) + 2:4 * len(PACKAGE_PARTS) + 4], "big"))
         pending += more
     layout = gfx.hud_layout(start["hp"], start["mp"], start["experience"], start["gold"], start["seconds"])
     (args.out / "hud_layout.bin").write_bytes(bytes(t for row in layout for t in row))
@@ -204,7 +208,7 @@ def main() -> int:
         f"    .equ CAMERA, {args.camera}\n"
         f"    .equ START_SCREEN, {ids.index(args.screen)}\n"
         f"    .equ AREA_INDEX, {args.area}\n"
-        f"    .equ PACKAGE_MAX, {biggest}\n    .equ PACKAGE_AREA, {args.area}\n    .equ PACKAGE_PALETTE, {first[1]}\n"
+        f"    .equ PACKAGE_MAX, {-(-biggest // 4) * 4}\n    .equ PACKAGE_EXPAND, {expand}\n    .equ PACKAGE_AREA, {args.area}\n    .equ PACKAGE_PALETTE, {first[1]}\n"
         + "".join(f"    .equ PKG_{n.upper()}, {4 * i}\n" for i, n in enumerate(PACKAGE_PARTS))
         + "".join(f"    .equ PKG_{n.upper()}, {4 * len(PACKAGE_PARTS) + 2 * i}\n" for i, n in enumerate(HEADER_WORDS))
         + f"    .equ PKG_SIZE, {4 * len(PACKAGE_PARTS) + 2 * len(HEADER_WORDS)}\n"

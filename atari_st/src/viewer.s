@@ -74,7 +74,7 @@ start:
     lea stack_end(%pc), %sp
 
     move.l #image_size, %d0
-    addi.l #0x100+BUFFER_BYTES+PACKAGE_MAX, %d0 | the image, the basepage and room behind the image for the screens and a package loaded from disk
+    addi.l #0x100+BUFFER_BYTES+PACKAGE_MAX+PACKAGE_EXPAND, %d0 | the image, the basepage and room behind the image for the screens, a package loaded from disk and its flag tables
     move.l %d0, -(%sp)
     move.l %a3, -(%sp)
     clr.w -(%sp)
@@ -2698,6 +2698,30 @@ pkg_attach:
     dbra %d1, 1b
     move.l (%a2)+, (%a1)+                   | the numbers of doors and screens
     move.l (%a2), (%a1)                     | of edges, and the music
+    | The flags of every block position, from the block ids of the screens and the flags of the ids (1 impassable, 2 a ladder): behind the package.
+    move.w pkg_ptr+PKG_SCREEN_COUNT(%pc), %d0
+    mulu.w #208, %d0
+    movea.l pkg_buf(%pc), %a1
+    adda.l #PACKAGE_MAX, %a1                 | the impassable flags
+    lea pkg_ptr+PKG_BLOCKING(%pc), %a2
+    move.l %a1, (%a2)
+    lea (%a1,%d0.l), %a2                     | the ladder flags follow
+    lea pkg_ptr+PKG_LADDERS(%pc), %a0
+    move.l %a2, (%a0)
+    movea.l pkg_ptr+PKG_SCREENS(%pc), %a0
+    subq.w #1, %d0
+    movem.l %d3-%d4/%a3, -(%sp)
+    movea.l pkg_ptr+PKG_BLOCK_FLAGS(%pc), %a3
+    moveq #0, %d1
+2:  move.b (%a0)+, %d1
+    move.b (%a3,%d1.w), %d3
+    move.b %d3, %d4
+    andi.b #1, %d4
+    move.b %d4, (%a1)+
+    lsr.b #1, %d3
+    move.b %d3, (%a2)+
+    dbra %d0, 2b
+    movem.l (%sp)+, %d3-%d4/%a3
     movem.l (%sp)+, %d0-%d1/%a0-%a2
     rts
 
