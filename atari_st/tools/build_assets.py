@@ -20,6 +20,7 @@ import faxanadu_gfx as gfx  # noqa: E402
 import faxanadu_maps as fm
 import hero_physics as hp  # noqa: E402
 import faxanadu_rom as fr  # noqa: E402
+import faxanadu_text as ft  # noqa: E402
 import st_convert as sc  # noqa: E402
 
 
@@ -149,6 +150,14 @@ def main() -> int:
     second = dict(zip(keys, (int(v) for v in args.hud2.split(",")))) if args.hud2 else start
     (args.out / "hud_states.bin").write_bytes(sc.hud_state_bytes(start) + sc.hud_state_bytes(second))
     (args.out / "title_table.bin").write_bytes(sc.title_table_bytes(rom))
+    # the font (96 glyphs of 8 bytes), then the texts the program shows, each ended by a 0 byte: text_data + TEXT_x is where one starts
+    wrong, ask = ft.password_lines(rom)
+    texts = {"DEATH": ft.message(rom, ft.MESSAGE_DEATH), "MEDITATE": ft.message(rom, ft.MESSAGE_MEDITATE), "WRONG": wrong, "ASK": ask}
+    text_blob, text_equ = bytearray(ft.font(rom)), []
+    for name, text in texts.items():
+        text_equ.append(f"    .equ TEXT_{name}, {len(text_blob)}\n")
+        text_blob += text.encode("ascii") + b"\0"
+    (args.out / "text.bin").write_bytes(bytes(text_blob))
     hero = sc.Hero(*[bool(v) if i == 6 else v for i, v in enumerate(int(t) for t in args.hero.split(","))])
 
     def package(area: int, pal_index: int, building: int | None = None) -> tuple[bytes, list[tuple], int]:
@@ -212,6 +221,8 @@ def main() -> int:
         + "".join(f"    .equ PKG_{n.upper()}, {4 * i}\n" for i, n in enumerate(PACKAGE_PARTS))
         + "".join(f"    .equ PKG_{n.upper()}, {4 * len(PACKAGE_PARTS) + 2 * i}\n" for i, n in enumerate(HEADER_WORDS))
         + f"    .equ PKG_SIZE, {4 * len(PACKAGE_PARTS) + 2 * len(HEADER_WORDS)}\n"
+        + "".join(text_equ) +
+        f"    .equ HERO_ARMOUR, {hero.armor}\n    .equ HERO_SHIELD, {hero.shield}\n    .equ HERO_WEAPON, {hero.weapon}\n"
         f"    .equ HERO_X, {hero.x}\n    .equ HERO_Y, {hero.y}\n    .equ HERO_FLIP, {int(hero.left)}\n    .equ HERO_FRAME, {hero.frame % 3}\n", encoding="ascii")
     print(f"area {args.area} screens {ids}: {n_images} block images ({n_images * sc.BLOCK_BYTES} bytes); packages {', '.join(names)} "
           f"(the biggest {biggest} bytes) -> {args.out}")

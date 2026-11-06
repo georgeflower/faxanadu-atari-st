@@ -14,6 +14,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 ROM = ROOT.parent / "ext" / "Faxanadu_Europe.nes"
+
+
+def ft_message(rom, number):
+    import faxanadu_text as ft
+
+    return ft.message(rom, number)
 TOS = Path(os.environ.get("TOS") or os.environ.get("TOS_PAL") or "")
 
 
@@ -205,7 +211,7 @@ class ViewerTests(unittest.TestCase):
 
     def test_with_no_power_left_he_dissolves_and_starts_again(self) -> None:
         """DAMAGE=80: the first H takes all the power. Player_HandleDeath's loop: 16 passes standing, then 8 phases of 8 tiles (tools in the ROM:
-        Player_DrawDeathAnimation), the fade from pass 80, and at pass 256 the screen is back with the death song, waiting for a button; then he is
+        Player_DrawDeathAnimation), the fade from pass 80, and at pass 256 the screen is back with the death song and the ROM's message (\"Remember your mantra\") on a box, waiting for a button; then he is
         back at the start with all his power and magic and the gold and experience of a Battler (rank 2: 2200 and 800)."""
         args = ["ALL=1", "AREA=0", "SCREEN=1", "HERO=128,144,0,255,0,0,1", "VIEWER_DEFS=--defsym DAMAGE=80 --defsym TITLE=2"]
         hit = [(599, "h", 1), (600, "h", 0)]
@@ -218,8 +224,18 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual(word("hero_x"), 128, "he does not move (and not back: the start is where he stood)")
         _, word, _ = self.run_scenario(args, hit, 760, "shots_death")
         self.assertEqual(word("death_state+2"), 8, "dissolved")
-        _, word, _ = self.run_scenario(args, hit + [(840, "joy", 0x80), (880, "joy", 0)], 900, "shots_death")
+        ram, word, log = self.run_scenario(args, hit + [(840, "joy", 0x80), (880, "joy", 0)], 900, "shots_death")
         self.assertEqual(word("hero_dead"), 2, "the song plays and he waits for a button (a button held through the end does not count)")
+        import faxanadu_rom as fr
+        import hatari_shot as hs
+        import st_convert as sc
+
+        rom = fr.Rom(ROM)
+        state = dict(hp=word("hud_state") >> 8, mp=word("hud_state") & 255, experience=word("hud_state+2"), gold=word("hud_state+4") << 16 | (word("hud_state+6") & 0xFFFF),
+                     seconds=(word("hud_state+8") >> 8) & 255)
+        expected = sc.expected_screen(rom, 0, 1, word("camera"), state=state)
+        self.text_box(expected, rom, 0, ft_message(rom, 0x24))
+        self.assert_picture(hs.decode_screen(ram, hs.video_base(log)), expected)        # the ROM's message on a box, he is gone
         _, word, _ = self.run_scenario(args, hit, 1100, "shots_death")
         self.assertEqual(word("hero_dead"), 2, "no press: still waiting")
         _, word, _ = self.run_scenario(args, hit + [(1000, "joy", 0x80), (1010, "joy", 0)], 1100, "shots_death")
@@ -770,6 +786,8 @@ class ViewerTests(unittest.TestCase):
                 text = f"memwrite ${base + sym['input_state'] + 264 + 0x11:x} 0x{value:02x}\ncont\n"
             elif what == "m":                                          # the M key (debug: the next spell, full magic)
                 text = f"memwrite ${base + sym['input_state'] + 264 + 0x32:x} 0x{value:02x}\ncont\n"
+            elif what == "p":                                          # the P key (debug: shows the mantra)
+                text = f"memwrite ${base + sym['input_state'] + 264 + 0x19:x} 0x{value:02x}\ncont\n"
             elif what in ("h", "g"):                                   # the H and G keys (debug: hit from the right / from the left)
                 text = f"memwrite ${base + sym['input_state'] + 264 + (0x23 if what == 'h' else 0x22):x} 0x{value:02x}\ncont\n"
             elif what == "y":                                          # the hero's y (a word)
@@ -786,6 +804,7 @@ class ViewerTests(unittest.TestCase):
             symbol, _, offset = name.partition("+")
             at = base + sym[symbol] + int(offset or 0)
             return int.from_bytes(ram[at:at + 2], "big", signed=True)
+        word.raw = lambda name, n: ram[base + sym[name]:base + sym[name] + n]              # bytes by symbol
         return ram, word, log
 
     def assert_picture(self, rows, expected) -> None:
@@ -853,6 +872,225 @@ class ViewerTests(unittest.TestCase):
         ram, word, log = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=8", "HERO=192,144,0,255,0,0,1", "WORLD=1", "VIEWER_DEFS=--defsym KEYS=0"],
                                            [(599, "joy", 1), (602, "joy", 0)], 799, "shots_locked")
         self.assertEqual((word("cur_area"), word("cur_screen")), (0, 8))
+
+
+    # ------------------------------------------------------------------------------------------------------------------ text and the mantra
+    @staticmethod
+    def text_layer(rows, font, slot, glyphs):
+        """Draws text on the expected picture: glyphs = [(x, y, char, inverted)]; the ROM's font, one bit a pixel, light on black (or the other way)."""
+        for x, y, char, inverted in glyphs:
+            g = font[8 * (ord(char) - 32):8 * (ord(char) - 32) + 8] if 32 <= ord(char) < 128 else bytes(8)
+            for dy in range(8):
+                for dx in range(8):
+                    lit = bool(g[dy] >> (7 - dx) & 1) != inverted
+                    rows[y + dy][x + dx] = slot if lit else 0
+
+    @staticmethod
+    def box_layer(rows, slot, group0, y0, groups, lines):
+        """A two-pixel frame round black, as draw_box makes it."""
+        for y in range(y0, y0 + lines):
+            for x in range(16 * group0, 16 * (group0 + groups)):
+                edge = y - y0 < 2 or y - y0 >= lines - 2 or x - 16 * group0 < 2 or x >= 16 * (group0 + groups) - 2
+                rows[y][x] = slot if edge else 0
+
+    @staticmethod
+    def bright_slot(rom, palette_index):
+        """The palette's brightest colour (the first of them): the colour the text is drawn in."""
+        import st_convert as sc
+
+        colours = sc.plan_for_set(rom, palette_index).colours
+        colours = colours + [(0, 0, 0)] * (16 - len(colours))
+        best = 1
+        for i in range(1, 16):
+            if sum(colours[i]) > sum(colours[best]):
+                best = i
+        return best
+
+    def text_box(self, rows, rom, palette_index, text):
+        """The picture with a message box on it, as draw_text_box lays it out."""
+        import faxanadu_text as ft
+
+        slot, font = self.bright_slot(rom, palette_index), ft.font(rom)
+        lines = text.split("\n")
+        height = 10 * len(lines) + 8
+        y0 = 32 + (168 - height) // 2
+        self.box_layer(rows, slot, 5, y0, 10, height)
+        self.text_layer(rows, font, slot, [(96 + 8 * i, y0 + 4 + 10 * n, c, False) for n, line in enumerate(lines) for i, c in enumerate(line)])
+
+    def test_the_p_key_shows_the_mantra_in_a_box_and_a_button_takes_it_away(self) -> None:
+        """The ROM's password of the state the game has (a Novice with a dagger and leather armour, no spell), 16 characters to a line, in a box over
+        the window; a button takes it away and the picture is the game's again."""
+        import faxanadu_rom as fr
+        import password_model as pm
+        import st_convert as sc
+
+        rom = fr.Rom(ROM)
+        mantra = pm.password(pm.State(0, 0, 0, 0, 0, 0, pm.UNSET, pm.UNSET, pm.UNSET, weapons=[0], armors=[0]))
+        self.assertEqual(len(mantra), 11)
+        ram, word, log = self.run_scenario([], [(599, "p", 1), (602, "p", 0)], 699, "shots_mantra")
+        import hatari_shot as hs
+        rows = hs.decode_screen(ram, hs.video_base(log))
+        expected = sc.expected_screen(rom, 0, 1, word("camera"), hero=sc.Hero(144, 144, 0, 255, 0, 0, True))
+        self.text_box(expected, rom, 0, mantra)
+        self.assert_picture(rows, expected)
+        self.assertEqual(word.raw("pw_text", 12), mantra.encode() + b"\0")
+        ram, word, log = self.run_scenario([], [(599, "p", 1), (602, "p", 0), (699, "joy", 0x80), (702, "joy", 0)], 799, "shots_mantra_gone")
+        rows = hs.decode_screen(ram, hs.video_base(log))
+        self.assert_picture(rows, sc.expected_screen(rom, 0, 1, word("camera"), hero=sc.Hero(144, 144, 0, 255, 0, 0, True)))
+
+    def test_the_mantra_holds_the_rank_and_the_chosen_spell(self) -> None:
+        """Rank 12 and the Fire spell chosen: a longer mantra, the one the ROM makes for that state."""
+        import faxanadu_rom as fr
+        import hatari_shot as hs
+        import password_model as pm
+        import st_convert as sc
+
+        rom = fr.Rom(ROM)
+        mantra = pm.password(pm.State(0, 12, 0, 0, 0, 0, pm.UNSET, 2, pm.UNSET, weapons=[0], armors=[0], spells=[2]))
+        ram, word, log = self.run_scenario(["VIEWER_DEFS=--defsym TITLE=12 --defsym MAGIC=2"], [(599, "p", 1), (602, "p", 0)], 699, "shots_mantra_2")
+        rows = hs.decode_screen(ram, hs.video_base(log))
+        expected = sc.expected_screen(rom, 0, 1, word("camera"), hero=sc.Hero(144, 144, 0, 255, 0, 0, True), state=dict(hp=16, mp=0, experience=0, gold=0, seconds=0))
+        self.text_box(expected, rom, 0, mantra)
+        self.assert_picture(rows, expected)
+
+
+    # ------------------------------------------------------------------------------------------------------------------ the menu and the entry
+    CELLS = 66
+    UP, DOWN, LEFT, RIGHT, FIRE = 1, 2, 4, 8, 0x80
+
+    @classmethod
+    def cell_after(cls, cell: int, move: int) -> int:
+        """The cursor in the grid of 64 characters, DEL and END (mantra_entry)."""
+        if move == cls.UP:
+            cell -= 8
+            if cell < 0:
+                cell += 64
+                if cell >= cls.CELLS:
+                    cell -= 8
+            return cell
+        if move == cls.DOWN:
+            cell += 8
+            return cell if cell < cls.CELLS else cell & 7
+        if move == cls.LEFT:
+            return cell - 1 if cell else cls.CELLS - 1
+        return cell + 1 if cell < cls.CELLS - 1 else 0
+
+    @classmethod
+    def moves(cls, start: int, goal: int) -> list[int]:
+        """The shortest way between two cells."""
+        seen, queue = {start: []}, [start]
+        for cell in queue:
+            if cell == goal:
+                return seen[cell]
+            for move in (cls.UP, cls.DOWN, cls.LEFT, cls.RIGHT):
+                nxt = cls.cell_after(cell, move)
+                if nxt not in seen:
+                    seen[nxt] = seen[cell] + [move]
+                    queue.append(nxt)
+        raise AssertionError("unreachable")
+
+    @classmethod
+    def typing(cls, text: str, first_vbl: int, end: bool = True) -> tuple[list[tuple[int, str, int]], int]:
+        """Pokes that move the cursor to each character of `text` and take it, then (end) to END and take that: (pokes, the VBL after the last)."""
+        import password_model as pm
+
+        pokes, vbl, cell = [], first_vbl, 0
+        for target in [pm.CHARS.index(c) for c in text] + ([65] if end else []):
+            for move in cls.moves(cell, target) + [cls.FIRE]:
+                pokes += [(vbl, "joy", move), (vbl + 2, "joy", 0)]
+                vbl += 4
+            cell = target
+        return pokes, vbl
+
+    def entry_box(self, rows, rom, palette_index, text, cell, wrong=False):
+        """mantra_entry's screen as it is laid out."""
+        import faxanadu_text as ft
+        import password_model as pm
+
+        slot, font = self.bright_slot(rom, palette_index), ft.font(rom)
+        self.box_layer(rows, slot, 2, 36, 16, 160)
+        glyphs = [(88 + 8 * i, 44, c, False) for i, c in enumerate(ft.password_lines(rom)[1])]
+        for n in range(66):
+            x, y = (96 + 16 * (n & 7), 98 + 10 * (n >> 3)) if n < 64 else (96 if n == 64 else 136, 178)
+            for i, c in enumerate(pm.CHARS[n] if n < 64 else ("DEL" if n == 64 else "END")):
+                glyphs.append((x + 8 * i, y, c, n == cell))
+        for i in range(pm.MAX_CHARS):
+            c = text[i] if i < len(text) else "_" if i == len(text) else " "
+            glyphs.append((96 + 8 * (i & 15), 62 + 10 * (i >> 4), c, False))
+        if wrong:
+            glyphs += [(64 + 8 * i, 84, c, False) for i, c in enumerate(ft.password_lines(rom)[0])]
+        self.text_layer(rows, font, slot, glyphs)
+
+    def menu_box(self, rows, rom, palette_index, selected):
+        import faxanadu_text as ft
+
+        slot, font = self.bright_slot(rom, palette_index), ft.font(rom)
+        self.box_layer(rows, slot, 5, 88, 10, 56)
+        self.text_layer(rows, font, slot, [(104 + 8 * i, 96, c, selected == 0) for i, c in enumerate("Start")]
+                        + [(104 + 8 * i, 114, c, selected == 1) for i, c in enumerate("Enter mantra")])
+
+    def test_the_menu_starts_the_game_or_goes_to_the_entry_of_a_mantra(self) -> None:
+        import faxanadu_rom as fr
+        import hatari_shot as hs
+        import st_convert as sc
+
+        rom = fr.Rom(ROM)
+        args = ["VIEWER_DEFS=--defsym MENU=1"]
+        for pokes, selected in (([], 0), ([(599, "joy", self.DOWN), (602, "joy", 0)], 1)):
+            ram, word, log = self.run_scenario(args, pokes, 699, "shots_menu")
+            expected = sc.expected_screen(rom, 0, 1, word("camera"))                      # (the hero is not on it yet)
+            self.menu_box(expected, rom, 0, selected)
+            self.assert_picture(hs.decode_screen(ram, hs.video_base(log)), expected)
+        ram, word, log = self.run_scenario(args, [(599, "joy", self.FIRE), (602, "joy", 0)], 799, "shots_menu")
+        self.assertEqual((word("hero_dead"), word("menu_sel")), (0, 0))
+        self.assert_picture(hs.decode_screen(ram, hs.video_base(log)), sc.expected_screen(rom, 0, 1, word("camera"), hero=sc.Hero(144, 144, 0, 255, 0, 0, True)))
+
+    def test_a_mantra_is_typed_in_a_grid_and_the_game_starts_with_what_it_holds(self) -> None:
+        """Down and fire take 'Enter mantra'; the stick moves over the grid and fire takes a character; END asks the game to read it. The mantra
+        of a Chevalier (rank 5) with the Thunder spell (the ROM's, from the model) starts the game with that rank (its experience and gold), the
+        spell, full power and magic. Before that: the picture of the entry screen, and a wrong mantra shows the ROM's message."""
+        import faxanadu_rom as fr
+        import hatari_shot as hs
+        import password_model as pm
+        import st_convert as sc
+
+        rom = fr.Rom(ROM)
+        args = ["VIEWER_DEFS=--defsym MENU=1"]
+        start = [(599, "joy", self.DOWN), (602, "joy", 0), (610, "joy", self.FIRE), (613, "joy", 0)]
+        mantra = pm.password(pm.State(0, 5, 0, 0, 0, 0, pm.UNSET, 1, pm.UNSET, weapons=[0], armors=[0], spells=[1]))
+        pokes, end = self.typing(mantra[:3], 620, end=False)
+        ram, word, log = self.run_scenario(args, start + pokes, end + 10, "shots_entry")
+        cell = pm.CHARS.index(mantra[2])
+        expected = sc.expected_screen(rom, 0, 1, word("camera"))
+        self.entry_box(expected, rom, 0, mantra[:3], cell)
+        self.assert_picture(hs.decode_screen(ram, hs.video_base(log)), expected)
+        self.assertEqual(word.raw("ent_text", 4), mantra[:3].encode() + b"\0")
+        pokes, end = self.typing("AAAA", 620)                                              # (a wrong one)
+        ram, word, log = self.run_scenario(args, start + pokes, end + 10, "shots_entry_wrong")
+        expected = sc.expected_screen(rom, 0, 1, word("camera"))
+        self.entry_box(expected, rom, 0, "AAAA", 65, wrong=True)
+        self.assert_picture(hs.decode_screen(ram, hs.video_base(log)), expected)
+        pokes, end = self.typing(mantra, 620)
+        ram, word, log = self.run_scenario(args, start + pokes, end + 200, "shots_entry_ok")
+        self.assertEqual((word("hero_title"), word("hero_magic"), word("hero_dead")), (5, 1, 0))
+        self.assertEqual((word("hud_state"), word("hud_state+2"), word("hud_state+4"), word("hud_state+6")),
+                         (0x5050, rom.word("PLAYER_TITLE_EXP_NEEDED", 4), 0, rom.word("PLAYER_TITLE_GOLD", 4)), "full power and magic, the rank's experience and gold")
+        expected = sc.expected_screen(rom, 0, 1, word("camera"), hero=sc.Hero(144, 144, 0, 255, 0, 0, True),
+                                      state=dict(hp=80, mp=80, experience=word("hud_state+2"), gold=word("hud_state+6"), seconds=0))
+        self.assert_picture(hs.decode_screen(ram, hs.video_base(log)), expected)
+
+    def test_end_with_nothing_written_goes_back_to_the_menu(self) -> None:
+        import faxanadu_rom as fr
+        import hatari_shot as hs
+        import st_convert as sc
+
+        rom = fr.Rom(ROM)
+        start = [(599, "joy", self.DOWN), (602, "joy", 0), (610, "joy", self.FIRE), (613, "joy", 0)]
+        pokes, end = self.typing("", 620)
+        ram, word, log = self.run_scenario(["VIEWER_DEFS=--defsym MENU=1"], start + pokes, end + 100, "shots_entry_back")
+        expected = sc.expected_screen(rom, 0, 1, word("camera"), hero=sc.Hero(144, 144, 0, 255, 0, 0, True))       # (the screens were made again: he is on it)
+        self.menu_box(expected, rom, 0, 1)
+        self.assert_picture(hs.decode_screen(ram, hs.video_base(log)), expected)
 
 
 if __name__ == "__main__":

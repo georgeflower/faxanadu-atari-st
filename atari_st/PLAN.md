@@ -47,9 +47,9 @@ The numbers are the order I intend to work in. A step is done when its tests pas
 ### E. Towns, buildings, text
 
 - E1. **Doors into buildings** and the building screens (tileset 6, palettes), moving in and out, the hero's start position.
-- E2. **Text and the font**: banks 12 and 13 of the **Europe** ROM (they differ from the US); the font tiles; string decoding; text boxes and the portrait pictures (`TILEINFO_PORTRAITS_ADDRS`).
+- E2. **Text and the font**: banks 12 and 13 of the **Europe** ROM (they differ from the US). The font, the messages and a box of text are done (`src/text.s`, the death message uses them); to do: the portrait pictures (`TILEINFO_PORTRAITS_ADDRS`), a box that waits for a button every four lines, the $FB rank code.
 - E3. **Interaction scripts**: a small interpreter for the ROM's script language (`IScripts_*`, `IScriptAction_*`) and the scripts read from the Europe ROM; shops, guru, the King, the hospital, the key sellers.
-- E4. **Passwords** (`IScriptAction_ShowPassword`, the ROM's format) and a save file as a convenience (floppy or the Gotek image).
+- E4. **Passwords**: the ROM's format, the coder, the entry screen and the start menu are done (the P key shows the mantra until the Gurus of E3 do it with `IScriptAction_ShowPassword`; the temple spawn point and the inventory go into it when they exist). To do: a save file as a convenience (floppy or the Gotek image).
 
 ### F. The rest of the game
 

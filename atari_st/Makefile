@@ -46,7 +46,8 @@ $(BIN): $(ELF)
 $(PRG): $(BIN) $(TOOLS_DIR)/make_prg.py
 	$(PYTHON) $(TOOLS_DIR)/make_prg.py $< $@
 
-# A 720 KB floppy image for a Gotek, a real drive or an emulator.
+# A 720 KB floppy image for a Gotek, a real drive or an emulator. The disk's program starts with the menu (start, or enter a mantra).
+viewerdisk: override VIEWER_DEFS += --defsym MENU=1
 viewerdisk: viewer
 	$(PYTHON) $(TOOLS_DIR)/make_disk.py $(VIEWER_DISK) $(VIEWER_PRG) $(wildcard $(BUILD_DIR)/*.DAT)
 

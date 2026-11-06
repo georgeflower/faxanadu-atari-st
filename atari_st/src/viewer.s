@@ -217,8 +217,12 @@ start:
     lea cur_music(%pc), %a0
     move.w %d0, (%a0)
     bsr.w frame_init
+    .ifdef MENU
+    bsr.w start_menu                        | start the game, or enter a mantra
+    .endif
 12: bsr.w input_poll
     bsr.w sound_keys
+    bsr.w mantra_key                        | P: shows the mantra
     bsr.w hero_step
     bsr.w scroll_check                      | at the edge of the screen: scrolls to the next one (and comes back when it is done)
     .ifndef NO_PHYSICS
@@ -721,14 +725,11 @@ death_start:
 
 | Player_HandleDeath's loop, a pass a frame (256 of them): he stands for 16, then dissolves in 8 phases of 8 tiles (Player_DrawDeathAnimation; the
 | picture is made by dissolve_image), from pass 80 the screen fades to black in four steps (Screen_NextTransitionState), and at the end he is
-| the screen is shown again and the death song plays (the ROM shows its "Remember your mantra" message then: not done, he waits for a button
-| press instead, after a second), and then he is back at the start with all his power and magic, and the gold and experience of his rank.
+| the screen is shown again and the death song plays, the ROM's message "Remember your mantra" is on a box until a button is pressed (A, B or Start),
+| and then he is back at the start with all his power and magic, and the gold and experience of his rank.
 | a1 = hero_x. Clobbers nothing.
 death_step:
     movem.l %d0-%d3/%a0, -(%sp)
-    move.w hero_dead(%pc), %d1
-    cmpi.w #2, %d1
-    beq.w 20f
     lea input_state(%pc), %a0
     clr.b IN_PAD(%a0)
     clr.b IN_PAD_NEW(%a0)
@@ -774,26 +775,17 @@ death_step:
     move.w %d0, (%a0)
     cmpi.w #256, %d0
     bne.s 9f
-    lea hero_dead(%pc), %a0                 | the message: the palette comes back, the death song plays
+    lea hero_dead(%pc), %a0                 | the message: the palette comes back, the death song plays, the ROM's words in a box until a button
     move.w #2, (%a0)
     moveq #0, %d1
     bsr.w death_fade
     moveq #8, %d0
     bsr.w sound_play_music
+    lea text_data+TEXT_DEATH(%pc), %a0
+    bsr.w message_box
+    bsr.w hero_respawn
 9:  movem.l (%sp)+, %d0-%d3/%a0
     rts
-20: lea death_state(%pc), %a0                | waiting for the button: the pass count goes on
-    move.w (%a0), %d0
-    addq.w #1, %d0
-    move.w %d0, (%a0)
-    cmpi.w #256+50, %d0
-    bcs.s 9b
-    lea input_state(%pc), %a0
-    move.b IN_PAD_NEW(%a0), %d1
-    andi.b #0xC0, %d1                       | A or B
-    beq.s 9b
-    bsr.w hero_respawn
-    bra.s 9b
 
 | The screen's colours a quarter darker each step: d1 = the step (1 to 4; 4 is black).
 death_fade:
@@ -2734,6 +2726,8 @@ hud_load_state:
 
     .include "hud.s"
     .include "frame.s"
+    .include "password.s"
+    .include "text.s"
 
     .section .rodata
 hud_layout:
