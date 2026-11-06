@@ -30,7 +30,7 @@ The numbers are the order I intend to work in. A step is done when its tests pas
 
 ### C. The hero plays
 
-- C1. **Input and walking**: speeds, the movement tick, facing, animation frames, crouch.
+- C1. **Input and walking** (walking DONE: acceleration, wall stops, matched to the ROM frame by frame; animation frames and crouch open): speeds, the movement tick, facing, animation frames, crouch.
 - C2. **Collision with blocks**: block properties (0 air, 1 solid, 2 ladder, 3 door, 4/9/13 pass-behind, 10-13 screen transitions, the rest to read), the hero's 16x32 box, ledges.
 - C3. **Jump and fall**: the arc and the fall speed, compared frame by frame with the harness.
 - C4. **Ladders and stairs**: climbing frame 7 with its flip, `Player_IsClimbing`; check it against a real ladder in the harness (not done yet).

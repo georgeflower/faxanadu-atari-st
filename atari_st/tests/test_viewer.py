@@ -65,7 +65,7 @@ class ViewerTests(unittest.TestCase):
 
     def test_the_hero_walks_when_the_stick_is_pushed_and_leaves_no_trail(self) -> None:
         """Hold the stick right (poked into the program's input state through Hatari's debugger) from VBL 600 to 640, let go, and
-        capture at 700: he stands facing right (the sprite flip bit set) at his limit, x = 224, in the first walk frame, and the rest of the picture is clean."""
+        capture at 700: he stands facing right (the sprite flip bit set) where the ROM's walking puts him after about 40 frames (acceleration from $C0), in the first walk frame, and the rest of the picture is clean."""
         import faxanadu_rom as fr
         import hatari_shot as hs
         import st_convert as sc
@@ -91,7 +91,18 @@ class ViewerTests(unittest.TestCase):
         log = hs.run_hatari(hatari, TOS, prg, work, 700, "0", script, None)
         ram = (work / "ram1.bin").read_bytes()
         rows = hs.decode_screen(ram, hs.video_base(log))
-        expected = sc.expected_screen(fr.Rom(ROM), 0, 1, 40, hero=sc.Hero(224, 144, 0, 255, 0, 0, True))
+        word = lambda name: int.from_bytes(ram[base + sym[name]:base + sym[name] + 2], "big")
+        x, frac = word("hero_x"), word("hero_frac")
+        import hero_physics as hp
+        h = hp.Hero(x=144, y=144)
+        free = [0] * 208
+        reached = []
+        for _ in range(45):
+            hp.walk_step(h, hp.JOY_RIGHT, free)
+            reached.append((h.x, h.frac))
+        self.assertIn((x, frac), reached[36:44], f"x {x} frac {frac}: not what the ROM's walking gives after about 40 frames")
+        self.assertEqual(word("hero_flip"), 1)
+        expected = sc.expected_screen(fr.Rom(ROM), 0, 1, 40, hero=sc.Hero(x, 144, 0, 255, 0, 0, True))
         bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
 
@@ -157,7 +168,7 @@ class ViewerTests(unittest.TestCase):
         base = (work / "ram0.bin").read_bytes().find(image[sym["start"]:sym["start"] + 48]) - sym["start"]
         self.assertGreater(base, 0)
         joy, hero_x = base + sym["input_state"] + 259, base + sym["hero_x"]
-        (work / "go.ini").write_text(f"memwrite ${hero_x:x} 0x00 {'0xf1' if to_the_right else '0x08'}\nmemwrite ${joy:x} {'0x08' if to_the_right else '0x04'}\ncont\n", encoding="utf-8")
+        (work / "go.ini").write_text(f"memwrite ${hero_x:x} 0x00 {'0xf1' if to_the_right else '0x00'}\nmemwrite ${joy:x} {'0x08' if to_the_right else '0x04'}\ncont\n", encoding="utf-8")
         (work / "let_go.ini").write_text(f"memwrite ${joy:x} 0x00\ncont\n", encoding="utf-8")
         moments = [625, 640, 652, 665, 690, 705, 730, 760, 790, 820]
         for v in moments:

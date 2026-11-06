@@ -16,7 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import faxanadu_gfx as gfx  # noqa: E402
-import faxanadu_maps as fm  # noqa: E402
+import faxanadu_maps as fm
+import hero_physics as hp  # noqa: E402
 import faxanadu_rom as fr  # noqa: E402
 import st_convert as sc  # noqa: E402
 
@@ -61,6 +62,8 @@ def main() -> int:
     (args.out / "block_index.bin").write_bytes(b"".join(v.to_bytes(2, "big") for v in table))
     (args.out / "screen.bin").write_bytes(bytes(blocks))
     (args.out / "neighbours.bin").write_bytes(bytes(around))
+    props = fm.block_properties(rom, a)
+    (args.out / "blocking.bin").write_bytes(bytes(hp.IMPASSABLE[props[b] & 15] for b in blocks))   # 1 a block he cannot walk through
     pal_index = a.palette_index
     keys = ("hp", "mp", "experience", "gold", "seconds")
     start = dict(zip(keys, (int(v) for v in args.hud.split(","))))

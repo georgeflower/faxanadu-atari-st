@@ -17,7 +17,7 @@
     .equ SCREEN_BYTES, 32000
     .equ REGION_BYTES, 208*160              | a whole 208-line playfield (stride 160: the same layout as the screen)
     .equ BUFFER_BYTES, 2*SCREEN_BYTES+2*REGION_BYTES+256 | two screens and two playfields, the first on a 256-byte boundary
-    .equ HERO_X_MIN, 8                      | where he is at the left edge: scrolls to the screen on the left
+    .equ HERO_X_MIN, 0                      | where he is at the left edge (he has walked off it): scrolls to the screen on the left
     .equ HERO_X_MAX, 241                    | and at the right edge
     .equ HERO_Y_MIN, 0                      | at the top of the playfield (the game's Player_PosY): scrolls to the screen above
     .equ HERO_Y_MAX, 192                    | and at the bottom ($C1 and more: the screen below; the demo stops at $C0)
@@ -374,39 +374,83 @@ restore_rect:
     rts
 
 | The pad moves the hero (a demonstration, not the game's physics): two pixels a frame, the walk frame changes every six frames.
+| The hero's walking as the ROM does it (tools/hero_physics.py is the reference, tests/test_hero_physics.py checks it against the game):
+| x in 8.8 fixed point (hero_x and hero_frac), an acceleration (hero_acc) that starts at $C0 when he starts walking and grows by 2 a frame
+| to $180 (rank group 0; 4, 6, 8 for the higher ranks: not here yet), a wall stops him on a block edge. Up and down are still the demo's.
+| Fields at hero_x: x 0, y 2, flip 4, frame 6, tick 8, frac 10, acc 12, moving 14.
 hero_step:
-    movem.l %d0-%d2/%a0-%a1, -(%sp)
+    movem.l %d0-%d4/%a0-%a2, -(%sp)
     lea input_state(%pc), %a0
     move.b IN_PAD(%a0), %d0
-    lea hero_x(%pc), %a1                    | hero_x, hero_y, hero_flip, hero_frame, hero_tick
+    lea hero_x(%pc), %a1
     moveq #0, %d2                           | 1 when he moves
+    btst #0, %d0                            | right
+    bne.s 20f
     btst #1, %d0                            | left
-    beq.s 1f
-    subq.w #2, (%a1)
-    clr.w 4(%a1)                            | facing left: the flip bit is clear (the tiles face left)
-    moveq #1, %d2
-1:  btst #0, %d0                            | right
-    beq.s 2f
-    addq.w #2, (%a1)
+    bne.s 30f
+    clr.w 14(%a1)                           | not walking: the next step starts from $C0 again
+    bra.w 40f
+20: moveq #1, %d2
+    bsr.w hero_accelerate
     move.w #1, 4(%a1)                       | facing right: flipped
-    moveq #1, %d2
-2:  btst #3, %d0                            | up
-    beq.s 3f
+    move.w (%a1), %d1
+    lsl.w #8, %d1
+    move.w 10(%a1), %d3
+    or.w %d3, %d1
+    add.w 12(%a1), %d1
+    move.w %d1, %d3
+    andi.w #0xFF, %d3
+    move.w %d3, 10(%a1)
+    lsr.w #8, %d1
+    move.w %d1, (%a1)
+    cmpi.w #240, %d1                        | the pixel 16 to the right lies on this screen
+    bge.w 40f
+    addi.w #16, %d1
+    bsr.w column_blocked
+    beq.w 40f
+    andi.w #0xF0, (%a1)                     | a wall: he stops on the block's edge
+    bra.w 40f
+30: moveq #1, %d2
+    bsr.w hero_accelerate
+    clr.w 4(%a1)                            | facing left: the flip bit is clear
+    move.w (%a1), %d1
+    lsl.w #8, %d1
+    move.w 10(%a1), %d3
+    or.w %d3, %d1
+    sub.w 12(%a1), %d1
+    bcc.s 31f
+    move.w %d1, %d3                         | off the left edge: x is 0 (scroll_check sees it)
+    andi.w #0xFF, %d3
+    move.w %d3, 10(%a1)
+    clr.w (%a1)
+    bra.w 40f
+31: move.w %d1, %d3
+    andi.w #0xFF, %d3
+    move.w %d3, 10(%a1)
+    lsr.w #8, %d1
+    move.w %d1, (%a1)
+    beq.w 40f
+    subq.w #1, %d1                          | the pixel to the left
+    bsr.w column_blocked
+    beq.w 40f
+    move.w (%a1), %d1
+    move.w %d1, %d3
+    andi.w #15, %d3
+    beq.w 40f
+    andi.w #0xF0, %d1                       | a wall: the next block edge to the right
+    addi.w #16, %d1
+    move.w %d1, (%a1)
+40: btst #3, %d0                            | up (the demo's)
+    beq.s 43f
     subq.w #2, 2(%a1)
     moveq #1, %d2
-3:  btst #2, %d0                            | down
-    beq.s 4f
+43: btst #2, %d0                            | down
+    beq.s 44f
     addq.w #2, 2(%a1)
     moveq #1, %d2
-4:  tst.w %d2                               | the limits only apply to a hero who moves (the start position may lie outside)
+44: tst.w %d2                               | the limits only apply to a hero who moves (the start position may lie outside)
     beq.s 8f
-    cmpi.w #HERO_X_MIN, (%a1)
-    bge.s 5f
-    move.w #HERO_X_MIN, (%a1)
-5:  cmpi.w #HERO_X_MAX, (%a1)
-    ble.s 6f
-    move.w #HERO_X_MAX, (%a1)
-6:  cmpi.w #HERO_Y_MIN, 2(%a1)
+    cmpi.w #HERO_Y_MIN, 2(%a1)
     bge.s 7f
     move.w #HERO_Y_MIN, 2(%a1)
 7:  cmpi.w #HERO_Y_MAX, 2(%a1)
@@ -429,7 +473,50 @@ hero_step:
     cmpi.w #3, 6(%a1)
     blt.s 10f
     clr.w 6(%a1)
-10: movem.l (%sp)+, %d0-%d2/%a0-%a1
+10: movem.l (%sp)+, %d0-%d4/%a0-%a2
+    rts
+
+| a1 = hero_x. $C0 when he starts walking, then 2 more a frame until $180.
+hero_accelerate:
+    tst.w 14(%a1)
+    bne.s 1f
+    move.w #0xC0, 12(%a1)
+1:  move.w #1, 14(%a1)
+    cmpi.w #0x180, 12(%a1)
+    bcc.s 2f
+    addq.w #2, 12(%a1)
+2:  rts
+
+| d1 = a pixel x on the screen: is there a block he cannot walk through in that column, at his height (the rows his 32 lines touch)?
+| Result in d0 and the Z flag (Z: free). Clobbers d1-d2, a2.
+column_blocked:
+    lea cur_screen(%pc), %a2
+    move.w (%a2), %d2
+    mulu.w #208, %d2
+    lea blocking(%pc), %a2
+    adda.w %d2, %a2                         | this screen's 13 rows of 16 flags
+    lsr.w #4, %d1                           | the column
+    move.w hero_y(%pc), %d2
+    move.w %d2, -(%sp)
+    lsr.w #4, %d2
+    lsl.w #4, %d2
+    add.w %d1, %d2                          | the flag's index: row * 16 + column
+    moveq #0, %d0
+    cmpi.w #208, %d2
+    bge.s 1f
+    or.b (%a2,%d2.w), %d0
+1:  addi.w #16, %d2
+    cmpi.w #208, %d2
+    bge.s 2f
+    or.b (%a2,%d2.w), %d0
+2:  move.w (%sp)+, %d1
+    andi.w #15, %d1
+    beq.s 3f
+    addi.w #16, %d2
+    cmpi.w #208, %d2
+    bge.s 3f
+    or.b (%a2,%d2.w), %d0
+3:  tst.b %d0
     rts
 
 | Draws the hero in the pose his state says, into screen a4, and notes the rectangle in this screen's slot.
@@ -994,6 +1081,8 @@ screen_data:
     .incbin "screen.bin"
 neighbours:
     .incbin "neighbours.bin"
+blocking:
+    .incbin "blocking.bin"
     .even
 block_index:
     .incbin "block_index.bin"
@@ -1045,6 +1134,12 @@ hero_frame:
     .word HERO_FRAME
 hero_tick:
     .word -1
+hero_frac:
+    .word 0
+hero_acc:
+    .word 0
+hero_moving:
+    .word 0
 hud_tiles:
     .incbin "hud_tiles.bin"
 bench_result:
