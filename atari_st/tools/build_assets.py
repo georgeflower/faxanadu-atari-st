@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import enemy_data as ed
 import faxanadu_gfx as gfx  # noqa: E402
 import faxanadu_maps as fm
 import hero_physics as hp  # noqa: E402
@@ -84,7 +85,8 @@ def edge_table(rom: fr.Rom, a: fm.Area, ids: list[int], world: dict[int, list[in
 # "blocking" and "ladders" hold no data: the program makes them (a flag a block position, in memory behind the package) from the screens and
 # "block_flags" (a byte a block id: 1 a block he cannot walk through, 2 a ladder) when it loads a package, which keeps the disk smaller.
 PACKAGE_PARTS = ("palette", "screens", "neighbours", "blocking", "ladders", "doors", "edges", "block_index", "blocks", "hud_tiles", "hud_partial",
-                 "hero_list", "hero_images", "hero_anim", "hero_anim_images", "hero_weapon", "magic_anim", "magic_images", "block_flags")
+                 "hero_list", "hero_images", "hero_anim", "hero_anim_images", "hero_weapon", "magic_anim", "magic_images", "block_flags",
+                 "enemy_places", "enemy_kinds", "enemy_anim", "enemy_images", "enemy_scripts")
 HEADER_WORDS = ("door_count", "screen_count", "edge_count", "music")
 
 
@@ -158,6 +160,7 @@ def main() -> int:
         text_equ.append(f"    .equ TEXT_{name}, {len(text_blob)}\n")
         text_blob += text.encode("ascii") + b"\0"
     (args.out / "text.bin").write_bytes(bytes(text_blob))
+    (args.out / "random.bin").write_bytes(ed.random_table(rom))
     hero = sc.Hero(*[bool(v) if i == 6 else v for i, v in enumerate(int(t) for t in args.hero.split(","))])
 
     def package(area: int, pal_index: int, building: int | None = None) -> tuple[bytes, list[tuple], int]:
@@ -184,11 +187,12 @@ def main() -> int:
         parts = {
             "palette": plan.words(), "screens": bytes(blocks), "neighbours": bytes(around),
             "blocking": b"", "ladders": b"",
-            "block_flags": bytes(hp.IMPASSABLE[props[b] & 15] | hp.CLIMBABLE[props[b] & 15] << 1 for b in range(256)),
+            "block_flags": bytes(hp.IMPASSABLE[props[b] & 15] | hp.CLIMBABLE[props[b] & 15] << 1 | (props[b] & 15 == 2) << 2 for b in range(256)),
             "doors": doors, "edges": edges, "block_index": b"".join(v.to_bytes(2, "big") for v in table), "blocks": b"".join(images),
             "hud_tiles": sc.hud_tile_images(rom, pal_index, plan, start["hp"], start["mp"]), "hud_partial": sc.hud_partial_images(rom, pal_index, plan),
             "hero_list": hero_list, "hero_images": hero_images, "hero_anim": anim, "hero_anim_images": anim_images,
             "hero_weapon": sc.hero_weapon_assets(rom, who), "magic_anim": magic, "magic_images": magic_images,
+            **(ed.package_parts(rom, area, screens, pal_index, plan) if building is None else ed.package_parts(rom, area, [None], pal_index, plan)),
         }
         counts = dict(door_count=len(doors) // DOOR_BYTES, screen_count=len(screens), edge_count=len(edges) // EDGE_BYTES, music=music)
         return make_package(parts, counts), door_targets + edge_targets, len(images)

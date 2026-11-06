@@ -369,7 +369,7 @@ class ViewerTests(unittest.TestCase):
         import re
         import st_convert as sc
 
-        subprocess.run(["make", "-C", str(ROOT), "viewer"], check=True, capture_output=True)
+        subprocess.run(["make", "-C", str(ROOT), "viewer", "VIEWER_DEFS=--defsym NO_ENEMIES=1"], check=True, capture_output=True)
         nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
         sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
         image = (ROOT / "build" / "viewer.bin").read_bytes()
@@ -784,6 +784,8 @@ class ViewerTests(unittest.TestCase):
                 text = f"memwrite ${base + sym['input_state'] + 264 + 0x39:x} 0x{value:02x}\ncont\n"
             elif what == "w":                                          # the W key (wing boots)
                 text = f"memwrite ${base + sym['input_state'] + 264 + 0x11:x} 0x{value:02x}\ncont\n"
+            elif what == "b":                                          # B (Alternate): the sword
+                text = f"memwrite ${base + sym['input_state'] + 264 + 0x38:x} 0x{value:02x}\ncont\n"
             elif what == "m":                                          # the M key (debug: the next spell, full magic)
                 text = f"memwrite ${base + sym['input_state'] + 264 + 0x32:x} 0x{value:02x}\ncont\n"
             elif what == "p":                                          # the P key (debug: shows the mantra)
@@ -810,6 +812,118 @@ class ViewerTests(unittest.TestCase):
     def assert_picture(self, rows, expected) -> None:
         bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
+
+    def enemy_engine(self, rom, screen: int, word):
+        """The model with the enemies of an Eolis screen as they are placed, the hero where the viewer has him."""
+        import enemy_data as ed
+        import enemy_model as em
+        import faxanadu_maps as fm
+
+        area = fm.area(rom, 0)
+        props = fm.block_properties(rom, area)
+        free = next(b for b in range(256) if em.IMPASSABLE[props[b] & 15] == 0 and props[b] & 15 != em.LADDER)
+        eng = em.Engine(rom.prg(14), ed.random_table(rom), bytes(fm.decode_screen(rom, area, screen)[:208]) + bytes([free]) * 48, props)
+        eng.hero_x, eng.hero_y = word("hero_x"), word("hero_y")
+        for i, (ent, x, y) in enumerate(ed.placements(rom, 0, screen)):
+            s = eng.sprites[7 - i]
+            s.ent, s.x, s.y, s.beh, s.hbox = ent, x, y, 0xFF, ed.entity(rom, ent)["hitbox"]
+            s.script = rom.word("SPRITE_BSCRIPTS", ent)
+        return eng
+
+    def test_the_enemies_are_drawn_where_the_model_has_them(self) -> None:
+        """The picture is the background, the hero and the enemies' pictures from the ROM's own frames (`enemy_model.appearance_offset`, mirrored when
+        they face right), for the state the model has after the updates the viewer made (or the one before: the capture can fall between a frame's update
+        and its show)."""
+        import copy
+
+        import enemy_data as ed
+        import enemy_model as em
+        import faxanadu_maps as fm
+        import faxanadu_rom as fr
+        import faxanadu_sprites as fs
+        import hatari_shot as hs
+        import st_convert as sc
+
+        rom = fr.Rom(ROM)
+        pal = fm.area(rom, 0).palette_index
+        plan = sc.plan_for_set(rom, pal)
+        palettes = sc.sprite_palettes(rom, pal)
+        for screen, hero in ((8, "16,144"), (4, "240,144"), (5, "240,144")):
+            with self.subTest(screen=screen):
+                ram, word, log = self.run_scenario(["ALL=1", "AREA=0", f"SCREEN={screen}", f"HERO={hero},0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], 260, "shots_enemy")
+                n = word("en_counter")
+                rows = hs.decode_screen(ram, hs.video_base(log))
+                eng = self.enemy_engine(rom, screen, word)
+                states = []
+                for k in range(1, n + 1):
+                    eng.update_all()
+                    if k >= n - 1:
+                        states.append((copy.deepcopy(eng.sprites), k))
+                worst = []
+                for sprites, counter in states:
+                    expected = sc.expected_screen(rom, 0, screen, word("camera"), state=dict(hp=80, mp=80, experience=0, gold=0, seconds=0),
+                                                  hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 0, word("hero_frame"), bool(word("hero_flip"))))
+                    for sp in sprites:
+                        if sp.ent == em.NONE:
+                            continue
+                        app = fs.appearance(rom, ed.entity(rom, sp.ent)["appearance"] + em.appearance_offset(sp.ent, sp.phase, counter), "TILEINFO_ENTITY_ADDRS")
+                        layer = fs.sprite_layer(fs.place(app, sp.x, sp.y, em.flip_mask(sp.flags)), fs.entity_tiles(rom, sp.ent), palettes)
+                        for (x, line), c in layer.items():
+                            y = line - word("camera")
+                            if sc.ST_TOP <= y < 200 and sc.ST_LEFT <= x + sc.ST_LEFT < sc.ST_LEFT + 256:
+                                expected[y][x + sc.ST_LEFT] = plan.slot[c & 0x3F]
+                    hx, hy = word("hero_x") + sc.ST_LEFT, word("hero_y") + 32 - word("camera")        # (his own picture is tested elsewhere: not the box round him, nor what of it the NES wraps round to the left edge)
+                    bad = [(px, py) for py in range(200) for px in range(320) if rows[py][px] != expected[py][px] and not ((hx - 24 <= px < hx + 40 or hx - 280 <= px < hx - 216) and hy - 8 <= py < hy + 40)]
+                    worst.append(bad)
+                self.assertTrue(any(not bad for bad in worst), f"screen {screen}: {[len(b) for b in worst]} pixels differ, e.g. {worst[0][:5]}")
+
+    def test_the_enemies_move_as_the_model_does(self) -> None:
+        """Eolis screens 4 and 5 (two Zozuras each) and 8 (a Monodron): the hero stands still far from them (on 4 and 5 the capture is early, before a Zozura reaches him); after n updates (en_counter) every slot is
+        where `enemy_model.py` (checked against the game in tests/test_enemy.py) says it is, the hops and the random turns included."""
+        import enemy_data as ed
+        import enemy_model as em
+        import faxanadu_maps as fm
+        import faxanadu_rom as fr
+
+        rom = fr.Rom(ROM)
+        area = fm.area(rom, 0)
+        props = fm.block_properties(rom, area)
+        for screen, hero in ((8, "16,144"), (4, "240,144"), (5, "240,144")):
+            with self.subTest(screen=screen):
+                ids = fm.decode_screen(rom, area, screen)[:208]
+                free = next(b for b in range(256) if em.IMPASSABLE[props[b] & 15] == 0 and props[b] & 15 != em.LADDER)
+                ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", f"SCREEN={screen}", f"HERO={hero},0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], 360 if screen == 8 else 260, "shots_enemy")
+                n = word("en_counter")
+                self.assertGreater(n, 60)
+                eng = self.enemy_engine(rom, screen, word)
+                for _ in range(n):
+                    eng.update_all()
+                raw = word.raw("enemies", 8 * 28)
+                for i, s in enumerate(eng.sprites):
+                    r = raw[i * 28:(i + 1) * 28]
+                    got = (r[0], r[2], r[3], r[4], r[5], r[1], r[6], r[7], r[8], r[10], r[11], r[9], r[13], r[12])
+                    want = (s.ent, s.x, s.xf, s.y, s.yf, s.flags, s.phase, s.beh, s.arg1, s.d3, s.d2, s.internal, s.bxf, s.bxfull)
+                    self.assertEqual(got, want, f"slot {i} after {n} updates")
+
+    def test_the_sword_kills_the_zozuras_and_they_hurt_him(self) -> None:
+        """Eolis screen 4, a Long Sword (it reaches a Zozura, the dagger does not), the hero faces left and swings every 24 frames while two Zozuras walk
+        up: each dies of one blow and gives 30 experience (`ENEMY_EXPERIENCE`); a touch takes the damage (7) off the power, and nothing while he is
+        invincible (tests/test_enemy.py checks the rules against the game frame by frame)."""
+        pokes = []
+        for v in range(400, 1100, 24):
+            pokes += [(v, "b", 1), (v + 3, "b", 0)]
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=4", "HERO=200,144,0,255,1,0,1", "WORLD=1", "HUD=80,80,0,0,0"], pokes, 1100, "shots_fight")
+        state = word.raw("hud_state", 10)
+        power, exp = state[0], int.from_bytes(state[2:4], "big")
+        self.assertGreater(exp, 0)
+        self.assertEqual(exp % 30, 0, exp)
+        self.assertEqual((80 - power) % 7, 0, power)
+
+    def test_a_zozura_that_walks_into_him_takes_seven_power_and_he_is_invincible_for_a_while(self) -> None:
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=4", "HERO=200,144,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], 700, "shots_touch")
+        state = word.raw("hud_state", 10)
+        self.assertLess(state[0], 80)
+        self.assertEqual((80 - state[0]) % 7, 0, state[0])
 
     def test_up_at_a_building_door_goes_in_and_walking_off_the_side_comes_out(self) -> None:
         """Eolis screen 1, the hero at the first door (x 48, block 147): a building (the ROM, in jsnes: area 4, screen 7's layout, palette 24,
@@ -844,7 +958,7 @@ class ViewerTests(unittest.TestCase):
         import st_convert as sc
 
         rom = fr.Rom(ROM)
-        ram, word, log = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=8", "HERO=192,144,0,255,0,0,1", "WORLD=1"],
+        ram, word, log = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=8", "HERO=192,144,0,255,0,0,1", "WORLD=1", "VIEWER_DEFS=--defsym NO_ENEMIES=1"],
                                            [(599, "joy", 1), (602, "joy", 0)], 799, "shots_outside")
         self.assertEqual((word("cur_area"), word("cur_pal"), word("cur_screen")), (1, 6, 0))
         self.assertEqual((word("hero_x"), word("hero_y")), (16, 160))

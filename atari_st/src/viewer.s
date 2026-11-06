@@ -64,6 +64,8 @@ hide_cursor:
     .asciz "\033f"
 show_cursor:
     .asciz "\033e"
+loading_text:
+    .asciz "LOADING"
 no_package:
     .asciz "\r\nThe package file (A<area>P<palette>.DAT) is not next to the program.\r\nPress a key.\r\n"
     .even
@@ -217,6 +219,7 @@ start:
     lea cur_music(%pc), %a0
     move.w %d0, (%a0)
     bsr.w frame_init
+    bsr.w enemies_load
     .ifdef MENU
     bsr.w start_menu                        | start the game, or enter a mantra
     .endif
@@ -239,7 +242,10 @@ start:
     clr.l (%a0)+                            | (the spell's box: nothing, until it is drawn)
     clr.l (%a0)
     .ifndef NO_PHYSICS
+    bsr.w enemies_erase
+    bsr.w enemies_update
     bsr.w draw_spell
+    bsr.w draw_enemies
     .endif
     bsr.w draw_hero
     bsr.w present_swap
@@ -827,6 +833,7 @@ hero_respawn:
     moveq #0, %d0
     bsr.w sound_play_music                  | the death song ends
     lea hud_state(%pc), %a0
+    clr.b hero_hpl-hud_state(%a0)
     move.b #80, (%a0)+                      | Player_Spawn: power and magic 80
     move.b #80, (%a0)+
     moveq #0, %d1                           | a Novice has none
@@ -2066,6 +2073,7 @@ scroll_check:
 do_scroll:
     movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
     bsr.w spell_clear
+    bsr.w enemies_clear
     lea scroll_dir(%pc), %a0
     move.w %d1, (%a0)
     lea scroll_target(%pc), %a0
@@ -2115,6 +2123,7 @@ do_scroll:
 3:  clr.w 6(%a0)
     clr.w 8(%a0)
     bsr.w refresh_screens
+    bsr.w enemies_load
     lea scroll_dir(%pc), %a0
     clr.w (%a0)
     movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5-%a6
@@ -2127,6 +2136,7 @@ do_scroll:
 do_vscroll:
     movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
     bsr.w spell_clear
+    bsr.w enemies_clear
     move.w %d1, %d6                         | 1 down, 0 up
     lea vscroll_down(%pc), %a0
     move.w %d1, (%a0)
@@ -2221,6 +2231,7 @@ do_vscroll:
     lea cur_screen(%pc), %a0
     move.w scroll_target(%pc), (%a0)
     bsr.w refresh_screens
+    bsr.w enemies_load
     movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5-%a6
     rts
 
@@ -2457,6 +2468,7 @@ door_check:
 enter_screen:
     movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
     bsr.w spell_clear
+    bsr.w enemies_clear
     lea hero_x(%pc), %a0
     move.w %d1, %d2
     andi.w #15, %d2
@@ -2507,6 +2519,7 @@ enter_screen:
     moveq #15, %d7
 4:  move.w (%a0)+, (%a1)+
     dbra %d7, 4b
+    bsr.w enemies_load
     movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5-%a6
     rts
 
@@ -2629,6 +2642,7 @@ load_package:
     swap %d0
     addi.b #'0', %d0
     move.b %d0, 4(%a0)
+    bsr.w loading_show
     bsr.w sound_silence
     move.l old_vbl(%pc), %d2                | 0 before frame_init: TOS's vector is still the one in use
     beq.s 8f
@@ -2661,7 +2675,8 @@ load_package:
     addq.l #4, %sp
     movea.l pkg_buf(%pc), %a0
     bsr.w pkg_attach
-9:  move.l old_vbl(%pc), %d2
+9:  bsr.w loading_hide
+    move.l old_vbl(%pc), %d2
     beq.s 10f
     move.w %sr, -(%sp)
     ori.w #0x0700, %sr
@@ -2676,6 +2691,59 @@ load_package:
     move.w %d0, (%a0)
     .endif
 10: movem.l (%sp)+, %d0-%d2/%a0-%a2
+    rts
+
+| The word LOADING on black while a package is read from the disk (the screen on show; before the frame loop runs, TOS's own screen): colour 15 white,
+| the other colours black. loading_hide clears it again (and gives TOS's colours back when the frame loop is not running: an error message follows).
+| Keep every register.
+loading_show:
+    movem.l %d0-%d7/%a0-%a3, -(%sp)
+    bsr.s loading_screen
+    bsr.s loading_clear
+    movea.l #PALETTE, %a0
+    moveq #14, %d0
+1:  clr.w (%a0)+
+    dbra %d0, 1b
+    move.w #0x777, (%a0)
+    lea text_planes(%pc), %a0
+    moveq #3, %d0
+2:  move.w #-1, (%a0)+
+    dbra %d0, 2b
+    lea loading_text(%pc), %a0
+    moveq #0, %d6
+    move.w #128, %d0
+    move.w #96, %d1
+    bsr.w text_string
+    movem.l (%sp)+, %d0-%d7/%a0-%a3
+    rts
+
+loading_hide:
+    movem.l %d0-%d2/%a0-%a3, -(%sp)
+    move.l old_vbl(%pc), %d0
+    beq.s 2f                                | before the frame loop: TOS's screen is not cleared (the flag tables lie behind the package, in it)
+    bsr.s loading_screen
+    bsr.s loading_clear
+    bra.s 9f
+2:
+    movea.l #PALETTE, %a0
+    lea saved_palette(%pc), %a1
+    moveq #15, %d1
+1:  move.w (%a1)+, (%a0)+
+    dbra %d1, 1b
+9:  movem.l (%sp)+, %d0-%d2/%a0-%a3
+    rts
+
+loading_screen:                             | a3 = the screen on show
+    move.l old_vbl(%pc), %d0
+    bne.w shown_screen
+    movea.l orig_screen(%pc), %a3
+    rts
+
+loading_clear:                              | clears the screen a3
+    movea.l %a3, %a0
+    move.w #7999, %d0
+1:  clr.l (%a0)+
+    dbra %d0, 1b
     rts
 
 | a0 = a package (the block make_package writes): its parts' offsets become addresses in pkg_ptr.
@@ -2728,6 +2796,7 @@ hud_load_state:
     .include "frame.s"
     .include "password.s"
     .include "text.s"
+    .include "enemy.s"
 
     .section .rodata
 hud_layout:

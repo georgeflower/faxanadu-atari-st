@@ -230,3 +230,17 @@ def sprite_layer(sprites: list[Sprite], tiles: dict[int, bytes], palettes: list[
                 if px[y][x]:
                     layer[(s.x + x, s.y + 1 + y)] = pal[px[y][x]]
     return layer
+
+
+# ---- the other sprites (enemies and so on) ----------------------------------------------------------------------------------------------
+
+def entity_tiles(rom: Rom, ent: int) -> dict[int, bytes]:
+    """The tiles an entity brings (`CurrentSprite_LoadTilesInfo`): number within the entity -> 16 bytes. Entities 0-54 are in bank 6, 55 and up in
+    bank 7, each bank starting with the table of where its entities' tiles are; the frames of `appearance` count the tiles from the first of these."""
+    bank, index = (6, ent) if ent < 0x37 else (7, ent - 0x37)
+    head = rom.cpu(bank, 0x8000, 2)
+    table = 0x8000 + (head[0] | head[1] << 8)
+    raw = rom.cpu(bank, table + 2 * index, 2)
+    start = 0x8000 + (raw[0] | raw[1] << 8)
+    count = rom.byte("SPRITES_PPU_TILE_COUNTS", ent)
+    return {n: bytes(rom.cpu(bank, start + 16 * n, 16)) for n in range(count)}
