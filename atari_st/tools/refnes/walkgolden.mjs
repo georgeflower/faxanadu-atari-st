@@ -58,6 +58,7 @@ put(0xD4, 144); act([BTN.UP], 25);                                              
 put(0xDC, 144); act([BTN.UP], 25);                                                              // the same from the other side
 put(0xD4, 144); act([BTN.DOWN], 12);                                                            // down at the floor does nothing but step to it
 put(0xD0, 144); act([BTN.UP], 90); act([], 10);                                                 // up over the top of the ladder
+put(0x04, 144); act([], 3);
 act([BTN.B], 1); act([], 25);                       // an attack standing
 act([BTN.RIGHT], 4); act([BTN.RIGHT, BTN.B], 1); act([BTN.RIGHT], 25); act([], 5);   // an attack while walking
 act([BTN.A], 1); act([BTN.B], 1); act([], 45);      // an attack in the air
