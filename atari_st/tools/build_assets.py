@@ -64,6 +64,7 @@ def main() -> int:
     (args.out / "neighbours.bin").write_bytes(bytes(around))
     props = fm.block_properties(rom, a)
     (args.out / "blocking.bin").write_bytes(bytes(hp.IMPASSABLE[props[b] & 15] for b in blocks))   # 1 a block he cannot walk through
+    (args.out / "ladders.bin").write_bytes(bytes(hp.CLIMBABLE[props[b] & 15] for b in blocks))      # 1 a ladder
     pal_index = a.palette_index
     keys = ("hp", "mp", "experience", "gold", "seconds")
     start = dict(zip(keys, (int(v) for v in args.hud.split(","))))

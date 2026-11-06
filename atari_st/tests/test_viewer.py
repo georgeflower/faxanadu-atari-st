@@ -358,6 +358,56 @@ class ViewerTests(unittest.TestCase):
         self.assertTrue(air & 1, "jumping")
         self.assertEqual(state(800), (144, 0), "landed again")
 
+    def test_he_climbs_a_ladder_as_the_rom_does(self) -> None:
+        """Mist screen 0 has a ladder in column 2 (rows 10 to 12). He hangs on it without falling; the stick held up (poked) from VBL 600 to 640
+        lifts him 5/8 of a pixel a frame, which is where the Python model puts him after about 40 frames."""
+        import faxanadu_maps as fm
+        import faxanadu_rom as fr
+        import hatari_shot as hs
+        import hero_physics as hp
+
+        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=2", "SCREEN=0", "CAMERA=40", "HERO=32,170,0,255,0,0,1"], check=True, capture_output=True)
+        nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
+        sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
+        image = (ROOT / "build" / "viewer.bin").read_bytes()
+        work = ROOT / "build" / "shots_ladder"
+        work.mkdir(parents=True, exist_ok=True)
+        prg = ROOT / "build" / "VIEWER.PRG"
+        hatari = shutil.which("hatari")
+        (work / "c0.ini").write_text(f"savebin {work / 'ram0.bin'} 0 $80000\ncont\n", encoding="utf-8")
+        hs.run_hatari(hatari, TOS, prg, work, 500, "0", f"b VBL > 499 :once :file {work / 'c0.ini'}\n", None)
+        base = (work / "ram0.bin").read_bytes().find(image[sym["start"]:sym["start"] + 48]) - sym["start"]
+        self.assertGreater(base, 0)
+        joy = base + sym["input_state"] + 259
+        (work / "up.ini").write_text(f"memwrite ${joy:x} 0x01\ncont\n", encoding="utf-8")
+        (work / "stop.ini").write_text(f"memwrite ${joy:x} 0x00\ncont\n", encoding="utf-8")
+        script = ""
+        for v, f in ((599, "up.ini"), (639, "stop.ini")):
+            script += f"b VBL > {v} :once :file {work / f}\n"
+        for v in (590, 700):
+            (work / f"cap{v}.ini").write_text(f"savebin {work / f'ram{v}.bin'} 0 $80000\ncont\n", encoding="utf-8")
+            script += f"b VBL > {v} :once :file {work / f'cap{v}.ini'}\n"
+        hs.run_hatari(hatari, TOS, prg, work, 701, "0", script, None)
+
+        def word(v: int, name: str) -> int:
+            ram = (work / f"ram{v}.bin").read_bytes()
+            return int.from_bytes(ram[base + sym[name]:base + sym[name] + 2], "big", signed=True)
+
+        self.assertEqual((word(590, "hero_x"), word(590, "hero_y")), (32, 170), "hangs on the ladder")
+        rom = fr.Rom(ROM)
+        a = fm.area(rom, 2)
+        props = fm.block_properties(rom, a)
+        blocks = fm.decode_screen(rom, a, 0)
+        impassable = [hp.IMPASSABLE[props[b] & 15] for b in blocks]
+        ladder = [hp.CLIMBABLE[props[b] & 15] for b in blocks]
+        h = hp.Hero(x=32, y=170, flags=0x40)
+        reached = []
+        for _ in range(45):
+            hp.step(h, hp.JOY_UP, 0, impassable, ladder=ladder)
+            reached.append(h.y)
+        self.assertIn(word(700, "hero_y"), reached[36:44], f"y {word(700, 'hero_y')}: not what the ROM's climbing gives after about 40 frames")
+        self.assertLess(word(700, "hero_y"), 170)
+
 
 if __name__ == "__main__":
     unittest.main()

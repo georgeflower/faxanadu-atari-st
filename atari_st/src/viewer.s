@@ -378,7 +378,7 @@ restore_rect:
 | x in 8.8 fixed point (hero_x and hero_frac), an acceleration (hero_acc) that starts at $C0 when he starts walking and grows by 2 a frame
 | to $180 (rank group 0; 4, 6, 8 for the higher ranks: not here yet), a wall stops him on a block edge. Up and down are still the demo's.
 | Fields at hero_x: x 0, y 2, flip 4, frame 6, tick 8, frac 10, acc 12, moving 14, jump 16, air 18 (the ROM's Player_Flags bits: 1 jumping,
-| 2 holding to climb, 4 falling).
+| 2 holding to climb, 4 falling, 8 can climb, $10 climbing), climb 20, mtick 22.
 hero_step:
     movem.l %d0-%d4/%a0-%a2, -(%sp)
     lea input_state(%pc), %a0
@@ -387,11 +387,13 @@ hero_step:
     move.b %d0, %d4                         | the pad, kept (d0 becomes the horizontal choice)
     lea hero_x(%pc), %a1
     moveq #0, %d2                           | 1 when he moves
-    | Up or down held: the demo's way up and down (until the ladders are there), no gravity. Otherwise the ROM's jump, fall and landing.
+    | The ROM's ladders, jump, fall and landing. (The picture tests, NO_PHYSICS: up or down held moves him 2 pixels, nothing else.)
+    .ifdef NO_PHYSICS
     btst #3, %d0
     bne.s 50f
     btst #2, %d0
     bne.s 50f
+    .endif
     bsr.w hero_vertical
     bra.s 51f
 50: clr.w 16(%a1)
@@ -408,7 +410,29 @@ hero_step:
     tst.w 4(%a1)
     beq.s 52f
     moveq #1, %d0
-52:
+52: move.w 18(%a1), %d1                     | on the ground: walking counts the movement tick; up or down beside a ladder steps him to it
+    andi.w #5, %d1
+    bne.s 54f
+    move.w %d0, %d1
+    andi.w #3, %d1
+    beq.s 53f
+    addq.w #1, 22(%a1)
+    bra.s 54f
+53: andi.w #0x0C, %d0
+    beq.s 55f
+    btst #3, 19(%a1)
+    beq.s 55f
+    move.w (%a1), %d1
+    andi.w #15, %d1
+    beq.s 55f
+    addq.w #1, 22(%a1)
+    moveq #2, %d0                           | left when x & 15 < 8, else right
+    cmpi.w #8, %d1
+    bcs.s 54f
+    moveq #1, %d0
+    bra.s 54f
+55: moveq #0, %d0
+54:
     btst #0, %d0                            | right
     bne.s 20f
     btst #1, %d0                            | left
@@ -465,7 +489,8 @@ hero_step:
     andi.w #0xF0, %d1                       | a wall: the next block edge to the right
     addi.w #16, %d1
     move.w %d1, (%a1)
-40: btst #3, %d4                            | up (the demo's)
+40: .ifdef NO_PHYSICS
+    btst #3, %d4                            | up (the demo's)
     beq.s 43f
     subq.w #2, 2(%a1)
     moveq #1, %d2
@@ -473,6 +498,7 @@ hero_step:
     beq.s 44f
     addq.w #2, 2(%a1)
     moveq #1, %d2
+    .endif
 44: tst.w %d2                               | the limits only apply to a hero who moves (the start position may lie outside)
     beq.s 8f
     cmpi.w #HERO_Y_MIN, 2(%a1)
@@ -507,7 +533,14 @@ hero_accelerate:
     bne.s 1f
     move.w #0xC0, 12(%a1)
 1:  move.w #1, 14(%a1)
-    cmpi.w #0x180, 12(%a1)
+    move.w %d4, %d1
+    andi.w #0x0C, %d1                       | up or down beside a ladder: the standard speed, no acceleration
+    beq.s 3f
+    btst #3, 19(%a1)
+    beq.s 3f
+    move.w #0xC0, 12(%a1)
+    rts
+3:  cmpi.w #0x180, 12(%a1)
     bcc.s 2f
     addq.w #2, 12(%a1)
 2:  rts
@@ -644,12 +677,27 @@ hero_vertical:
     .ifdef NO_PHYSICS
     rts                                     | (the tests that put him anywhere and want him to stay: make viewer VIEWER_DEFS='--defsym NO_PHYSICS=1')
     .endif
-    cmpi.w #0x20, 16(%a1)
+    bsr.w check_on_ladder
+    btst #3, 19(%a1)                        | a ladder here, and up or down pressed: climbing
+    beq.s 60f
+    move.w %d4, %d0
+    andi.w #0x0C, %d0
+    beq.s 60f
+    ori.w #0x10, 18(%a1)
+    move.w (%a1), %d0
+    andi.w #15, %d0
+    bne.s 60f                               | not square on the ladder: hero_step steps him to it
+    btst #2, %d4
+    bne.w climb_down
+    bra.w climb_up
+60: cmpi.w #0x20, 16(%a1)
     bcs.s 1f
     andi.w #0xFFFE, 18(%a1)                 | the curve is over: not jumping
 1:  btst #0, 19(%a1)
     bne.w 7f                                | jumping
     bsr.w blocked_below
+    bne.s 3f
+    btst #3, 19(%a1)                        | no floor, but a ladder: he hangs on it
     bne.s 3f
     ori.w #4, 18(%a1)                       | nothing under his feet: falling
     addq.w #8, 2(%a1)
@@ -675,7 +723,9 @@ hero_vertical:
     bne.s 4f
     andi.w #0xFFFC, 18(%a1)
     rts
-4:  bsr.w blocked_above
+4:  btst #4, 19(%a1)                        | climbing: no jump
+    bne.s 9b
+    bsr.w blocked_above
     bne.s 9b                                | no room to jump
     ori.w #3, 18(%a1)
     clr.w 16(%a1)
@@ -719,6 +769,102 @@ hero_vertical:
     andi.w #0xF0, 2(%a1)                    | landed
     andi.w #0xFFFE, 18(%a1)
     rts
+
+| Player_CheckIfOnLadder: Can Climb (air bit 8) when a ladder block is at his head or his feet (x + 7; the next block too when x & 15 is 8);
+| without one Climbing (bit $10) goes too. a1 = hero_x. Clobbers d0-d3, a2.
+check_on_ladder:
+    move.w (%a1), %d3
+    addq.w #7, %d3
+    andi.w #0xFF, %d3
+    lsr.w #4, %d3                           | the column
+    move.w cur_screen(%pc), %d2
+    mulu.w #208, %d2
+    lea ladders(%pc), %a2
+    adda.l %d2, %a2
+    move.w 2(%a1), %d1
+    bsr.s ladder_at
+    tst.b %d0
+    bne.s 1f
+    move.w 2(%a1), %d1
+    addi.w #31, %d1
+    bsr.s ladder_at
+1:  tst.b %d0
+    beq.s 2f
+    ori.w #8, 18(%a1)
+    rts
+2:  andi.w #0xFFE7, 18(%a1)                 | no ladder: not Can Climb, not Climbing
+    rts
+
+| d1 = a pixel line, d3 = the column, a2 = this screen's ladder flags: a ladder there (or in the next column when x & 15 is 8)? d0 = result.
+ladder_at:
+    andi.w #0xFF, %d1
+    lsr.w #4, %d1
+    lsl.w #4, %d1
+    add.w %d3, %d1
+    moveq #0, %d0
+    cmpi.w #208, %d1
+    bge.s 1f
+    or.b (%a2,%d1.w), %d0
+1:  tst.b %d0
+    bne.s 3f
+    move.w (%a1), %d2
+    andi.w #15, %d2
+    cmpi.w #8, %d2
+    bne.s 3f
+    addq.w #1, %d1
+    cmpi.w #208, %d1
+    bge.s 3f
+    or.b (%a2,%d1.w), %d0
+3:  rts
+
+| Player_CheckHandleClimbUp (5/8 of a pixel a frame; the scroll to the screen above if he climbs over the top) and ClimbDown (3/4).
+climb_up:
+    andi.w #0xDA, 18(%a1)
+    bsr.w blocked_above
+    bne.s 9f
+    addq.w #1, 22(%a1)
+    move.w 20(%a1), %d0
+    subi.w #0xA0, %d0
+    smi %d1                                 | borrowed: he moves a pixel
+    andi.w #0xFF, %d0
+    move.w %d0, 20(%a1)
+    tst.b %d1
+    beq.s 9f
+    tst.w 2(%a1)
+    bne.s 8f
+    moveq #2, %d1                           | over the top
+    bsr.w neighbour_of
+    cmpi.b #0xFF, %d0
+    beq.s 9f
+    lea vscroll_req(%pc), %a0
+    move.w #2, (%a0)
+    rts
+8:  subq.w #1, 2(%a1)
+9:  rts
+
+climb_down:
+    andi.w #0xDA, 18(%a1)
+    bsr.w blocked_below
+    bne.s 9f
+    addq.w #1, 22(%a1)
+    move.w 20(%a1), %d0
+    addi.w #0xC0, %d0
+    move.w %d0, %d1
+    lsr.w #8, %d1                           | the carry: a pixel
+    andi.w #0xFF, %d0
+    move.w %d0, 20(%a1)
+    add.w %d1, 2(%a1)
+    cmpi.w #0xC1, 2(%a1)
+    bcs.s 9f
+    moveq #3, %d1
+    bsr.w neighbour_of
+    cmpi.b #0xFF, %d0
+    beq.s 8f
+    lea vscroll_req(%pc), %a0
+    move.w #3, (%a0)
+    rts
+8:  move.w #0xC0, 2(%a1)
+9:  rts
 
 | Draws the hero in the pose his state says, into screen a4, and notes the rectangle in this screen's slot.
 draw_hero:
@@ -904,7 +1050,10 @@ scroll_check:
     andi.w #0xFF, %d0
     bsr.w do_scroll                         | d0 = the screen scrolled to, d1 = 1 right, 0 left
     bra.s 5f
-4:  btst #3, %d0                            | up
+4:  .ifndef NO_PHYSICS
+    bra.s 5f                                | (up and down scroll through hero_vertical)
+    .endif
+    btst #3, %d0                            | up
     beq.s 6f
     move.w hero_y(%pc), %d1
     cmpi.w #HERO_Y_MIN, %d1
@@ -1289,6 +1438,8 @@ neighbours:
     .incbin "neighbours.bin"
 blocking:
     .incbin "blocking.bin"
+ladders:
+    .incbin "ladders.bin"
     .even
 block_index:
     .incbin "block_index.bin"
@@ -1349,7 +1500,11 @@ hero_moving:
 hero_jump:
     .word 0                                 | Player_JumpCurveIndex
 hero_air:
-    .word 0                                 | Player_Flags: 1 jumping, 2 holding to climb, 4 falling
+    .word 0                                 | Player_Flags: 1 jumping, 2 holding to climb, 4 falling, 8 can climb, $10 climbing
+hero_climb:
+    .word 0                                 | Player_ClimbFlySpeedModifier: the fractions of a pixel the climbing adds up
+hero_mtick:
+    .word 0                                 | Player_MovementTick (walking, climbing; the animation will use it)
 vscroll_req:
     .word 0                                 | 2 or 3: scroll_check is to scroll to the screen above or below
 jump_curve:
