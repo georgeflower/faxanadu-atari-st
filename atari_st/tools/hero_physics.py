@@ -1,8 +1,8 @@
 """The hero's movement as the ROM does it, in Python: the reference the ST code is checked against (golden runs from the jsnes harness,
 `tools/refnes/walkgolden.mjs`). Positions are 8.8 fixed point: `x` (the game's Player_PosX_Block) and `frac` (Player_PosX_Frac).
 
-Read from `Player_CheckHandleJump`, `Player_TryMoveRight/Left`, `Player_UpdateAcceleration`, `Player_CheckIfPassable`, the `Area_CanPlayerMove*`
-routines and `Player_HandleVertLadderOrJump` / `Player_UpdateClimbOrJump` (jumping, falling, landing). Not here yet: ladders, knockback, flying, the
+Read from `Player_CheckHandleVertMovement`, `Player_CheckIfOnLadder`, `Player_CheckHandleClimbUp/Down`, `Player_CheckHandleJump`, `Player_TryMoveRight/Left`, `Player_UpdateAcceleration`, `Player_CheckIfPassable`, the `Area_CanPlayerMove*`
+routines and `Player_HandleVertLadderOrJump` / `Player_UpdateClimbOrJump` (jumping, falling, landing). Not here yet: wing boots, knockback, flying, the
 screen edges' neighbour columns (the hero is taken as free to move there; the caller sees `edge` when he has walked off), crouching. One ROM quirk is
 left out: `Player_HandleVertLadderOrJump` loads A instead of X before its down check, so with the hero in the top left corner of a screen it checks
 the wrong side.
@@ -12,10 +12,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 IMPASSABLE = (0, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0)     # BLOCK_PROPERTY_IMPASSABLE_MAP, by block property
+CLIMBABLE = tuple(int(p in (2, 10)) for p in range(16))            # Area_IsBlockClimbable: the block properties 2 and 10 are ladders
 ACCELERATION_DELTA = (2, 4, 6, 8)                                  # PLAYER_ACCELERATION_DELTA_BY_RANK_GROUP
 
 JOY_RIGHT, JOY_LEFT, JOY_DOWN, JOY_UP = 1, 2, 4, 8                 # the NES pad bits (Joy1_ButtonMask)
-FLAG_JUMPING, FLAG_HOLDING, FLAG_FALLING, FLAG_MOVING, FLAG_RIGHT = 0x01, 0x02, 0x04, 0x20, 0x40     # Player_Flags
+FLAG_JUMPING, FLAG_HOLDING, FLAG_FALLING, FLAG_CAN_CLIMB, FLAG_CLIMBING, FLAG_MOVING, FLAG_RIGHT = 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40     # Player_Flags
 BUTTON_A = 0x80                                                    # in Joy1_ChangedButtonMask: A was pressed this frame
 
 # PLAYER_JUMP_CURVE: how far up (index < 16) or down (index >= 16) the hero moves each frame of a jump
@@ -33,6 +34,7 @@ class Hero:
     tick: int = 0         # Player_MovementTick
     title: int = 0        # PlayerTitle (rank): the acceleration steps by rank group title >> 2
     jump: int = 0         # Player_JumpCurveIndex
+    climb: int = 0        # Player_ClimbFlySpeedModifier: the fraction of a pixel the climbing down adds up
 
 
 def blocked(impassable: list[int], col: int, row: int) -> int:
@@ -49,6 +51,9 @@ def column_blocked(impassable: list[int], pixel_x: int, y: int) -> int:
 
 
 def update_acceleration(h: Hero, joy: int) -> None:
+    if joy & (JOY_UP | JOY_DOWN) and h.flags & FLAG_CAN_CLIMB:       # stepping to a ladder: the standard speed, no acceleration
+        h.acc = 0xC0
+        return
     if h.acc >= 0x180:
         return
     h.acc += ACCELERATION_DELTA[(h.title >> 2) & 3]
@@ -97,6 +102,11 @@ def walk_step(h: Hero, joy: int, impassable: list[int]) -> str | None:
         if joy & JOY_RIGHT:
             return try_move_right(h, joy, impassable)
         return try_move_left(h, joy, impassable)
+    if joy & (JOY_UP | JOY_DOWN) and h.x & 15 and h.flags & FLAG_CAN_CLIMB:       # up or down on a ladder when not on it: step to it
+        h.tick = (h.tick + 1) & 0xFF
+        if h.x & 15 < 8:
+            return try_move_left(h, joy, impassable)
+        return try_move_right(h, joy, impassable)
     h.flags &= ~FLAG_MOVING & 0xFF
     return None
 
@@ -138,31 +148,68 @@ def blocked_above(h: Hero, impassable: list[int], above_row: list[int] | None = 
     return result
 
 
-def vertical_step(h: Hero, joy: int, changed: int, impassable: list[int], *, screen_above: bool = False, screen_below: bool = False,
-                  above_row: list[int] | None = None, below_row: list[int] | None = None) -> str | None:
-    """Player_CheckHandleVertMovement for a hero who is not on a ladder: starts a jump on a new A press, follows the jump curve, lets him fall off
-    ledges (8 pixels a frame) and lands him on a block row. Returns 'scroll_up' / 'scroll_down' when he has moved over the edge to a neighbour
-    screen (his y is then set as the ROM does), else None."""
-    h.flags &= ~0x18 & 0xFF                                       # not on a ladder: Can Climb and Climbing stay clear
+def _climbable(ladder: list[int] | None, index: int) -> int:
+    return ladder[index] if ladder and 0 <= index < 208 else 0
+
+
+def check_on_ladder(h: Hero, ladder: list[int] | None) -> None:
+    """Player_CheckIfOnLadder: Can Climb is set when a ladder block is at his head or his feet (x + 7; the next block too when x & 15 is 8)."""
+    column = ((h.x + 7) & 0xFF) >> 4
+    found = 0
+    for y in (h.y, (h.y + 0x1F) & 0xFF):
+        index = (y >> 4) * 16 + column
+        found = _climbable(ladder, index) or (h.x & 15 == 8 and _climbable(ladder, index + 1))
+        if found:
+            break
+    h.flags &= ~FLAG_CAN_CLIMB & 0xFF
+    if found:
+        h.flags |= FLAG_CAN_CLIMB
+    else:
+        h.flags &= ~FLAG_CLIMBING & 0xFF
+
+
+def is_climbing(h: Hero) -> bool:
+    if not h.flags & FLAG_CAN_CLIMB:
+        return False
+    if h.x & 15 and h.flags & FLAG_FALLING:
+        return False
+    return bool(h.flags & FLAG_CLIMBING)
+
+
+def vertical_step(h: Hero, joy: int, changed: int, impassable: list[int], *, ladder: list[int] | None = None, screen_above: bool = False,
+                  screen_below: bool = False, above_row: list[int] | None = None, below_row: list[int] | None = None) -> str | None:
+    """Player_CheckHandleVertMovement (no wing boots): climbs a ladder with up and down; otherwise starts a jump on a new A press, follows the
+    jump curve, lets him fall off ledges (8 pixels a frame) and lands him on a block row. Returns 'scroll_up' / 'scroll_down' when he has moved
+    over the edge to a neighbour screen (his y is then set as the ROM does), else None."""
+    check_on_ladder(h, ladder)
+    if h.flags & FLAG_CAN_CLIMB and joy & (JOY_UP | JOY_DOWN):
+        h.flags |= FLAG_CLIMBING
+        if h.x & 15 == 0:
+            if joy & JOY_DOWN:
+                return _climb_down(h, impassable, screen_below, below_row)
+            return _climb_up(h, impassable, screen_above, above_row)
     if h.jump >= 0x20:
         h.flags &= ~FLAG_JUMPING & 0xFF
     if not h.flags & FLAG_JUMPING:
-        if not blocked_below(h, impassable, below_row):             # nothing under his feet: he falls
+        if not blocked_below(h, impassable, below_row):
             h.flags |= FLAG_FALLING
-            h.y = (h.y + 8) & 0xFF
-            if h.y >= 0xC1:
-                if screen_below:
-                    h.y = 0
-                    return "scroll_down"
-                h.y = 0xC0
-                h.flags &= ~FLAG_FALLING & 0xFF
+            if not h.flags & FLAG_CAN_CLIMB:                        # nothing under his feet and no ladder: he falls
+                h.y = (h.y + 8) & 0xFF
+                if h.y >= 0xC1:
+                    if screen_below:
+                        h.y = 0
+                        return "scroll_down"
+                    h.y = 0xC0
+                    h.flags &= ~FLAG_FALLING & 0xFF
+                    return None
+                if blocked_below(h, impassable, below_row):
+                    h.y &= 0xF0
                 return None
-            if blocked_below(h, impassable, below_row):
-                h.y &= 0xF0
-            return None
-        h.flags &= ~FLAG_FALLING & 0xFF                             # standing: Player_GrabClimbLadderOrJump
+        h.flags &= ~FLAG_FALLING & 0xFF                             # standing or hanging on a ladder: Player_GrabClimbLadderOrJump
         if not changed & BUTTON_A:
             h.flags &= ~(FLAG_JUMPING | FLAG_HOLDING) & 0xFF
+            return None
+        if is_climbing(h):
             return None
         if blocked_above(h, impassable, above_row):
             return None
@@ -171,6 +218,39 @@ def vertical_step(h: Hero, joy: int, changed: int, impassable: list[int], *, scr
     else:
         h.flags &= ~FLAG_FALLING & 0xFF
     return _jump_frame(h, impassable, screen_above, above_row, below_row)
+
+
+def _climb_up(h: Hero, impassable: list[int], screen_above: bool, above_row: list[int] | None) -> str | None:
+    h.flags &= 0xDA
+    if blocked_above(h, impassable, above_row):
+        return None
+    h.tick = (h.tick + 1) & 0xFF
+    modifier = h.climb - 0xA0                                       # 5/8 of a pixel a frame (the ROM's comments have the wing boots the wrong way round)
+    borrow = modifier < 0
+    h.climb = modifier & 0xFF
+    if borrow and h.y == 0:                                         # over the top of the screen
+        if screen_above:
+            h.y = 0xC0
+            return "scroll_up"
+        return None
+    h.y -= borrow
+    return None
+
+
+def _climb_down(h: Hero, impassable: list[int], screen_below: bool, below_row: list[int] | None) -> str | None:
+    h.flags &= 0xDA
+    if blocked_below(h, impassable, below_row):
+        return None
+    h.tick = (h.tick + 1) & 0xFF
+    h.climb += 0xC0                                                 # three quarters of a pixel a frame
+    carry, h.climb = h.climb >> 8, h.climb & 0xFF
+    h.y = (h.y + carry) & 0xFF
+    if h.y >= 0xC1:
+        if screen_below:
+            h.y = 0
+            return "scroll_down"
+        h.y = 0xC0
+    return None
 
 
 def _jump_frame(h: Hero, impassable: list[int], screen_above: bool, above_row: list[int] | None, below_row: list[int] | None) -> str | None:
@@ -199,10 +279,10 @@ def _jump_frame(h: Hero, impassable: list[int], screen_above: bool, above_row: l
     return None
 
 
-def air_step(h: Hero, impassable: list[int]) -> str | None:
+def air_step(h: Hero, joy: int, impassable: list[int]) -> str | None:
     """Player_CheckHandleJump while he is in the air: he keeps going the way he was moving, he cannot turn."""
     if h.flags & FLAG_MOVING:
-        return try_move_right(h, 0, impassable) if h.flags & FLAG_RIGHT else try_move_left(h, 0, impassable)
+        return try_move_right(h, joy, impassable) if h.flags & FLAG_RIGHT else try_move_left(h, joy, impassable)
     return None
 
 
@@ -210,5 +290,5 @@ def step(h: Hero, joy: int, changed: int, impassable: list[int], **edges) -> str
     """One frame of the hero as GameLoop_UpdatePlayer runs it (without attack and ladders): the vertical part first, then the horizontal part."""
     event = vertical_step(h, joy, changed, impassable, **edges)
     if h.flags & (FLAG_JUMPING | FLAG_FALLING):
-        return air_step(h, impassable) or event
+        return air_step(h, joy, impassable) or event
     return walk_step(h, joy, impassable) or event

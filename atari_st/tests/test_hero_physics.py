@@ -33,6 +33,7 @@ class WalkingTests(unittest.TestCase):
                     title=first["title"], jump=first["jump"])
         jumps = 0
         patched = False
+        ladder = [0] * 208
         for n, f in enumerate(frames[1:], 1):
             joy = f["joy"]
             if f.get("set"):                                # the harness has put the hero somewhere; from the first time on the screen is changed too
@@ -43,14 +44,18 @@ class WalkingTests(unittest.TestCase):
                         impassable[index] = 1
                     for c in range(8, 12):
                         impassable[11 * 16 + c] = 0
-                h = hp.Hero(x=f["x"], frac=f["frac"], y=f["y"], acc=0, flags=f["flags"], tick=f["tick"], title=f["title"], jump=f["jump"])
+                if f.get("ladder"):
+                    for r in range(6, 11):
+                        ladder[r * 16 + 13] = 1
+                        impassable[r * 16 + 13] = 0
+                h = hp.Hero(x=f["x"], frac=f["frac"], y=f["y"], acc=0, flags=f["flags"], tick=f["tick"], title=f["title"], jump=f["jump"], climb=f["climb"])
                 continue
             if joy & 0x40:                                  # B: the attack is not modelled yet, the golden run goes on with it
                 break
             jumps += bool(f["flags"] & 1)
-            hp.step(h, joy, f["changed"], impassable)
-            got = (h.x, h.frac, h.y, h.acc, h.flags, h.tick, h.jump)
-            want = (f["x"], f["frac"], f["y"], f["acc"] | f["accU"] << 8, f["flags"], f["tick"], f["jump"])
+            hp.step(h, joy, f["changed"], impassable, ladder=ladder)
+            got = (h.x, h.frac, h.y, h.acc, h.flags, h.tick, h.jump, h.climb)
+            want = (f["x"], f["frac"], f["y"], f["acc"] | f["accU"] << 8, f["flags"], f["tick"], f["jump"], f["climb"])
             self.assertEqual(got, want, f"frame {n}, joy {joy}")
         self.assertGreater(jumps, 60)                       # both jumps were really checked
 
