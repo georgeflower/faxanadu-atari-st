@@ -8,6 +8,12 @@
     .include "assets.inc"
 
     | MUSIC=n plays song n (0 none, 1-16 as the NES numbers them) everywhere; without it every package plays its own (PKG_MUSIC).
+    .ifndef WINGS
+    .equ WINGS, -1                          | seconds of wing boots left at the start (-1: none); the W key puts them on
+    .endif
+    .ifndef TITLE
+    .equ TITLE, 0
+    .endif
     .ifndef KEYS
     .equ KEYS, 0x1FE                        | the keys and rings he has: bit n for door requirement n (there is no inventory yet; none is used up)
     .endif
@@ -425,6 +431,9 @@ restore_rect:
 | 2 holding to climb, 4 falling, 8 can climb, $10 climbing), climb 20, mtick 22, atk 24, atk timer 26, atk phase 28.
 hero_step:
     movem.l %d0-%d4/%a0-%a2, -(%sp)
+    .ifndef NO_PHYSICS
+    bsr.w wings_update
+    .endif
     lea input_state(%pc), %a0
     move.b IN_PAD(%a0), %d0
     moveq #0, %d4
@@ -447,6 +456,8 @@ hero_step:
     clr.w 18(%a1)
 51: move.w %d4, %d0                         | (the pad again, and no move yet: hero_vertical used d0 and d2)
     moveq #0, %d2
+    tst.w 36(%a1)
+    bpl.s 57f                               | wing boots on: he steers in the air as on the ground
     move.w 18(%a1), %d1                     | in the air (jumping or falling) he cannot turn: he goes on the way he went
     andi.w #5, %d1
     beq.s 52f
@@ -460,7 +471,7 @@ hero_step:
 52: move.w 18(%a1), %d1                     | on the ground: walking counts the movement tick; up or down beside a ladder steps him to it
     andi.w #5, %d1
     bne.s 54f
-    btst #7, 19(%a1)                        | attacking on the ground: he stands still
+57: btst #7, 19(%a1)                        | attacking on the ground: he stands still
     bne.s 55f
     move.w %d0, %d1
     andi.w #3, %d1
@@ -502,13 +513,20 @@ hero_step:
     lsr.w #8, %d1
     move.w %d1, (%a1)
     cmpi.w #240, %d1                        | the pixel 16 to the right lies on this screen
-    bge.w 40f
-    addi.w #16, %d1
+    blt.s 21f
+    moveq #1, %d1                           | no: the next screen's first column
+    bsr.w edge_blocked
+    bra.s 22f
+21: addi.w #16, %d1
     bsr.w column_blocked
-    beq.w 40f
+22: beq.w 40f
     andi.w #0xF0, (%a1)                     | a wall: he stops on the block's edge
     bra.w 40f
 30: moveq #1, %d2
+    lea hero_wall(%pc), %a2
+    clr.w (%a2)                             | (a wall in the next screen's last column sets it again)
+    lea hero_off(%pc), %a2
+    clr.w (%a2)
     bsr.w hero_accelerate
     clr.w 4(%a1)                            | facing left: the flip bit is clear
     move.w (%a1), %d1
@@ -521,13 +539,15 @@ hero_step:
     andi.w #0xFF, %d3
     move.w %d3, 10(%a1)
     clr.w (%a1)
-    bra.w 40f
+    lea hero_off(%pc), %a2
+    move.w #1, (%a2)                        | (the ROM scrolls on this step, not when x reaches 0)
+    bra.w 32f
 31: move.w %d1, %d3
     andi.w #0xFF, %d3
     move.w %d3, 10(%a1)
     lsr.w #8, %d1
     move.w %d1, (%a1)
-    beq.w 40f
+    beq.w 32f
     subq.w #1, %d1                          | the pixel to the left
     bsr.w column_blocked
     beq.w 40f
@@ -538,6 +558,12 @@ hero_step:
     andi.w #0xF0, %d1                       | a wall: the next block edge to the right
     addi.w #16, %d1
     move.w %d1, (%a1)
+    bra.w 40f
+32: moveq #0, %d1                           | at x 0: the last column of the screen to the left
+    bsr.w edge_blocked
+    beq.w 40f
+    lea hero_wall(%pc), %a2
+    move.w #1, (%a2)                        | blocked: he stays, scroll_check does not scroll
 40: .ifdef NO_PHYSICS
     btst #3, %d4                            | up (the demo's)
     beq.s 43f
@@ -579,6 +605,43 @@ hero_step:
     movem.l (%sp)+, %d0-%d4/%a0-%a2
     rts
 
+| Game_DecWingBootsDuration: the seconds of wing boots left (hero_wings, -1 none) go down once every 64 frames and the boots are gone when they
+| pass 0. The W key puts them on for the rank's time (TITLE_TO_WINGBOOTS_DURATION) until there are items. Clobbers nothing.
+wings_update:
+    movem.l %d0-%d1/%a0, -(%sp)
+    moveq #0, %d1
+    lea input_state+IN_KEYS+0x11(%pc), %a0  | W
+    tst.b (%a0)
+    beq.s 1f
+    moveq #1, %d1
+1:  lea wings_key(%pc), %a0
+    move.w (%a0), %d0                       | down at the last frame?
+    move.w %d1, (%a0)
+    tst.w %d0
+    bne.s 2f
+    tst.w %d1
+    beq.s 2f
+    lea hero_title(%pc), %a0                | a new press: on for the rank's time
+    move.w (%a0), %d0
+    lsr.w #2, %d0
+    andi.w #3, %d0
+    lea wings_time(%pc), %a0
+    moveq #0, %d1
+    move.b (%a0,%d0.w), %d1
+    lea hero_wings(%pc), %a0
+    move.w %d1, (%a0)
+2:  lea wings_clock(%pc), %a0
+    addq.w #1, (%a0)
+    move.w (%a0), %d0
+    andi.w #0x3F, %d0
+    bne.s 9f
+    lea hero_wings(%pc), %a0
+    tst.w (%a0)
+    bmi.s 9f
+    subq.w #1, (%a0)
+9:  movem.l (%sp)+, %d0-%d1/%a0
+    rts
+
 | Player_GetBodySpriteFrameOffset: the pose from his state. 3 in the air (jumping), 4 (the ROM's frame 7) climbing, else the walk frames 0, 1, 2, 1
 | by the movement tick (every 8 ticks the next) while he walks and 0 standing. a1 = hero_x. Clobbers d0-d2.
 hero_pose:
@@ -601,7 +664,13 @@ hero_pose:
     beq.s 9f                                | (falling off the ladder is not climbing)
 1:  btst #7, %d0
     bne.s 3f
-    moveq #0, %d1
+    tst.w 36(%a1)
+    bmi.s 4f
+    btst #7, %d4
+    beq.s 4f
+    moveq #3, %d1                           | wing boots and A held: the pose in the air
+    bra.s 9f
+4:  moveq #0, %d1
     tst.w 14(%a1)
     beq.s 9f                                | not walking
     move.w 22(%a1), %d2
@@ -671,7 +740,13 @@ hero_accelerate:
     rts
 3:  cmpi.w #0x180, 12(%a1)
     bcc.s 2f
-    addq.w #2, 12(%a1)
+    move.w hero_title(%pc), %d1
+    lsr.w #2, %d1
+    andi.w #3, %d1
+    lea acc_delta(%pc), %a2
+    moveq #0, %d0
+    move.b (%a2,%d1.w), %d0                 | PLAYER_ACCELERATION_DELTA_BY_RANK_GROUP: 2, 4, 6, 8 by title >> 2
+    add.w %d0, 12(%a1)
 2:  rts
 
 | d1 = a pixel x on the screen: is there a block he cannot walk through in that column, at his height (the rows his 32 lines touch)?
@@ -683,6 +758,7 @@ column_blocked:
     movea.l pkg_ptr+PKG_BLOCKING(%pc), %a2
     adda.w %d2, %a2                         | this screen's 13 rows of 16 flags
     lsr.w #4, %d1                           | the column
+column_rows:                                | a2 = a screen's flags, d1 = a column of it
     move.w hero_y(%pc), %d2
     move.w %d2, -(%sp)
     lsr.w #4, %d2
@@ -705,6 +781,25 @@ column_blocked:
     or.b (%a2,%d2.w), %d0
 3:  tst.b %d0
     rts
+
+| d1 = 0 left, 1 right: is the neighbour screen's edge column (its last, its first) blocked at his height? (`LastColumnLeftScreen`,
+| `FirstColumnInRightScreen`; with no neighbour the column is empty.) Out: d0 and Z (Z: free). Clobbers d1-d3, a2.
+edge_blocked:
+    move.w %d1, %d3
+    bsr.w neighbour_of
+    cmpi.b #0xFF, %d0
+    bne.s 1f
+    moveq #0, %d0
+    rts
+1:  andi.w #0xFF, %d0
+    mulu.w #208, %d0
+    movea.l pkg_ptr+PKG_BLOCKING(%pc), %a2
+    adda.w %d0, %a2
+    moveq #15, %d1
+    tst.w %d3
+    beq.s 2f
+    moveq #0, %d1
+2:  bra.w column_rows
 
 | d1 = 0 left, 1 right, 2 above, 3 below. Out: d0 = the neighbour's number in the table, $FF for none. Clobbers d0, a2.
 neighbour_of:
@@ -807,7 +902,16 @@ hero_vertical:
     rts                                     | (the tests that put him anywhere and want him to stay: make viewer VIEWER_DEFS='--defsym NO_PHYSICS=1')
     .endif
     bsr.w check_on_ladder
-    btst #3, 19(%a1)                        | a ladder here, and up or down pressed: climbing
+    tst.w 36(%a1)
+    bmi.s 61f
+    btst #7, %d4
+    beq.s 61f
+    btst #2, %d4                            | wing boots and A held: down and up fly, ladder or not
+    bne.w climb_down
+    btst #3, %d4
+    bne.w climb_up
+    bra.s 60f
+61: btst #3, 19(%a1)                        | a ladder here, and up or down pressed: climbing
     beq.s 60f
     move.w %d4, %d0
     andi.w #0x0C, %d0
@@ -828,8 +932,14 @@ hero_vertical:
     bne.s 3f
     btst #3, 19(%a1)                        | no floor, but a ladder: he hangs on it
     bne.s 3f
-    ori.w #4, 18(%a1)                       | nothing under his feet: falling
-    addq.w #8, 2(%a1)
+    ori.w #4, 18(%a1)                       | nothing under his feet: falling (gliding a pixel a frame on wings with A held)
+    moveq #8, %d0
+    tst.w 36(%a1)
+    bmi.s 62f
+    btst #7, %d4
+    beq.s 62f
+    moveq #1, %d0
+62: add.w %d0, 2(%a1)
     cmpi.w #0xC1, 2(%a1)
     bcs.s 2f
     moveq #3, %d1                           | the bottom of the screen
@@ -946,18 +1056,22 @@ ladder_at:
     or.b (%a2,%d1.w), %d0
 3:  rts
 
-| Player_CheckHandleClimbUp (5/8 of a pixel a frame; the scroll to the screen above if he climbs over the top) and ClimbDown (3/4).
+| Player_CheckHandleClimbUp (5/8 of a pixel a frame, with wing boots a whole one; the scroll to the screen above if he climbs over the top) and
+| ClimbDown (3/4, with wing boots 1 1/2).
 climb_up:
     andi.w #0xDA, 18(%a1)
     bsr.w blocked_above
     bne.s 9f
     addq.w #1, 22(%a1)
+    st %d1                                  | wing boots on: a pixel every frame
+    tst.w 36(%a1)
+    bpl.s 5f
     move.w 20(%a1), %d0
     subi.w #0xA0, %d0
     smi %d1                                 | borrowed: he moves a pixel
     andi.w #0xFF, %d0
     move.w %d0, 20(%a1)
-    tst.b %d1
+5:  tst.b %d1
     beq.s 9f
     tst.w 2(%a1)
     bne.s 8f
@@ -978,11 +1092,17 @@ climb_down:
     addq.w #1, 22(%a1)
     move.w 20(%a1), %d0
     addi.w #0xC0, %d0
-    move.w %d0, %d1
+    moveq #0, %d2
+    tst.w 36(%a1)
+    bmi.s 5f
+    subi.w #0x40, %d0                       | wing boots on: 1 1/2 pixels a frame (a pixel and 1/2)
+    moveq #1, %d2
+5:  move.w %d0, %d1
     lsr.w #8, %d1                           | the carry: a pixel
     andi.w #0xFF, %d0
     move.w %d0, 20(%a1)
     add.w %d1, 2(%a1)
+    add.w %d2, 2(%a1)
     cmpi.w #0xC1, 2(%a1)
     bcs.s 9f
     moveq #3, %d1
@@ -1173,6 +1293,12 @@ scroll_check:
     beq.s 4f
     cmpi.w #HERO_X_MIN, %d1
     bgt.s 4f
+    lea hero_wall(%pc), %a0
+    tst.w (%a0)
+    bne.s 4f
+    lea hero_off(%pc), %a0
+    tst.w (%a0)
+    beq.s 4f
     moveq #0, %d1
 2:  moveq #0, %d0
     move.w cur_screen(%pc), %d0
@@ -1958,6 +2084,22 @@ hero_atk_timer:
     .word 0                                 | Player_AttackPhaseTimer
 hero_atk_phase:
     .word 0                                 | Player_AttackPhaseAnimFrame
+hero_off:
+    .word 0                                 | the left step ran off x 0 (the ROM scrolls then)
+hero_wall:
+    .word 0                                 | a wall in the next screen's last column holds him at x 0
+hero_title:
+    .word TITLE                             | PlayerTitle (the rank): the walking acceleration steps by its group; TITLE=n sets it (no experience yet)
+hero_wings:
+    .word WINGS                             | seconds of wing boots left (Player_StatusFlag bit 7 is "this is 0 or more"); -1 none
+wings_key:
+    .word 0                                 | the W key was down at the last frame
+wings_clock:
+    .word 0                                 | frames, counted for the seconds
+wings_time:
+    .byte 40, 30, 20, 10                    | TITLE_TO_WINGBOOTS_DURATION
+acc_delta:
+    .byte 2, 4, 6, 8
 attack_phases:
     .byte 8, 3, 8, 0                        | PLAYER_ATTACK_ANIMATION_PHASES: thrust out, wait, withdraw
 vscroll_req:

@@ -62,5 +62,26 @@ put(0x04, 144); act([], 3);
 act([BTN.B], 1); act([], 25);                       // an attack standing
 act([BTN.RIGHT], 4); act([BTN.RIGHT, BTN.B], 1); act([BTN.RIGHT], 25); act([], 5);   // an attack while walking
 act([BTN.A], 1); act([BTN.B], 1); act([], 45);      // an attack in the air
+g.wr("PlayerTitle", 12);                                                                        // a Champion: the acceleration steps by 8
+put(0x04, 144); act([BTN.RIGHT], 30); act([BTN.LEFT], 20); act([], 5);
+// The edge columns of the neighbour screens (LastColumnLeftScreen, FirstColumnInRightScreen: block ids a row): a wall in each at his height.
+const FC = g.addr("FirstColumnInRightScreen"), LC = g.addr("LastColumnLeftScreen");
+for (let r = 0; r < 16; r++) { g.nes.cpu.mem[FC + r] = air; g.nes.cpu.mem[LC + r] = air; }
+g.nes.cpu.mem[FC + 10] = ground; g.nes.cpu.mem[LC + 9] = ground;
+const cols = {right: Array.from({length: 16}, (_, r) => +(r === 10)), left: Array.from({length: 16}, (_, r) => +(r === 9))};
+put(0xE0, 144); frames[frames.length - 1].cols = cols; act([BTN.RIGHT], 30); act([], 3);       // stopped by the wall in the next screen's first column
+put(0x08, 144); act([BTN.LEFT], 30); act([], 3);                                              // the same on the left
+put(0x08, 48); act([BTN.LEFT], 30); act([], 3);                                               // in the air above the wall: free to leave (rows 3-4)
+// Wing boots on (Player_StatusFlag bit 7, the game sets it every frame while the duration is not $FF): flying up and down with A, gliding with A held,
+// turning in the air, a jump with the boots on.
+g.wr("DurationWingBoots", 0x28); g.wr("Player_StatusFlag", g.rd("Player_StatusFlag") | 0x80);
+put(0x10, 144); act([], 3); act([BTN.A, BTN.UP], 30); act([BTN.A], 15); act([BTN.A, BTN.DOWN], 12); act([BTN.A], 30); act([], 10);      // up, glide, down, glide, drop
+put(0x10, 144); act([], 3); act([BTN.A, BTN.UP], 20); act([BTN.A, BTN.UP, BTN.RIGHT], 12); act([BTN.A, BTN.RIGHT], 12); act([BTN.A, BTN.LEFT], 20); act([], 12);   // flying about
+put(0x10, 144); act([BTN.A, BTN.UP], 160); act([], 30);                                          // up against the top of the screen
+put(0x10, 144); act([BTN.A], 1); act([BTN.A, BTN.RIGHT], 12); act([BTN.A, BTN.LEFT], 12); act([BTN.A], 30); act([], 30);       // a jump with the boots on: steering in the air
+put(0x10, 144); act([BTN.A, BTN.DOWN], 10); act([], 3);                                         // down on the ground does nothing
+put(0xD0, 144); act([BTN.A, BTN.UP], 20); act([BTN.A, BTN.DOWN], 20); act([BTN.A], 20); act([], 5);   // by the ladder: flying, not climbing
+put(0xD0, 144); frames[frames.length - 1].ladder = 1; act([BTN.UP], 20); act([BTN.DOWN], 20); act([], 3);     // on the ladder without A: climbing, faster with the boots
+g.wr("Player_StatusFlag", g.rd("Player_StatusFlag") & 0x7F); g.wr("DurationWingBoots", 0xFF);
 fs.writeFileSync(out, JSON.stringify(frames));
 console.log(frames.length, "frames; start", JSON.stringify(frames[0]));

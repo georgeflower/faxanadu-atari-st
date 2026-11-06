@@ -107,6 +107,85 @@ class ViewerTests(unittest.TestCase):
         bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
 
+    def test_the_walking_acceleration_steps_by_the_rank_group(self) -> None:
+        """PlayerTitle 12 (rank group 3, Champion and up): the acceleration grows by 8 a frame instead of 2, as `hero_physics` (and the ROM)
+        has it, so after 20 frames of walking he is much further than a novice."""
+        import hero_physics as hp
+
+        reached = {}
+        for title in (0, 12):
+            ram, word, _ = self.run_scenario(["VIEWER_DEFS=--defsym TITLE=%d" % title], [(599, "joy", 8), (618, "joy", 0)], 699, "shots_rank")
+            h = hp.Hero(x=144, y=144, title=title)
+            free = [0] * 208
+            seen = []
+            for _ in range(24):
+                hp.walk_step(h, hp.JOY_RIGHT, free)
+                seen.append((h.x, h.frac))
+            self.assertIn((word("hero_x"), word("hero_frac")), seen[16:24], f"title {title}")
+            reached[title] = word("hero_x")
+        self.assertGreater(reached[12], reached[0])
+
+    def test_a_wall_in_the_next_screens_edge_column_stops_him_at_the_edge(self) -> None:
+        """Trunk screen 27 (rows 10-11 are open at both edges and the next screens, 62 on the right and 26 on the left, have a wall in their
+        edge column at those rows): he walks to the edge and stays on the screen (x 240 on the right, 0 on the left) as in the ROM
+        (`FirstColumnInRightScreen`, `LastColumnLeftScreen`) instead of scrolling."""
+        make = ["ALL=1", "AREA=1", "SCREEN=27"]
+        _, word, _ = self.run_scenario(make + ["HERO=200,160,0,255,0,0,1"], [(599, "joy", 8)], 799, "shots_edge_wall")
+        self.assertEqual((word("cur_screen"), word("hero_x")), (27, 240))
+        _, word, _ = self.run_scenario(make + ["HERO=40,160,0,255,0,0,1"], [(599, "joy", 4)], 799, "shots_edge_wall")
+        self.assertEqual((word("cur_screen"), word("hero_x")), (27, 0))
+
+    def test_a_jump_goes_on_after_the_scroll_to_the_next_screen(self) -> None:
+        """He walks three frames and jumps right off the edge of Eolis screen 1 (`tools/refnes/airscroll.mjs`): the ROM scrolls in the middle of the
+        jump and the jump stays where it was (curve index 18, y 112 for the whole scroll) and goes on when the screen has changed. Left: index 25, y 116."""
+        for start, stick, jump, y in ((224, 0x08, 18, 112), (24, 0x04, 25, 116)):
+            ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1", f"HERO={start},144,0,255,0,0,1"],
+                                             [(599, "joy", stick), (602, "space", 1), (603, "space", 0)], 650, "shots_air_scroll")
+            self.assertEqual((word("hero_jump"), word("hero_y")), (jump, y), f"stick {stick}: the jump is frozen during the scroll")
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1", "HERO=224,144,0,255,0,0,1"],
+                                         [(599, "joy", 0x08), (602, "space", 1), (603, "space", 0), (900, "joy", 0)], 1000, "shots_air_scroll")
+        self.assertEqual((word("cur_screen"), word("hero_y")), (8, 144), "on the next screen, landed")
+
+    def test_wing_boots_fly_up_and_down_glide_and_steer_in_the_air(self) -> None:
+        """With the boots on (WINGS=40 seconds) and A held (`tools/hero_physics.py` against the ROM in jsnes): up flies a pixel a frame, down a pixel
+        and a half, with A alone he glides down a pixel a frame (8 without A) and steers left and right in the air; he is in the pose of the jump.
+        Frames are counted with `wings_clock`, which counts the hero's steps."""
+        args = ["ALL=1", "AREA=0", "SCREEN=1", "HERO=16,144,0,255,0,0,1", "VIEWER_DEFS=--defsym WINGS=40"]
+
+        def span(pokes, stick):
+            """(frames, dy, dx) from 1 VBL after the pokes to 40 VBLs after, the hero put at x 16 by the pokes."""
+            first = self.run_scenario(args, pokes, 600, "shots_wings")
+            last = self.run_scenario(args, pokes, 640, "shots_wings")
+            return (last[1]("wings_clock") - first[1]("wings_clock"), last[1]("hero_y") - first[1]("hero_y"), last[1]("hero_x") - first[1]("hero_x"), last[1])
+
+        frames, dy, _, word = span([(599, "joy", 1), (599, "space", 1)], 1)
+        self.assertGreater(frames, 20)
+        self.assertEqual(dy, -frames, "up with A: a pixel a frame")
+        self.assertEqual(word("hero_frame"), 3, "the pose in the air")
+        frames, dy, _, _ = span([(599, "y", 16), (599, "joy", 2), (599, "space", 1)], 2)
+        self.assertIn(dy, (frames + frames // 2, frames + (frames + 1) // 2), "down with A: a pixel and a half a frame")
+        frames, dy, _, _ = span([(599, "y", 16), (599, "space", 1)], 0)
+        self.assertEqual(dy, frames, "A alone: gliding down a pixel a frame")
+        frames, dy, dx, _ = span([(599, "y", 16), (599, "joy", 8), (599, "space", 1)], 8)
+        self.assertEqual(dy, frames)
+        self.assertGreater(dx, 20, "walking right in the air")
+        frames, dy, dx, _ = span([(599, "y", 16), (599, "joy", 4), (599, "space", 1)], 4)
+        self.assertEqual(dy, frames)
+        self.assertLess(dx, -10, "and left (the hero stands at x 16: he stops at the edge of the screen)")
+        _, dy, _, _ = span([(599, "y", 16)], 0)
+        self.assertGreater(dy, 60, "without A he falls 8 pixels a frame")
+
+    def test_the_w_key_puts_the_wing_boots_on_for_the_ranks_time_and_they_run_out(self) -> None:
+        """No boots at the start; W gives the rank's time (title 0: 40 seconds, title 12: 10) and a second is 64 frames."""
+        _, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1"], [], 650, "shots_wings_key")
+        self.assertEqual(word("hero_wings"), -1)
+        _, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1"], [(599, "w", 1)], 650, "shots_wings_key")
+        self.assertIn(word("hero_wings"), (40, 39), "(the ROM too counts the second from the global frame counter)")
+        _, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1", "VIEWER_DEFS=--defsym TITLE=12"], [(599, "w", 1)], 650, "shots_wings_key")
+        self.assertIn(word("hero_wings"), (10, 9))
+        _, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1", "VIEWER_DEFS=--defsym TITLE=12"], [(599, "w", 1)], 800, "shots_wings_key")
+        self.assertIn(word("hero_wings"), (7, 6), "a second every 64 frames: 200 frames are 3 or 4 of them")
+
     def test_a_hud_change_during_play_reaches_both_screens(self) -> None:
         """The program is told through the debugger (poke hud_state, then hud_dirty) that the HUD changed; the HUD lines of both screens
         and of the clean background must show the new state."""
@@ -567,6 +646,12 @@ class ViewerTests(unittest.TestCase):
         for i, (vbl, what, value) in enumerate(pokes):
             if what == "joy":
                 text = f"memwrite ${base + sym['input_state'] + 259:x} 0x{value:02x}\ncont\n"
+            elif what == "space":                                      # the jump key
+                text = f"memwrite ${base + sym['input_state'] + 264 + 0x39:x} 0x{value:02x}\ncont\n"
+            elif what == "w":                                          # the W key (wing boots)
+                text = f"memwrite ${base + sym['input_state'] + 264 + 0x11:x} 0x{value:02x}\ncont\n"
+            elif what == "y":                                          # the hero's y (a word)
+                text = f"memwrite ${base + sym['hero_y']:x} 0x{value >> 8:02x} 0x{value & 255:02x}\ncont\n"
             else:
                 text = f"memwrite ${base + sym['hero_x']:x} 0x{value >> 8:02x} 0x{value & 255:02x}\ncont\n"
             (work / f"poke{i}.ini").write_text(text, encoding="utf-8")
