@@ -29,13 +29,30 @@ class WalkingTests(unittest.TestCase):
         props = fm.block_properties(rom, a)
         impassable = [hp.IMPASSABLE[props[b] & 15] for b in blocks]
         first = frames[0]
-        h = hp.Hero(x=first["x"], frac=first["frac"], y=first["y"], acc=first["acc"] | first["accU"] << 8, flags=first["flags"], tick=first["tick"], title=first["title"])
+        h = hp.Hero(x=first["x"], frac=first["frac"], y=first["y"], acc=first["acc"] | first["accU"] << 8, flags=first["flags"], tick=first["tick"],
+                    title=first["title"], jump=first["jump"])
+        jumps = 0
+        patched = False
         for n, f in enumerate(frames[1:], 1):
             joy = f["joy"]
-            hp.walk_step(h, joy, impassable)
-            got = (h.x, h.frac, h.acc, h.flags, h.tick)
-            want = (f["x"], f["frac"], f["acc"] | f["accU"] << 8, f["flags"], f["tick"])
+            if f.get("set"):                                # the harness has put the hero somewhere; from the first time on the screen is changed too
+                if not patched:
+                    patched = True
+                    ground, air = impassable[11 * 16], impassable[0]
+                    for index in [8 * 16 + 3, 8 * 16 + 4, 7 * 16 + 6, 7 * 16 + 7] + [12 * 16 + c for c in range(8, 12)]:
+                        impassable[index] = 1
+                    for c in range(8, 12):
+                        impassable[11 * 16 + c] = 0
+                h = hp.Hero(x=f["x"], frac=f["frac"], y=f["y"], acc=0, flags=f["flags"], tick=f["tick"], title=f["title"], jump=f["jump"])
+                continue
+            if joy & 0x40:                                  # B: the attack is not modelled yet, the golden run goes on with it
+                break
+            jumps += bool(f["flags"] & 1)
+            hp.step(h, joy, f["changed"], impassable)
+            got = (h.x, h.frac, h.y, h.acc, h.flags, h.tick, h.jump)
+            want = (f["x"], f["frac"], f["y"], f["acc"] | f["accU"] << 8, f["flags"], f["tick"], f["jump"])
             self.assertEqual(got, want, f"frame {n}, joy {joy}")
+        self.assertGreater(jumps, 60)                       # both jumps were really checked
 
 
 if __name__ == "__main__":
