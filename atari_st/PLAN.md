@@ -34,7 +34,7 @@ The numbers are the order I intend to work in. A step is done when its tests pas
 - C2. **Collision with blocks**: block properties (0 air, 1 solid, 2 ladder, 3 door, 4/9/13 pass-behind, 10-13 screen transitions, the rest to read), the hero's 16x32 box, ledges.
 - C3. **Jump and fall**: done. The arc, the fall, landing and ceilings match the harness frame by frame; the in-air pose and the screen change in the air too.
 - C4. **Ladders and wing boots**: done (model, golden runs, viewer tests); the game has no stairs.
-- C5. **Attack and damage** (the swing with its three poses and the arm piece, being hit, knock-back, invincibility and the death animation are done, with debug keys until there are enemies; the weapon's place and reach are computed for the enemy code; open: magic (needs an inventory and the spell sprites), the death message and spawn point).
+- C5. **Attack and damage** (the swing with its three poses and the arm piece, being hit, knock-back, invincibility and the death animation are done, with debug keys until there are enemies; the weapon's place and reach are computed for the enemy code; the death sound, song, gold and experience reset are done; magic is done (the five spells fly, stop on walls and are drawn, with the M key to choose one until there is an inventory); open: what enemies do to a spell (D), the death message box and the temple spawn point, which need the text engine and buildings of E).
 - Each of C1-C5 gets a "golden run": a recorded button sequence from the harness and the hero's x, y and frame per tick; the ST code (run under Hatari or an emulator in the tests) must reproduce it.
 
 ### D. Enemies, items, bosses

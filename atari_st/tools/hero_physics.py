@@ -2,10 +2,9 @@
 `tools/refnes/walkgolden.mjs`). Positions are 8.8 fixed point: `x` (the game's Player_PosX_Block) and `frac` (Player_PosX_Frac).
 
 Read from `Player_CheckHandleVertMovement`, `Player_CheckIfOnLadder`, `Player_CheckHandleClimbUp/Down`, `Player_CheckHandleJump`, `Player_TryMoveRight/Left`, `Player_UpdateAcceleration`, `Player_CheckIfPassable`, the `Area_CanPlayerMove*`
-routines and `Player_HandleVertLadderOrJump` / `Player_UpdateClimbOrJump` (jumping, falling, landing). Magic is not here (it needs an inventory). (There is no crouching
-in the game: body frame 3 is the pose in the air.) One ROM quirk is
-left out: `Player_HandleVertLadderOrJump` loads A instead of X before its down check, so with the hero in the top left corner of a screen it checks
-the wrong side.
+routines and `Player_HandleVertLadderOrJump` / `Player_UpdateClimbOrJump` (jumping, falling, landing). Magic is in `magic_model.py`. (There is no crouching
+in the game: body frame 3 is the pose in the air.) `Player_HandleVertLadderOrJump` loads A instead of X before its down check, so with a ladder
+in the top left corner of a screen it checks the wrong side; that cannot be seen (every outcome ends in the ladder grab), so it is not modelled.
 """
 from __future__ import annotations
 

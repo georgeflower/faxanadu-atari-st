@@ -50,10 +50,10 @@ def _ptr(rom: Rom, bank: int, table_addr: int, index: int) -> int:
     return 0x8000 + (raw[0] | (raw[1] << 8))
 
 
-def appearance(rom: Rom, index: int) -> Appearance:
-    """Frame `index` of `TILEINFO_PLAYER_ADDRS` (bank 7). The header is four bytes (rows-1 and columns-1 in the two nibbles,
+def appearance(rom: Rom, index: int, table: str = "TILEINFO_PLAYER_ADDRS") -> Appearance:
+    """Frame `index` of `TILEINFO_PLAYER_ADDRS` (bank 7; `table` TILEINFO_ENTITY_ADDRS for the spells and the other sprites). The header is four bytes (rows-1 and columns-1 in the two nibbles,
     x offset, y offset, pivot), then the cells; an empty cell is the single byte $FF, any other is a tile number and an attribute."""
-    addr = _ptr(rom, 7, rom.label("TILEINFO_PLAYER_ADDRS").addr, index)
+    addr = _ptr(rom, 7, rom.label(table).addr, index)
     head = rom.cpu(7, addr, 4)
     rows, cols = (head[0] >> 4) + 1, (head[0] & 15) + 1
     body = rom.cpu(7, addr + 4, 2 * rows * cols)
@@ -118,6 +118,16 @@ def pattern_tiles(rom: Rom, armor: int, shield: int, weapon: int) -> dict[int, b
     if shield < 3:
         tiles.update(_tiles(rom, SHIELD_FIRST_TILE, _tile_list(rom, "TILES_SHIELDS_ADDRS_INDEX", shield, 6), "TILES_SHIELDS_START"))
     return tiles
+
+
+COMMON_FIRST_TILE = 0x40        # `Sprites_LoadCommon` writes the common sprite tiles (80 of them: coins, spells, ...) to the pattern table at $0400
+COMMON_TILES = 80
+
+
+def common_tiles(rom: Rom) -> dict[int, bytes]:
+    """The common sprite tiles by pattern-table number (TILES_COMMON_START, bank 8)."""
+    start = _ptr(rom, 8, rom.label("TILES_COMMON_START_REF").addr, 0)
+    return {COMMON_FIRST_TILE + n: bytes(rom.cpu(8, start + 16 * n, 16)) for n in range(COMMON_TILES)}
 
 
 # ---- the frames ------------------------------------------------------------------------------------------------------

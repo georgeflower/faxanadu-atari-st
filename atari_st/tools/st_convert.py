@@ -202,6 +202,12 @@ def hud_state_bytes(state: dict) -> bytes:
             + bytes([state["seconds"], 0]))
 
 
+def title_table_bytes(rom: fr.Rom) -> bytes:
+    """PLAYER_TITLE_EXP_NEEDED then PLAYER_TITLE_GOLD (15 words each, big endian): what a rank starts a life with (Player_SetInitialExpAndGold)."""
+    words = [rom.word("PLAYER_TITLE_EXP_NEEDED", i) for i in range(15)] + [rom.word("PLAYER_TITLE_GOLD", i) for i in range(15)]
+    return b"".join(w.to_bytes(2, "big") for w in words)
+
+
 def hud_pixels(rom: fr.Rom, palette_index: int, plan: PalettePlan, state: dict | None = None) -> list[list[int]]:
     """The HUD's 32 lines of 256 pixels as slot numbers."""
     state = state or HUD_START
@@ -253,9 +259,11 @@ def hero_layer(rom: fr.Rom, hero: Hero, palette_index: int, plan: PalettePlan) -
     return {(x + ST_LEFT, line): plan.slot[c & 0x3F] for (x, line), c in layer.items()}
 
 
-def sprite_image(raw: bytes, hflip: bool, palette: list[int], plan: PalettePlan) -> bytes:
+def sprite_image(raw: bytes, hflip: bool, palette: list[int], plan: PalettePlan, vflip: bool = False) -> bytes:
     """One 8x8 sprite tile for the ST: 8 lines of mask and four plane bytes in the sprite palette (colour 0 is see-through)."""
     px = fs.tile_pixels(raw, hflip)
+    if vflip:
+        px = px[::-1]
     out = bytearray()
     for row in px:
         mask, planes = 0, [0, 0, 0, 0]
@@ -320,6 +328,41 @@ def hero_anim_assets(rom: fr.Rom, hero: Hero, palette_index: int, plan: PaletteP
                 entries.append((sp.x - ANIM_BASE + ST_LEFT, sp.y + 1 - ANIM_BASE, index[key]))
             x0 = min(e[0] for e in entries)
             y0 = min(e[1] for e in entries)
+            box = (x0, max(e[0] for e in entries) + 8, y0, max(e[1] for e in entries) + 8)
+            record = b"".join(v.to_bytes(2, "big", signed=True) for v in box)
+            for e in entries:
+                record += b"".join(v.to_bytes(2, "big", signed=True) for v in e)
+            records.append(record + b"\xff\xff")
+    offsets, at = [], 2 * len(records)
+    for record in records:
+        offsets.append(at)
+        at += len(record)
+    return b"".join(o.to_bytes(2, "big") for o in offsets) + b"".join(records), b"".join(images)
+
+
+MAGIC_FIRST_APPEARANCE, MAGIC_APPEARANCES = 0x95, 16      # the spells' pictures: Deluge 4, Thunder 2, Fire 2, Death 4, Tilte 4 (tools/magic_model.FIRST_APPEARANCE)
+
+
+def magic_anim_assets(rom: fr.Rom, palette_index: int, plan: PalettePlan) -> tuple[bytes, bytes]:
+    """(poses, images) for the spells, made like `hero_anim_assets`: 32 poses, pose = the appearance number - 0x95 + 16 * the flip bit (set when the
+    spell flies right and its tiles are mirrored), all x relative to the spell's x and y to its y (`Arg_DrawSprite_PosX/Y`, the HUD and the one-line
+    shift of the sprites in it), the tiles from the common sprite tiles, the colours from the sprite palettes of the palette set."""
+    tiles = fs.common_tiles(rom)
+    palettes = sprite_palettes(rom, palette_index)
+    images: list[bytes] = []
+    index: dict[tuple, int] = {}
+    records = []
+    for flip in (0, 0x40):
+        for n in range(MAGIC_APPEARANCES):
+            app = fs.appearance(rom, MAGIC_FIRST_APPEARANCE + n, "TILEINFO_ENTITY_ADDRS")
+            entries = []
+            for sp in fs.place(app, ANIM_BASE, ANIM_BASE, flip):
+                key = (sp.tile, sp.attr & 3, bool(sp.attr & 0x40), bool(sp.attr & 0x80))
+                if key not in index:
+                    index[key] = len(images)
+                    images.append(sprite_image(tiles.get(sp.tile, bytes(16)), key[2], palettes[key[1]], plan, key[3]))
+                entries.append((sp.x - ANIM_BASE + ST_LEFT, sp.y + 1 - ANIM_BASE, index[key]))
+            x0, y0 = min(e[0] for e in entries), min(e[1] for e in entries)
             box = (x0, max(e[0] for e in entries) + 8, y0, max(e[1] for e in entries) + 8)
             record = b"".join(v.to_bytes(2, "big", signed=True) for v in box)
             for e in entries:

@@ -81,7 +81,7 @@ def edge_table(rom: fr.Rom, a: fm.Area, ids: list[int], world: dict[int, list[in
 
 
 PACKAGE_PARTS = ("palette", "screens", "neighbours", "blocking", "ladders", "doors", "edges", "block_index", "blocks", "hud_tiles", "hud_partial",
-                 "hero_list", "hero_images", "hero_anim", "hero_anim_images", "hero_weapon")
+                 "hero_list", "hero_images", "hero_anim", "hero_anim_images", "hero_weapon", "magic_anim", "magic_images")
 HEADER_WORDS = ("door_count", "screen_count", "edge_count", "music")
 
 
@@ -146,6 +146,7 @@ def main() -> int:
     start = dict(zip(keys, (int(v) for v in args.hud.split(","))))
     second = dict(zip(keys, (int(v) for v in args.hud2.split(",")))) if args.hud2 else start
     (args.out / "hud_states.bin").write_bytes(sc.hud_state_bytes(start) + sc.hud_state_bytes(second))
+    (args.out / "title_table.bin").write_bytes(sc.title_table_bytes(rom))
     hero = sc.Hero(*[bool(v) if i == 6 else v for i, v in enumerate(int(t) for t in args.hero.split(","))])
 
     def package(area: int, pal_index: int, building: int | None = None) -> tuple[bytes, list[tuple], int]:
@@ -168,6 +169,7 @@ def main() -> int:
         plan, table, images = sc.build_area_blocks(rom, area, palette_index=pal_index, screens=screens, tiles_index=tiles_index)
         hero_list, hero_images = sc.hero_assets(rom, who, pal_index, plan, args.camera)
         anim, anim_images = sc.hero_anim_assets(rom, who, pal_index, plan)
+        magic, magic_images = sc.magic_anim_assets(rom, pal_index, plan)
         parts = {
             "palette": plan.words(), "screens": bytes(blocks), "neighbours": bytes(around),
             "blocking": bytes(hp.IMPASSABLE[props[b] & 15] for b in blocks),          # 1 a block he cannot walk through
@@ -175,7 +177,7 @@ def main() -> int:
             "doors": doors, "edges": edges, "block_index": b"".join(v.to_bytes(2, "big") for v in table), "blocks": b"".join(images),
             "hud_tiles": sc.hud_tile_images(rom, pal_index, plan, start["hp"], start["mp"]), "hud_partial": sc.hud_partial_images(rom, pal_index, plan),
             "hero_list": hero_list, "hero_images": hero_images, "hero_anim": anim, "hero_anim_images": anim_images,
-            "hero_weapon": sc.hero_weapon_assets(rom, who),
+            "hero_weapon": sc.hero_weapon_assets(rom, who), "magic_anim": magic, "magic_images": magic_images,
         }
         counts = dict(door_count=len(doors) // DOOR_BYTES, screen_count=len(screens), edge_count=len(edges) // EDGE_BYTES, music=music)
         return make_package(parts, counts), door_targets + edge_targets, len(images)

@@ -14,6 +14,9 @@
     .ifndef WINGS
     .equ WINGS, -1                          | seconds of wing boots left at the start (-1: none); the W key puts them on
     .endif
+    .ifndef MAGIC
+    .equ MAGIC, -1                          | the spell chosen at the start (0 Deluge, 1 Thunder, 2 Fire, 3 Death, 4 Tilte; -1 none); the M key chooses the next
+    .endif
     .ifndef TITLE
     .equ TITLE, 0
     .endif
@@ -224,9 +227,16 @@ start:
     bsr.w camera_follow                     | the window of the playfield follows him up and down
     lea rect_slots(%pc), %a0
     move.w slot_index(%pc), %d0
-    lsl.w #3, %d0
-    adda.w %d0, %a0                         | this screen's slot: where the hero was drawn in it
+    lsl.w #4, %d0
+    adda.w %d0, %a0                         | this screen's slot: where the hero and the spell were drawn in it
     bsr.w restore_rect
+    lea 8(%a0), %a0
+    bsr.w restore_rect
+    clr.l (%a0)+                            | (the spell's box: nothing, until it is drawn)
+    clr.l (%a0)
+    .ifndef NO_PHYSICS
+    bsr.w draw_spell
+    .endif
     bsr.w draw_hero
     bsr.w present_swap
     lea input_state(%pc), %a0
@@ -622,6 +632,7 @@ hero_step:
     clr.w 6(%a1)
 10: .ifndef NO_PHYSICS
     bsr.w hero_pose
+    bsr.w magic_update
     .endif
     bsr.w weapon_update
     movem.l (%sp)+, %d0-%d4/%a0-%a2
@@ -687,6 +698,7 @@ death_start:
     movem.l %d0/%a0, -(%sp)
     lea hero_dead(%pc), %a0
     move.w #1, (%a0)
+    bsr.w spell_clear
     lea death_state(%pc), %a0
     clr.w (%a0)                             | the pass of the death loop
     move.w #0xFF, 2(%a0)                    | Player_DeathAnimationPhase $FF: not started
@@ -702,14 +714,21 @@ death_start:
     move.w #-1, 36(%a1)
     moveq #0, %d0
     bsr.w sound_play_music
+    moveq #0x16, %d0                        | the death sound effect
+    bsr.w sound_play_sfx
     movem.l (%sp)+, %d0/%a0
     rts
 
 | Player_HandleDeath's loop, a pass a frame (256 of them): he stands for 16, then dissolves in 8 phases of 8 tiles (Player_DrawDeathAnimation; the
 | picture is made by dissolve_image), from pass 80 the screen fades to black in four steps (Screen_NextTransitionState), and at the end he is
-| back at the start with all his power. (The ROM then shows a message and sets gold and experience; not done.) a1 = hero_x. Clobbers nothing.
+| the screen is shown again and the death song plays (the ROM shows its "Remember your mantra" message then: not done, he waits for a button
+| press instead, after a second), and then he is back at the start with all his power and magic, and the gold and experience of his rank.
+| a1 = hero_x. Clobbers nothing.
 death_step:
     movem.l %d0-%d3/%a0, -(%sp)
+    move.w hero_dead(%pc), %d1
+    cmpi.w #2, %d1
+    beq.w 20f
     lea input_state(%pc), %a0
     clr.b IN_PAD(%a0)
     clr.b IN_PAD_NEW(%a0)
@@ -755,9 +774,26 @@ death_step:
     move.w %d0, (%a0)
     cmpi.w #256, %d0
     bne.s 9f
-    bsr.w hero_respawn
+    lea hero_dead(%pc), %a0                 | the message: the palette comes back, the death song plays
+    move.w #2, (%a0)
+    moveq #0, %d1
+    bsr.w death_fade
+    moveq #8, %d0
+    bsr.w sound_play_music
 9:  movem.l (%sp)+, %d0-%d3/%a0
     rts
+20: lea death_state(%pc), %a0                | waiting for the button: the pass count goes on
+    move.w (%a0), %d0
+    addq.w #1, %d0
+    move.w %d0, (%a0)
+    cmpi.w #256+50, %d0
+    bcs.s 9b
+    lea input_state(%pc), %a0
+    move.b IN_PAD_NEW(%a0), %d1
+    andi.b #0xC0, %d1                       | A or B
+    beq.s 9b
+    bsr.w hero_respawn
+    bra.s 9b
 
 | The screen's colours a quarter darker each step: d1 = the step (1 to 4; 4 is black).
 death_fade:
@@ -790,13 +826,31 @@ death_fade:
     movem.l (%sp)+, %d0-%d4/%a0-%a1
     rts
 
-| The start again (Game_InitStateForSpawn, Player_Spawn): full power, the start screen of the start package, the start position, the song.
+| The start again (Player_SetInitialExpAndGold, Game_InitStateForSpawn, Player_Spawn): the gold and experience his rank starts with, full power
+| and magic, the start screen of the start package, the start position, the song. (The ROM puts him in the temple of the last town he was in.)
 hero_respawn:
     movem.l %d0-%d3/%a0-%a1, -(%sp)
     lea hero_dead(%pc), %a0
     clr.w (%a0)
-    lea hud_states(%pc), %a0
-    bsr.w hud_load_state
+    moveq #0, %d0
+    bsr.w sound_play_music                  | the death song ends
+    lea hud_state(%pc), %a0
+    move.b #80, (%a0)+                      | Player_Spawn: power and magic 80
+    move.b #80, (%a0)+
+    moveq #0, %d1                           | a Novice has none
+    moveq #0, %d2
+    move.w hero_title(%pc), %d0
+    beq.s 1f
+    subq.w #1, %d0
+    add.w %d0, %d0
+    lea title_table(%pc), %a1
+    move.w (%a1,%d0.w), %d1                 | the experience the rank takes
+    move.w 30(%a1,%d0.w), %d2               | the gold it starts with
+1:  move.w %d1, (%a0)+
+    clr.w (%a0)+
+    move.w %d2, (%a0)
+    lea hud_dirty(%pc), %a0
+    st (%a0)
     lea hero_flip(%pc), %a0
     move.w #HERO_FLIP, (%a0)
     move.w #START_SCREEN, %d0
@@ -926,6 +980,382 @@ weapon_update:
     move.w %d0, weapon_x+2-hero_x(%a1)
     move.w (%a0)+, weapon_x+4-hero_x(%a1)
     move.w (%a0)+, weapon_x+6-hero_x(%a1)
+    rts
+
+| ---------------------------------------------------------------------------------------------------------------------------- magic
+| Player_CastMagic: one spell at a time (spell_state: type 0 Deluge, 1 Thunder, 2 Fire, 3 Death, 4 Tilte, -1 none; flags, x, x fraction, y, y fraction,
+| counter, phase, the interrupt counter; see tools/magic_model.py, which this follows step for step and which is checked against the ROM). With
+| Up held and B pressed (not on a ladder), a spell chosen (hero_magic) and the power (MP) for it, it starts at the hero and flies the way he faces.
+| There are no enemies yet to hit it. The M key (until there is an inventory) chooses the next spell and fills the magic. a1 = hero_x. Clobbers nothing.
+magic_update:
+    movem.l %d0-%d6/%a0/%a2-%a3, -(%sp)
+    move.w hero_dead(%pc), %d0
+    bne.w 9f
+    lea spell_state(%pc), %a3
+    addq.w #1, 16(%a3)                      | InterruptCounter
+    moveq #0, %d1                           | the M key: a new press chooses the next spell (none after the last) and fills the magic
+    lea input_state+IN_KEYS+0x32(%pc), %a0
+    tst.b (%a0)
+    beq.s 1f
+    moveq #1, %d1
+1:  lea magic_key(%pc), %a0
+    move.w (%a0), %d0
+    move.w %d1, (%a0)
+    tst.w %d0
+    bne.s 2f
+    tst.w %d1
+    beq.s 2f
+    lea hero_magic(%pc), %a0
+    move.w (%a0), %d0
+    addq.w #1, %d0
+    cmpi.w #5, %d0
+    blt.s 3f
+    moveq #-1, %d0
+3:  move.w %d0, (%a0)
+    lea hud_state(%pc), %a0
+    move.b #80, 1(%a0)
+    lea hud_dirty(%pc), %a0
+    st (%a0)
+2:  tst.w (%a3)
+    bpl.w 20f                               | one on the screen: it goes on
+    btst #3, 19(%a1)                        | Player_IsClimbing: can climb, not falling off beside the ladder, climbing
+    beq.s 4f
+    btst #4, 19(%a1)
+    beq.s 4f
+    move.w (%a1), %d0
+    andi.w #15, %d0
+    beq.w 9f
+    btst #2, 19(%a1)
+    beq.w 9f
+4:  lea input_state(%pc), %a0
+    btst #3, IN_PAD(%a0)                    | Up held
+    beq.w 9f
+    btst #6, IN_PAD_NEW(%a0)                | B pressed just now
+    beq.w 9f
+    move.w hero_magic(%pc), %d0
+    bmi.w 9f
+    cmpi.w #5, %d0
+    bcc.w 9f
+    lea magic_costs(%pc), %a0
+    moveq #0, %d1
+    move.b (%a0,%d0.w), %d1
+    lea hud_state(%pc), %a0
+    moveq #0, %d2
+    move.b 1(%a0), %d2
+    cmp.w %d1, %d2
+    blt.w 9f                                | not enough power
+    sub.w %d1, %d2
+    move.b %d2, 1(%a0)                      | Player_ReduceMP
+    lea hud_dirty(%pc), %a0
+    st (%a0)
+    move.w %d0, (%a3)                       | the type
+    moveq #0, %d2
+    tst.w 4(%a1)
+    beq.s 5f
+    moveq #0x40, %d2                        | it flies the way he faces
+5:  lea magic_start_y(%pc), %a0
+    moveq #0, %d1
+    move.b (%a0,%d0.w), %d1
+    add.w 2(%a1), %d1
+    andi.w #0xFF, %d1
+    move.w %d1, 8(%a3)
+    move.w (%a1), 4(%a3)
+    clr.w 6(%a3)
+    clr.w 10(%a3)
+    clr.w 12(%a3)
+    clr.w 14(%a3)
+    moveq #5, %d3                           | the sound effect: the spell's, Tilte's own
+    cmpi.w #4, %d0
+    bne.s 6f
+    ori.w #0x80, %d2                        | Tilte starts falling, 33 into its curve
+    move.w #0x21, 12(%a3)
+    moveq #0x14, %d3
+6:  move.w %d2, 2(%a3)
+    move.w %d3, %d0
+    bsr.w sound_play_sfx
+20: bsr.s magic_step
+9:  movem.l (%sp)+, %d0-%d6/%a0/%a2-%a3
+    rts
+
+| The update handler of the spell on the screen. a3 = spell_state. Clobbers d0-d6, a0, a2.
+magic_step:
+    move.w (%a3), %d5
+    cmpi.w #4, %d5
+    beq.w 40f
+    lea magic_speed(%pc), %a0               | Deluge 3, Thunder 2, Fire 4, Death 2 pixels a frame
+    moveq #0, %d1
+    move.b (%a0,%d5.w), %d1
+    bsr.w spell_move_x                      | d0 = off the screen, d2 = a wall in its way
+    tst.w %d0
+    bne.s 31f
+    tst.w %d2
+    beq.s 39f
+    btst #0, %d5                            | Deluge (0) and Fire (2) stop on a wall, Thunder (1) and Death (3) go through
+    bne.s 39f
+    moveq #0x0A, %d0
+    bsr.w sound_play_sfx
+31: move.w #-1, (%a3)
+39: rts
+40: btst #0, 15(%a3)
+    beq.s 41f
+    moveq #4, %d1                           | the missile: 4 pixels along and 4 up
+    bsr.w spell_move_x
+    tst.w %d0
+    bne.s 31b
+    moveq #4, %d1
+    moveq #0, %d2
+    bsr.w spell_move_y
+    tst.w %d0
+    bne.s 31b
+    rts
+41: moveq #1, %d1                           | the curve: one pixel along, and up or down by a fraction that follows the triangle of the counter
+    bsr.w spell_move_x
+    tst.w %d0
+    bne.s 31b
+    move.w 12(%a3), %d3
+    move.w %d3, %d2
+    andi.w #0x1F, %d2
+    btst #5, %d3
+    beq.s 42f
+    moveq #0x1F, %d4
+    sub.w %d2, %d4
+    move.w %d4, %d2
+42: lsl.w #3, %d2
+    andi.w #0xFF, %d2
+    moveq #0, %d1
+    bsr.w spell_move_y
+    tst.w %d0
+    bne.s 31b
+    move.w 12(%a3), %d3
+    move.w %d3, %d0
+    andi.w #0x1F, %d0
+    beq.s 43f
+    addq.w #1, %d3
+    andi.w #0xFF, %d3
+    move.w %d3, 12(%a3)
+    rts
+43: eori.w #0x80, 2(%a3)                    | every 32 ticks the curve turns
+    btst #7, 3(%a3)
+    bne.s 44f
+    addq.w #1, %d3
+    andi.w #0xFF, %d3
+    move.w %d3, 12(%a3)
+    rts
+44: addq.w #1, 14(%a3)                      | the missile (odd phase) begins, flying up
+    andi.w #0x7F, 2(%a3)
+    rts
+
+| CastMagic_UpdateXPosition: d1 = pixels along its way (to the right when flag $40 is set). Out: d0 = 1 when it is off the screen (at the edge:
+| $F0, Fire $E0 to the right), d2 = what the wall check found (non-zero: a wall). a3 = spell_state. Clobbers d1, d3-d4, a2.
+spell_move_x:
+    move.w 4(%a3), %d3
+    move.w (%a3), %d4
+    lea magic_widths(%pc), %a2
+    btst #6, 3(%a3)
+    beq.s 2f
+    add.w %d1, %d3                          | to the right
+    andi.w #0xFF, %d3
+    move.w %d3, 4(%a3)
+    moveq #0, %d1
+    move.b (%a2,%d4.w), %d1
+    add.w %d3, %d1                          | the column its right edge is in
+    cmpi.w #0xFF, %d1
+    bhi.s 3f
+    move.w %d1, %d3
+    bsr.w spell_wall
+    bra.s 8f
+3:  moveq #1, %d2                           | past the last column: a wall
+8:  lea magic_max_x(%pc), %a2
+    moveq #0, %d1
+    move.b (%a2,%d4.w), %d1
+    moveq #0, %d0
+    cmp.w 4(%a3), %d1
+    bhi.s 5f
+    moveq #1, %d0
+5:  rts
+2:  sub.w %d1, %d3                          | to the left
+    andi.w #0xFF, %d3
+    move.w %d3, 4(%a3)
+    cmpi.w #0xF0, %d3
+    bcc.s 6f
+    bsr.w spell_wall
+    moveq #0, %d0
+    rts
+6:  moveq #1, %d2
+    moveq #1, %d0
+    rts
+
+| CastMagic_CheckDirection_CheckImpassable: d3 = the pixel x to look at (0-255), d4 = the type. Out: d2 = non-zero when the block at the spell's y is
+| one he cannot walk through, or the one below it (Thunder is two blocks high), or the one under that (its y is not on a block row).
+| Keeps d3-d4, a3. Clobbers d0-d1, a2.
+spell_wall:
+    movea.l pkg_ptr+PKG_BLOCKING(%pc), %a2
+    move.w cur_screen(%pc), %d0
+    mulu.w #208, %d0
+    adda.l %d0, %a2
+    move.w 8(%a3), %d0
+    move.w %d0, %d1
+    andi.w #0xF0, %d0
+    move.w %d3, %d2
+    lsr.w #4, %d2
+    add.w %d2, %d0                          | the flag's index: row * 16 + column
+    moveq #0, %d2
+    cmpi.w #208, %d0
+    bge.s 1f
+    or.b (%a2,%d0.w), %d2
+1:  cmpi.w #1, %d4                          | Thunder looks at the block below too
+    bne.s 2f
+    addi.w #0x10, %d0
+    andi.w #0xFF, %d0
+    cmpi.w #208, %d0
+    bge.s 2f
+    or.b (%a2,%d0.w), %d2
+2:  andi.w #15, %d1
+    beq.s 9f
+    addi.w #0x10, %d0
+    andi.w #0xFF, %d0
+    cmpi.w #208, %d0
+    bge.s 9f
+    or.b (%a2,%d0.w), %d2
+9:  rts
+
+| CastMagic_UpdateYPosition: d1 = whole pixels, d2 = the fraction (of 256) it moves; down when flag $80 is set, else up. Out: d0 = 1 when it is off
+| the screen. a3 = spell_state. Clobbers d1-d5.
+spell_move_y:
+    move.w 10(%a3), %d3
+    move.w 8(%a3), %d4
+    btst #7, 3(%a3)
+    beq.s 2f
+    add.w %d2, %d3                          | down
+    move.w %d3, %d5
+    lsr.w #8, %d5
+    andi.w #0xFF, %d3
+    move.w %d3, 10(%a3)
+    add.w %d1, %d4
+    add.w %d5, %d4
+    moveq #0, %d0
+    cmpi.w #0xFF, %d4
+    bls.s 1f
+    moveq #1, %d0
+1:  andi.w #0xFF, %d4
+    move.w %d4, 8(%a3)
+    rts
+2:  sub.w %d2, %d3                          | up
+    move.w %d3, %d5
+    asr.w #8, %d5
+    andi.w #0xFF, %d3
+    move.w %d3, 10(%a3)
+    sub.w %d1, %d4
+    add.w %d5, %d4
+    andi.w #0xFF, %d4
+    move.w %d4, 8(%a3)
+    moveq #0, %d0
+    cmpi.w #0xF0, %d4
+    bcs.s 3f
+    moveq #1, %d0
+3:  rts
+
+| The spell's picture (the finish handlers' choice by the interrupt counter: Thunder, Fire and the Tilte missile blink) drawn into screen a4, its
+| box noted in this screen's slot (the box is cleared already). Mirrored when it flies right.
+draw_spell:
+    movem.l %d0-%d7/%a0-%a3/%a5, -(%sp)
+    lea spell_state(%pc), %a2
+    move.w (%a2), %d5
+    bmi.w 9f
+    move.w 16(%a2), %d3                     | the interrupt counter
+    moveq #0, %d6                           | the picture, counted from the first of the spells' (0x95)
+    cmpi.w #1, %d5
+    bhi.s 2f
+    beq.s 1f
+    move.w %d3, %d6                         | Deluge: four pictures, a change every 4 frames
+    lsr.w #2, %d6
+    andi.w #3, %d6
+    bra.s 6f
+1:  btst #1, %d3                            | Thunder: two, blinking
+    bne.w 9f
+    move.w %d3, %d6
+    lsr.w #2, %d6
+    andi.w #1, %d6
+    addq.w #4, %d6
+    bra.s 6f
+2:  cmpi.w #3, %d5
+    bhi.s 4f
+    beq.s 3f
+    btst #1, %d3                            | Fire
+    beq.w 9f
+    move.w %d3, %d6
+    lsr.w #2, %d6
+    andi.w #1, %d6
+    addq.w #6, %d6
+    bra.s 6f
+3:  move.w %d3, %d6                         | Death: four, a change every 8 frames
+    lsr.w #3, %d6
+    andi.w #3, %d6
+    addq.w #8, %d6
+    bra.s 6f
+4:  btst #0, 15(%a2)
+    bne.s 5f
+    moveq #12, %d6                          | Tilte on its curve: two pictures
+    btst #3, %d3
+    beq.s 6f
+    moveq #13, %d6
+    bra.s 6f
+5:  btst #1, %d3                            | the missile: two, blinking
+    bne.w 9f
+    move.w %d3, %d6
+    lsr.w #2, %d6
+    andi.w #1, %d6
+    addi.w #14, %d6
+6:  btst #6, 3(%a2)
+    beq.s 7f
+    addi.w #16, %d6                         | the mirrored poses
+7:  movea.l pkg_ptr+PKG_MAGIC_ANIM(%pc), %a5
+    add.w %d6, %d6
+    move.w (%a5,%d6.w), %d0
+    adda.w %d0, %a5                         | the pose's record
+    lea rect_slots(%pc), %a0
+    move.w slot_index(%pc), %d0
+    lsl.w #4, %d0
+    adda.w %d0, %a0
+    lea 8(%a0), %a0
+    move.w 4(%a2), %d4
+    move.w 8(%a2), %d5
+    sub.w camera(%pc), %d5
+    move.w (%a5)+, %d0
+    add.w %d4, %d0
+    move.w %d0, (%a0)+
+    move.w (%a5)+, %d0
+    add.w %d4, %d0
+    move.w %d0, (%a0)+
+    move.w (%a5)+, %d0
+    add.w %d5, %d0
+    move.w %d0, (%a0)+
+    move.w (%a5)+, %d0
+    add.w %d5, %d0
+    move.w %d0, (%a0)+
+    movea.l pkg_ptr+PKG_MAGIC_IMAGES(%pc), %a3
+8:  move.w (%a5)+, %d0
+    bmi.s 9f
+    lea spell_state(%pc), %a2
+    add.w 4(%a2), %d0
+    move.w 8(%a2), %d1                      | blit_tile clobbers d0-d7: the position comes from memory each time
+    sub.w camera(%pc), %d1
+    add.w (%a5)+, %d1
+    move.w (%a5)+, %d2
+    mulu.w #SPRITE_IMAGE_BYTES, %d2
+    lea (%a3,%d2.l), %a1
+    bsr.w blit_tile
+    bra.s 8b
+9:  movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5
+    rts
+
+| Area_ScrollTo and a new screen: the spell is gone and the interrupt counter starts again. Clobbers nothing.
+spell_clear:
+    move.l %a0, -(%sp)
+    lea spell_state(%pc), %a0
+    move.w #-1, (%a0)
+    clr.w 16(%a0)
+    movea.l (%sp)+, %a0
     rts
 
 | Player_GetBodySpriteFrameOffset: the pose from his state. 3 in the air (jumping), 4 (the ROM's frame 7) climbing, else the walk frames 0, 1, 2, 1
@@ -1426,7 +1856,7 @@ draw_hero:
     adda.w %d0, %a5                         | the pose's record
     lea rect_slots(%pc), %a0
     move.w slot_index(%pc), %d0
-    lsl.w #3, %d0
+    lsl.w #4, %d0
     adda.w %d0, %a0
     move.w hero_x(%pc), %d4                 | where he is: ST x and the line
     move.w hero_y(%pc), %d5
@@ -1465,7 +1895,7 @@ draw_hero:
 clear_margins:
     lea rect_slots(%pc), %a0
     move.w slot_index(%pc), %d0
-    lsl.w #3, %d0
+    lsl.w #4, %d0
     adda.w %d0, %a0
     movem.w (%a0), %d0-%d3                  | x0, x1, y0, y1
     cmpi.w #LEFT_BYTES*2, %d0
@@ -1643,6 +2073,7 @@ scroll_check:
 | the hero is drawn and the screen shown (one frame). a4 and slot_index come back as present_swap leaves them; everything else is kept.
 do_scroll:
     movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
+    bsr.w spell_clear
     lea scroll_dir(%pc), %a0
     move.w %d1, (%a0)
     lea scroll_target(%pc), %a0
@@ -1703,6 +2134,7 @@ do_scroll:
 | copied from a line of them that moves 16 lines every 4 frames; the last step may be shorter.
 do_vscroll:
     movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
+    bsr.w spell_clear
     move.w %d1, %d6                         | 1 down, 0 up
     lea vscroll_down(%pc), %a0
     move.w %d1, (%a0)
@@ -2032,6 +2464,7 @@ door_check:
 | about as long). a4 and slot_index come back as present_swap leaves them.
 enter_screen:
     movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
+    bsr.w spell_clear
     lea hero_x(%pc), %a0
     move.w %d1, %d2
     andi.w #15, %d2
@@ -2283,6 +2716,8 @@ hud_layout:
     .incbin "hud_layout.bin"
 hud_states:
     .incbin "hud_states.bin"
+title_table:                                | PLAYER_TITLE_EXP_NEEDED (15 words), PLAYER_TITLE_GOLD (15 words)
+    .incbin "title_table.bin"
     .even
 
     .section .data
@@ -2346,7 +2781,7 @@ camera:
 slot_index:
     .word 0
 rect_slots:
-    .space 16                               | per screen: x0, x1, y0, y1 of where the hero was drawn in it (all zero: nothing)
+    .space 32                               | per screen: x0, x1, y0, y1 of where the hero was drawn in it, and the same for the spell (all zero: nothing)
 hero_x:
     .word HERO_X
 hero_y:
@@ -2391,6 +2826,23 @@ hero_invinc:
     .word 0                                 | Player_InvincibilityPhase: $3C when hit, counts down to 0
 weapon_x:
     .word 0, 0, 0, 0                        | weapon_update: x, y, reach x, reach y
+spell_state:
+    .word -1, 0, 0, 0, 0, 0, 0, 0, 0       | the spell: type (-1 none), flags ($40 flies right, $80 falls), x, x fraction, y, y fraction, counter, phase, interrupt counter
+hero_magic:
+    .word MAGIC                             | SelectedMagic
+magic_key:
+    .word 0                                 | the M key was down at the last frame
+magic_costs:
+    .byte 2, 4, 6, 10, 16                   | MAGIC_COSTS
+magic_start_y:
+    .byte 8, 0, 0, 8, 8                     | CAST_MAGIC_START_Y
+magic_speed:
+    .byte 3, 2, 4, 2, 1
+magic_widths:
+    .byte 0x0F, 0x0F, 0x1F, 0x0F, 0x0F      | CAST_MAGIC_WIDTHS
+magic_max_x:
+    .byte 0xF0, 0xF0, 0xE0, 0xF0, 0xF0      | CAST_MAGIC_MAX_SCREEN_WIDTHS
+    .even
 hero_dead:
     .word 0                                 | 1 while he dies (death_step)
 death_state:

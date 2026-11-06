@@ -205,21 +205,86 @@ class ViewerTests(unittest.TestCase):
 
     def test_with_no_power_left_he_dissolves_and_starts_again(self) -> None:
         """DAMAGE=80: the first H takes all the power. Player_HandleDeath's loop: 16 passes standing, then 8 phases of 8 tiles (tools in the ROM:
-        Player_DrawDeathAnimation), the fade from pass 80, and at pass 256 he is back at the start with all his power."""
-        args = ["ALL=1", "AREA=0", "SCREEN=1", "HERO=128,144,0,255,0,0,1", "VIEWER_DEFS=--defsym DAMAGE=80"]
+        Player_DrawDeathAnimation), the fade from pass 80, and at pass 256 the screen is back with the death song, waiting for a button; then he is
+        back at the start with all his power and magic and the gold and experience of a Battler (rank 2: 2200 and 800)."""
+        args = ["ALL=1", "AREA=0", "SCREEN=1", "HERO=128,144,0,255,0,0,1", "VIEWER_DEFS=--defsym DAMAGE=80 --defsym TITLE=2"]
+        hit = [(599, "h", 1), (600, "h", 0)]
         _, base_word, _ = self.run_scenario(args, [], 700, "shots_death")
-        power = base_word("hud_state") >> 8
-        self.assertGreater(power, 0)
-        _, word, _ = self.run_scenario(args, [(599, "h", 1), (600, "h", 0)], 610, "shots_death")
+        self.assertGreater(base_word("hud_state") >> 8, 0)
+        _, word, _ = self.run_scenario(args, hit, 610, "shots_death")
         self.assertEqual((word("hero_dead"), word("hud_state") >> 8, word("death_state+2")), (1, 0, 0xFF), "dead, standing still for 16 passes")
-        _, word, _ = self.run_scenario(args, [(599, "h", 1), (600, "h", 0)], 660, "shots_death")
+        _, word, _ = self.run_scenario(args, hit, 660, "shots_death")
         self.assertTrue(0 <= word("death_state+2") < 8, "dissolving")
         self.assertEqual(word("hero_x"), 128, "he does not move (and not back: the start is where he stood)")
-        _, word, _ = self.run_scenario(args, [(599, "h", 1), (600, "h", 0)], 760, "shots_death")
+        _, word, _ = self.run_scenario(args, hit, 760, "shots_death")
         self.assertEqual(word("death_state+2"), 8, "dissolved")
-        _, word, _ = self.run_scenario(args, [(599, "h", 1), (600, "h", 0)], 900, "shots_death")
-        self.assertEqual((word("hero_dead"), word("hud_state") >> 8, word("hero_x"), word("hero_y")), (0, power, 128, 144), "back at the start")
+        _, word, _ = self.run_scenario(args, hit + [(840, "joy", 0x80), (880, "joy", 0)], 900, "shots_death")
+        self.assertEqual(word("hero_dead"), 2, "the song plays and he waits for a button (a button held through the end does not count)")
+        _, word, _ = self.run_scenario(args, hit, 1100, "shots_death")
+        self.assertEqual(word("hero_dead"), 2, "no press: still waiting")
+        _, word, _ = self.run_scenario(args, hit + [(1000, "joy", 0x80), (1010, "joy", 0)], 1100, "shots_death")
+        self.assertEqual((word("hero_dead"), word("hero_x"), word("hero_y")), (0, 128, 144), "back at the start")
+        self.assertEqual((word("hud_state"), word("hud_state+2"), word("hud_state+4"), word("hud_state+6")), (0x5050, 2200, 0, 800), "all power and magic, his rank's experience and gold")
         self.assertEqual(word("hero_invinc"), 0)
+
+    def test_up_and_b_cast_a_spell_that_flies_is_drawn_costs_magic_and_leaves_no_trail(self) -> None:
+        """Eolis screen 1 with 80 magic power and each spell chosen (MAGIC=n): Up and B cast it. A few frames later its place and state are those of
+        `tools/magic_model.py` (checked against the ROM in tests/test_magic.py), the magic power is down by its cost, and the screen is the converter's
+        with the spell's box the only difference; when it has gone off the screen the picture is the plain one again."""
+        import faxanadu_maps as fm
+        import faxanadu_rom as fr
+        import hatari_shot as hs
+        import hero_physics as hp
+        import magic_model as mm
+        import st_convert as sc
+
+        rom = fr.Rom(ROM)
+        a = fm.area(rom, 0)
+        props = fm.block_properties(rom, a)
+        impassable = [hp.IMPASSABLE[props[b] & 15] for b in fm.decode_screen(rom, a, 1)]
+        for spell in range(5):
+            args = ["AREA=0", "SCREEN=1", "CAMERA=40", "HERO=100,144,0,255,0,0,1", "HUD=16,80,0,0,0", f"VIEWER_DEFS=--defsym MAGIC={spell}"]
+            ram, word, log = self.run_scenario(args, [(599, "joy", 0x81), (601, "joy", 0)], 616, "shots_magic")
+            flags = word("spell_state+2")
+            self.assertEqual(flags & 0x40, 0x40 if word("hero_flip") else 0, "it flies the way he faces")
+            self.assertEqual(word("hud_state") & 0xFF, 80 - mm.COSTS[spell], f"spell {spell}: the cost")
+            found = None
+            for n in range(1, 20):                         # the model, n frames after the cast
+                sp = mm.Spell()
+                mm.cast(sp, word("hero_x"), word("hero_y"), 0x40 if word("hero_flip") else 0, 80, spell, hp.JOY_UP, hp.BUTTON_B)
+                for _ in range(n):
+                    mm.step(sp, impassable)
+                if (sp.type, sp.flags, sp.x, sp.y, sp.counter, sp.phase) == tuple(word(f"spell_state+{o}") & 0xFFFF if o else word("spell_state") for o in (0, 2, 4, 8, 12, 14)):
+                    found = n
+                    break
+            self.assertIsNotNone(found, f"spell {spell}: its state ({[word(f'spell_state+{o}') for o in range(0, 18, 2)]}) is one the model reaches")
+            x, y = word("spell_state+4"), word("spell_state+8") + 32 - word("camera")     # (the sprites lie 32 lines, the HUD, below the game's y)
+            rows = hs.decode_screen(ram, hs.video_base(log))
+            expected = sc.expected_screen(rom, 0, 1, word("camera"), state=dict(hp=16, mp=word("hud_state") & 0xFF, experience=0, gold=0, seconds=0),
+                                          hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 0, word("hero_frame"), bool(word("hero_flip"))))
+            bad = [(px, py) for py in range(200) for px in range(320) if rows[py][px] != expected[py][px]]
+            outside = [(px, py) for px, py in bad if not (x + 32 - 8 <= px < x + 32 + 40 and y - 8 <= py < y + 40)]
+            self.assertEqual(outside[:5], [], f"spell {spell}: {len(outside)} pixels differ outside its box")
+            if spell in (0, 3, 4):                         # (Thunder and Fire blink: not there in every frame)
+                self.assertGreater(len(bad), 20, f"spell {spell}: it is drawn")
+            ram, word, log = self.run_scenario(args, [(599, "joy", 0x81), (601, "joy", 0)], 780, "shots_magic")
+            self.assertEqual(word("spell_state"), -1, f"spell {spell}: gone")
+            rows = hs.decode_screen(ram, hs.video_base(log))
+            self.assert_picture(rows, sc.expected_screen(rom, 0, 1, word("camera"), state=dict(hp=16, mp=word("hud_state") & 0xFF, experience=0, gold=0, seconds=0),
+                                                         hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 0, word("hero_frame"), bool(word("hero_flip")))))
+
+    def test_a_spell_needs_up_the_power_and_a_chosen_spell(self) -> None:
+        """B alone (no Up), Up and B with too little magic power (Thunder costs 4), and Up and B with no spell chosen cast nothing and take no power;
+        the M key chooses the first spell and fills the magic, and then Up and B cast."""
+        base = ["AREA=0", "SCREEN=1", "CAMERA=40", "HERO=100,144,0,255,0,0,1"]
+        _, word, _ = self.run_scenario(base + ["HUD=16,80,0,0,0", "VIEWER_DEFS=--defsym MAGIC=0"], [(599, "joy", 0x80), (601, "joy", 0)], 616, "shots_magic")
+        self.assertEqual((word("spell_state"), word("hud_state") & 0xFF), (-1, 80), "no Up")
+        _, word, _ = self.run_scenario(base + ["HUD=16,3,0,0,0", "VIEWER_DEFS=--defsym MAGIC=1"], [(599, "joy", 0x81), (601, "joy", 0)], 616, "shots_magic")
+        self.assertEqual((word("spell_state"), word("hud_state") & 0xFF), (-1, 3), "too little power")
+        _, word, _ = self.run_scenario(base + ["HUD=16,80,0,0,0"], [(599, "joy", 0x81), (601, "joy", 0)], 616, "shots_magic")
+        self.assertEqual((word("spell_state"), word("hud_state") & 0xFF), (-1, 80), "no spell chosen")
+        _, word, _ = self.run_scenario(base + ["HUD=16,0,0,0,0"], [(580, "m", 1), (584, "m", 0), (599, "joy", 0x81), (601, "joy", 0)], 616, "shots_magic")
+        self.assertEqual((word("hero_magic"), word("spell_state"), word("hud_state") & 0xFF), (0, 0, 78), "the M key: Deluge, full power; cast")
 
     def test_the_weapons_place_and_reach_follow_the_pose(self) -> None:
         """`weapon_x`, `weapon_y`, `weapon_rx`, `weapon_ry` (Player_DrawWeapon's numbers, checked against the ROM in tests/test_hero_physics.py) for the
@@ -703,6 +768,8 @@ class ViewerTests(unittest.TestCase):
                 text = f"memwrite ${base + sym['input_state'] + 264 + 0x39:x} 0x{value:02x}\ncont\n"
             elif what == "w":                                          # the W key (wing boots)
                 text = f"memwrite ${base + sym['input_state'] + 264 + 0x11:x} 0x{value:02x}\ncont\n"
+            elif what == "m":                                          # the M key (debug: the next spell, full magic)
+                text = f"memwrite ${base + sym['input_state'] + 264 + 0x32:x} 0x{value:02x}\ncont\n"
             elif what in ("h", "g"):                                   # the H and G keys (debug: hit from the right / from the left)
                 text = f"memwrite ${base + sym['input_state'] + 264 + (0x23 if what == 'h' else 0x22):x} 0x{value:02x}\ncont\n"
             elif what == "y":                                          # the hero's y (a word)
