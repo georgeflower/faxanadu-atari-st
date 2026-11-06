@@ -17,6 +17,7 @@
     .equ WINDOW_LINES, 168
     .equ LEFT_BYTES, 16                     | 32 pixels
     .equ SPRITE_IMAGE_BYTES, 40
+    .equ DOOR_BYTES, 8
     .equ SCREEN_LINES, 200
     .equ SCREEN_BYTES, 32000
     .equ REGION_BYTES, 208*160              | a whole 208-line playfield (stride 160: the same layout as the screen)
@@ -122,7 +123,8 @@ start:
 13: clr.l (%a0)+
     dbra %d1, 13b
 
-    lea screen_data(%pc), %a5               | the start screen's block ids (screen 0 of the table)
+    lea screen_data(%pc), %a5               | the start screen's block ids
+    adda.l #START_SCREEN*208, %a5
     move.l %a4, -(%sp)
     movea.l pf_ptr(%pc), %a4
     bsr.w draw_playfield                    | into the playfield buffer ...
@@ -179,6 +181,9 @@ start:
     bsr.w sound_keys
     bsr.w hero_step
     bsr.w scroll_check                      | at the edge of the screen: scrolls to the next one (and comes back when it is done)
+    .ifndef NO_PHYSICS
+    bsr.w door_check                        | up in front of a door: the screen on the other side
+    .endif
     bsr.w camera_follow                     | the window of the playfield follows him up and down
     lea rect_slots(%pc), %a0
     move.w slot_index(%pc), %d0
@@ -1505,6 +1510,118 @@ camera_follow:
     rts
 
 
+| ---------------------------------------------------------------------------------------------------------------------------- doors
+| Up pressed just now with a door block under him (the block at his x + 7 and the row of his y; the next one to the right when x & 15 is 8:
+| `Area_SetStateFromDoorDestination`): the screen on the other side, as the ROM's Game_SetupEnterScreen. The doors are 8 bytes each
+| (build_assets.door_table): screen, block, kind, destination screen, start position (Y/16 << 4 | X/16), palette, key, pad. Only kind 0
+| (this screen set, this palette) and doors that need no key are followed here.
+door_check:
+    movem.l %d0-%d4/%a0-%a1, -(%sp)
+    .if DOOR_COUNT
+    lea input_state(%pc), %a0
+    btst #3, IN_PAD_NEW(%a0)
+    beq.s 9f
+    move.w hero_x(%pc), %d1
+    move.w hero_y(%pc), %d2
+    andi.w #0xF0, %d2
+    move.w %d1, %d3
+    addq.w #7, %d3
+    lsr.w #4, %d3
+    or.w %d3, %d2                           | the block: row * 16 + column
+    andi.w #15, %d1
+    moveq #0, %d3
+    cmpi.w #8, %d1
+    bne.s 1f
+    moveq #1, %d3                           | on a block boundary the next block is a candidate too
+1:  move.w cur_screen(%pc), %d4
+    lea doors(%pc), %a1
+    move.w #DOOR_COUNT-1, %d0
+2:  cmp.b (%a1), %d4
+    bne.s 4f
+    moveq #0, %d1
+    move.b 1(%a1), %d1
+    cmp.w %d2, %d1
+    beq.s 5f
+    tst.w %d3
+    beq.s 4f
+    addq.w #1, %d1
+    cmp.w %d2, %d1
+    beq.s 5f
+4:  lea DOOR_BYTES(%a1), %a1
+    dbra %d0, 2b
+    bra.s 9f
+5:  tst.b 2(%a1)                            | kind 0 only
+    bne.s 9f
+    tst.b 6(%a1)                            | and no key
+    bne.s 9f
+    moveq #0, %d0
+    move.b 3(%a1), %d0
+    moveq #0, %d1
+    move.b 4(%a1), %d1
+    bsr.w enter_screen
+    .endif
+9:  movem.l (%sp)+, %d0-%d4/%a0-%a1
+    rts
+
+| d0 = the screen to go to (its number in the table), d1 = where the hero stands there (Y/16 << 4 | X/16). The picture fades out (black
+| palette), the new screen is drawn, the hero put at the door's other end, and the picture fades in (six frames each, the ROM's fade is
+| about as long). a4 and slot_index come back as present_swap leaves them.
+enter_screen:
+    movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
+    lea hero_x(%pc), %a0
+    move.w %d1, %d2
+    andi.w #15, %d2
+    lsl.w #4, %d2
+    move.w %d2, (%a0)                       | x
+    lsr.w #4, %d1
+    lsl.w #4, %d1
+    move.w %d1, 2(%a0)                      | y
+    clr.w 6(%a0)                            | frame, tick, fraction, acceleration, moving
+    move.w #-1, 8(%a0)
+    clr.w 10(%a0)
+    clr.w 12(%a0)
+    clr.w 14(%a0)
+    clr.w 16(%a0)                           | jump index
+    andi.w #0x40, 18(%a0)                   | flags: only the way he faces stays
+    clr.w 20(%a0)
+    clr.w 24(%a0)
+    clr.w 26(%a0)
+    clr.w 28(%a0)
+    move.w %d0, %d3
+    moveq #6, %d7
+1:  bsr.w wait_vbl
+    dbra %d7, 1b
+    movea.l #PALETTE, %a1                   | black
+    moveq #15, %d7
+2:  clr.w (%a1)+
+    dbra %d7, 2b
+    lea cur_screen(%pc), %a0
+    move.w %d3, (%a0)
+    move.l %a4, -(%sp)
+    movea.l pf_ptr(%pc), %a4
+    mulu.w #208, %d3
+    lea screen_data(%pc), %a5
+    adda.l %d3, %a5
+    bsr.w draw_playfield
+    movea.l (%sp)+, %a4
+    lea camera(%pc), %a0                    | the camera for where he stands (the start camera's rule)
+    move.w hero_y(%pc), %d1
+    moveq #0, %d0
+    cmpi.w #(CAMERA_UP+CAMERA_DOWN)/2, %d1
+    blt.s 3f
+    moveq #CAMERA_MAX, %d0
+3:  move.w %d0, (%a0)
+    bsr.w refresh_screens
+    bsr.w refresh_screens
+    lea palette_data(%pc), %a0
+    movea.l #PALETTE, %a1
+    moveq #15, %d7
+4:  move.w (%a0)+, (%a1)+
+    dbra %d7, 4b
+    movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5-%a6
+    rts
+
+
 hud_load_state:
     lea hud_state(%pc), %a1
     move.l (%a0)+, (%a1)+
@@ -1537,6 +1654,8 @@ screen_data:
     .incbin "screen.bin"
 neighbours:
     .incbin "neighbours.bin"
+doors:
+    .incbin "doors.bin"
 blocking:
     .incbin "blocking.bin"
 ladders:
@@ -1551,7 +1670,7 @@ block_images:
 orig_screen:
     .long 0
 cur_screen:
-    .word 0                                 | the screen shown: its number in the table (0 is the one the viewer starts with)
+    .word START_SCREEN                      | the screen shown: its number in the table
 scroll_dir:
     .word 0                                 | 1 scrolling to the right, 0 to the left (or not scrolling)
 scroll_target:

@@ -469,6 +469,44 @@ class ViewerTests(unittest.TestCase):
         self.assertIn(6, frames, frames)
         self.assertEqual(frames[-1], 0, frames)
 
+    def test_up_at_the_castle_door_leads_to_screen_1_of_eolis(self) -> None:
+        """The viewer has every screen of Eolis (ALL=1) and the hero stands at the castle door of screen 0 (block 156); Up (poked into the
+        stick for one frame) takes him through, as the ROM does (verified there: screen 1, hero at x 144, y 144): the picture is screen 1
+        with the hero there, the door's own palette and the camera of a hero who stands low."""
+        import faxanadu_rom as fr
+        import hatari_shot as hs
+        import st_convert as sc
+
+        subprocess.run(["make", "-C", str(ROOT), "viewer", "ALL=1", "SCREEN=0", "HERO=192,144,0,255,0,0,1"], check=True, capture_output=True)
+        nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
+        sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
+        image = (ROOT / "build" / "viewer.bin").read_bytes()
+        work = ROOT / "build" / "shots_door"
+        work.mkdir(parents=True, exist_ok=True)
+        prg = ROOT / "build" / "VIEWER.PRG"
+        hatari = shutil.which("hatari")
+        (work / "c0.ini").write_text(f"savebin {work / 'ram0.bin'} 0 $80000\ncont\n", encoding="utf-8")
+        hs.run_hatari(hatari, TOS, prg, work, 500, "0", f"b VBL > 499 :once :file {work / 'c0.ini'}\n", None)
+        ram = (work / "ram0.bin").read_bytes()
+        base = ram.find(image[sym["start"]:sym["start"] + 48]) - sym["start"]
+        self.assertGreater(base, 0)
+        word = lambda data, name: int.from_bytes(data[base + sym[name]:base + sym[name] + 2], "big", signed=True)
+        self.assertEqual(word(ram, "cur_screen"), 0)
+        joy = base + sym["input_state"] + 259
+        (work / "up.ini").write_text(f"memwrite ${joy:x} 0x01\ncont\n", encoding="utf-8")
+        (work / "stop.ini").write_text(f"memwrite ${joy:x} 0x00\ncont\n", encoding="utf-8")
+        (work / "cap.ini").write_text(f"savebin {work / 'ram1.bin'} 0 $80000\nm $ff8200-$ff8260\ncont\n", encoding="utf-8")
+        script = "".join(f"b VBL > {v} :once :file {work / f}\n" for v, f in ((599, "up.ini"), (602, "stop.ini"), (699, "cap.ini")))
+        log = hs.run_hatari(hatari, TOS, prg, work, 700, "0", script, None)
+        ram = (work / "ram1.bin").read_bytes()
+        self.assertEqual(word(ram, "cur_screen"), 1)
+        self.assertEqual((word(ram, "hero_x"), word(ram, "hero_y")), (144, 144))
+        self.assertEqual(word(ram, "camera"), 40)
+        rows = hs.decode_screen(ram, hs.video_base(log))
+        expected = sc.expected_screen(fr.Rom(ROM), 0, 1, 40, hero=sc.Hero(144, 144, 0, 255, 0, 0, True))
+        bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
+        self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
+
 
 if __name__ == "__main__":
     unittest.main()
