@@ -120,7 +120,7 @@ def used_block_corners(rom: fr.Rom, a: fm.Area, screens: list[int] | None = None
 
 def build_area_blocks(rom: fr.Rom, area_index: int, palette_index: int | None = None, screens: list[int] | None = None,
                       tiles_index: int | None = None):
-    """(plan, image table, images): `images` is the list of 128-byte block images, `table[id * 4 + corner]` the number of the
+    """(plan, image table, images): `images` is the list of different 128-byte block images, `table[id * 4 + corner]` the number of the
     image or NO_IMAGE."""
     a = fm.area(rom, area_index)
     pal = a.palette_index if palette_index is None else palette_index
@@ -129,9 +129,13 @@ def build_area_blocks(rom: fr.Rom, area_index: int, palette_index: int | None = 
     tiles = rs.tileset(rom, a.tiles_index if tiles_index is None else tiles_index)
     table = [NO_IMAGE] * 1024
     images: list[bytes] = []
+    seen: dict[bytes, int] = {}                  # blocks that look alike (most do) share one image
     for block, corner in used_block_corners(rom, a, screens):
-        table[block * 4 + corner] = len(images)
-        images.append(block_image(block_pixels(rom, a, tiles, bg, plan, block, corner)))
+        image = block_image(block_pixels(rom, a, tiles, bg, plan, block, corner))
+        if image not in seen:
+            seen[image] = len(images)
+            images.append(image)
+        table[block * 4 + corner] = seen[image]
     return plan, table, images
 
 
