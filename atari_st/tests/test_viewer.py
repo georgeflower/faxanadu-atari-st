@@ -186,6 +186,41 @@ class ViewerTests(unittest.TestCase):
         _, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1", "VIEWER_DEFS=--defsym TITLE=12"], [(599, "w", 1)], 800, "shots_wings_key")
         self.assertIn(word("hero_wings"), (7, 6), "a second every 64 frames: 200 frames are 3 or 4 of them")
 
+    def test_a_hit_knocks_him_back_and_takes_power_and_he_is_invincible_for_60_frames(self) -> None:
+        """The H key (debug: something hits him from the right) as `tools/hero_physics.hit` does it, checked there against the ROM in jsnes: he
+        turns to the enemy, goes 8 pixels a frame to the left for three frames (24 pixels), loses DAMAGE power and cannot be hurt again for 60 frames."""
+        args = ["ALL=1", "AREA=0", "SCREEN=1", "HERO=128,144,0,255,0,0,1", "VIEWER_DEFS=--defsym DAMAGE=8"]
+        _, base_word, _ = self.run_scenario(args, [], 700, "shots_hit")
+        power = base_word("hud_state") >> 8
+        ram, word, _ = self.run_scenario(args, [(599, "h", 1), (600, "h", 0)], 700, "shots_hit")
+        self.assertEqual(word("hero_x"), 128 - 24)
+        self.assertEqual(word("hero_flip"), 1, "he faces the enemy")
+        self.assertEqual(word("hud_state") >> 8, power - 8)
+        self.assertEqual((word("hero_invinc"), word("hero_knock")), (0, 0))
+        ram, word, _ = self.run_scenario(args, [(599, "h", 1), (600, "h", 0), (610, "h", 1), (611, "h", 0)], 700, "shots_hit")
+        self.assertEqual(word("hud_state") >> 8, power - 8, "the second hit 10 frames later does nothing: he is invincible")
+        self.assertEqual(word("hero_x"), 128 - 24)
+        ram, word, _ = self.run_scenario(args, [(599, "g", 1), (600, "g", 0)], 700, "shots_hit")
+        self.assertEqual((word("hero_x"), word("hero_flip")), (128 + 24, 0), "hit from the left")
+
+    def test_with_no_power_left_he_dissolves_and_starts_again(self) -> None:
+        """DAMAGE=80: the first H takes all the power. Player_HandleDeath's loop: 16 passes standing, then 8 phases of 8 tiles (tools in the ROM:
+        Player_DrawDeathAnimation), the fade from pass 80, and at pass 256 he is back at the start with all his power."""
+        args = ["ALL=1", "AREA=0", "SCREEN=1", "HERO=128,144,0,255,0,0,1", "VIEWER_DEFS=--defsym DAMAGE=80"]
+        _, base_word, _ = self.run_scenario(args, [], 700, "shots_death")
+        power = base_word("hud_state") >> 8
+        self.assertGreater(power, 0)
+        _, word, _ = self.run_scenario(args, [(599, "h", 1), (600, "h", 0)], 610, "shots_death")
+        self.assertEqual((word("hero_dead"), word("hud_state") >> 8, word("death_state+2")), (1, 0, 0xFF), "dead, standing still for 16 passes")
+        _, word, _ = self.run_scenario(args, [(599, "h", 1), (600, "h", 0)], 660, "shots_death")
+        self.assertTrue(0 <= word("death_state+2") < 8, "dissolving")
+        self.assertEqual(word("hero_x"), 128, "he does not move (and not back: the start is where he stood)")
+        _, word, _ = self.run_scenario(args, [(599, "h", 1), (600, "h", 0)], 760, "shots_death")
+        self.assertEqual(word("death_state+2"), 8, "dissolved")
+        _, word, _ = self.run_scenario(args, [(599, "h", 1), (600, "h", 0)], 900, "shots_death")
+        self.assertEqual((word("hero_dead"), word("hud_state") >> 8, word("hero_x"), word("hero_y")), (0, power, 128, 144), "back at the start")
+        self.assertEqual(word("hero_invinc"), 0)
+
     def test_a_hud_change_during_play_reaches_both_screens(self) -> None:
         """The program is told through the debugger (poke hud_state, then hud_dirty) that the HUD changed; the HUD lines of both screens
         and of the clean background must show the new state."""
@@ -650,6 +685,8 @@ class ViewerTests(unittest.TestCase):
                 text = f"memwrite ${base + sym['input_state'] + 264 + 0x39:x} 0x{value:02x}\ncont\n"
             elif what == "w":                                          # the W key (wing boots)
                 text = f"memwrite ${base + sym['input_state'] + 264 + 0x11:x} 0x{value:02x}\ncont\n"
+            elif what in ("h", "g"):                                   # the H and G keys (debug: hit from the right / from the left)
+                text = f"memwrite ${base + sym['input_state'] + 264 + (0x23 if what == 'h' else 0x22):x} 0x{value:02x}\ncont\n"
             elif what == "y":                                          # the hero's y (a word)
                 text = f"memwrite ${base + sym['hero_y']:x} 0x{value >> 8:02x} 0x{value & 255:02x}\ncont\n"
             else:
@@ -660,7 +697,10 @@ class ViewerTests(unittest.TestCase):
         script += f"b VBL > {capture} :once :file {work / 'cap.ini'}\n"
         log = hs.run_hatari(hatari, TOS, prg, work, capture + 1, "0", script, None)
         ram = (work / "ram1.bin").read_bytes()
-        word = lambda name: int.from_bytes(ram[base + sym[name]:base + sym[name] + 2], "big", signed=True)
+        def word(name: str) -> int:                                    # a word by symbol ("symbol+2": at an offset)
+            symbol, _, offset = name.partition("+")
+            at = base + sym[symbol] + int(offset or 0)
+            return int.from_bytes(ram[at:at + 2], "big", signed=True)
         return ram, word, log
 
     def assert_picture(self, rows, expected) -> None:

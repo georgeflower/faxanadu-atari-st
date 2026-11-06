@@ -2,7 +2,7 @@
 `tools/refnes/walkgolden.mjs`). Positions are 8.8 fixed point: `x` (the game's Player_PosX_Block) and `frac` (Player_PosX_Frac).
 
 Read from `Player_CheckHandleVertMovement`, `Player_CheckIfOnLadder`, `Player_CheckHandleClimbUp/Down`, `Player_CheckHandleJump`, `Player_TryMoveRight/Left`, `Player_UpdateAcceleration`, `Player_CheckIfPassable`, the `Area_CanPlayerMove*`
-routines and `Player_HandleVertLadderOrJump` / `Player_UpdateClimbOrJump` (jumping, falling, landing). Not here yet: knockback. (There is no crouching
+routines and `Player_HandleVertLadderOrJump` / `Player_UpdateClimbOrJump` (jumping, falling, landing). Not here yet: magic. (There is no crouching
 in the game: body frame 3 is the pose in the air.) One ROM quirk is
 left out: `Player_HandleVertLadderOrJump` loads A instead of X before its down check, so with the hero in the top left corner of a screen it checks
 the wrong side.
@@ -40,6 +40,7 @@ class Hero:
     status: int = 0       # Player_StatusFlag (bit 0: the attack button is down)
     attack_timer: int = 0     # Player_AttackPhaseTimer
     attack_frame: int = 0     # Player_AttackPhaseAnimFrame (0-2)
+    invinc: int = 0           # Player_InvincibilityPhase: $3C when he is hit, counts down to 0; he cannot be hurt meanwhile
 
 
 def blocked(impassable: list[int], col: int, row: int) -> int:
@@ -66,7 +67,15 @@ def side_blocked(column: list[int] | None, y: int) -> int:
     return result
 
 
+STATUS_KNOCKBACK = 0x02                                            # Player_StatusFlag bit 1
+HIT_INVINCIBILITY = 0x3C                                           # Player_SetDamagedBySprite
+KNOCKBACK_END = 0x39                                               # the knockback ends when the phase has counted down to here
+
+
 def update_acceleration(h: Hero, joy: int) -> None:
+    if h.status & STATUS_KNOCKBACK:                                  # Player_UpdatePosFromKnockback: 8 pixels a frame
+        h.acc = 0x0800
+        return
     if joy & (JOY_UP | JOY_DOWN) and h.flags & FLAG_CAN_CLIMB:       # stepping to a ladder: the standard speed, no acceleration
         h.acc = 0xC0
         return
@@ -108,6 +117,38 @@ def try_move_left(h: Hero, joy: int, impassable: list[int], left_col: list[int] 
     if borrow:
         return "edge_left"
     return None
+
+
+def hit(h: Hero, enemy_faces_right: bool) -> None:
+    """Player_SetDamagedBySprite: 60 frames of invincibility, he turns to face the enemy (the sprite's direction bit gives the opposite facing) and
+    is knocked back. (The damage itself is the caller's: `Player_ApplyDamage`.)"""
+    h.invinc = HIT_INVINCIBILITY
+    h.flags = (h.flags & ~FLAG_RIGHT & 0xFF) | (0 if enemy_faces_right else FLAG_RIGHT)
+    h.status |= STATUS_KNOCKBACK
+
+
+def knockback_step(h: Hero, impassable: list[int], left_col: list[int] | None = None, right_col: list[int] | None = None) -> str | None:
+    """Player_HandleKnockback: one move backwards (he faces the enemy; the facing is put back afterwards). The jump and the attack end: a hero in the
+    air falls from then on."""
+    facing = h.flags & FLAG_RIGHT
+    h.flags = facing ^ FLAG_RIGHT                                    # the ROM stores only the flipped facing bit: every other flag (jumping, attacking ...) is gone
+    event = try_move_right(h, 0, impassable, right_col) if h.flags & FLAG_RIGHT else try_move_left(h, 0, impassable, left_col)
+    h.flags = (h.flags & ~FLAG_RIGHT & 0xFF) | facing
+    return event
+
+
+def iframes_step(h: Hero) -> None:
+    """Player_HandleIFrames: the phase counts down; the knockback lasts until it has reached $39."""
+    if not h.invinc:
+        h.status &= ~STATUS_KNOCKBACK
+        return
+    h.invinc -= 1
+    if h.invinc > KNOCKBACK_END:
+        h.acc = 0xC0
+        return
+    if h.invinc == KNOCKBACK_END:
+        h.acc = 0xC0
+    h.status &= ~STATUS_KNOCKBACK
 
 
 def attack_step(h: Hero, changed: int) -> None:
@@ -341,9 +382,19 @@ def air_step(h: Hero, joy: int, impassable: list[int], left_col: list[int] | Non
 
 def step(h: Hero, joy: int, changed: int, impassable: list[int], left_col: list[int] | None = None, right_col: list[int] | None = None,
          **edges) -> str | None:
-    """One frame of the hero as GameLoop_UpdatePlayer runs it (without magic and knockback): the vertical part first, then the horizontal part."""
+    """One frame of the hero as GameLoop_UpdatePlayer runs it (without magic): the vertical part first, then the horizontal part."""
     attack_step(h, changed)
     event = vertical_step(h, joy, changed, impassable, **edges)
+    if h.status & STATUS_KNOCKBACK:
+        event = knockback_step(h, impassable, left_col, right_col) or event
+        iframes_step(h)
+        return event
+    event = _horizontal_step(h, joy, impassable, left_col, right_col) or event
+    iframes_step(h)
+    return event
+
+
+def _horizontal_step(h: Hero, joy: int, impassable: list[int], left_col: list[int] | None, right_col: list[int] | None) -> str | None:
     if h.flags & (FLAG_JUMPING | FLAG_FALLING) and not h.status & 0x80:        # with wing boots on he steers in the air as on the ground
-        return air_step(h, joy, impassable, left_col, right_col) or event
-    return walk_step(h, joy, impassable, left_col, right_col) or event
+        return air_step(h, joy, impassable, left_col, right_col)
+    return walk_step(h, joy, impassable, left_col, right_col)

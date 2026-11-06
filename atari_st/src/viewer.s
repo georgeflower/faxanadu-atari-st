@@ -8,6 +8,9 @@
     .include "assets.inc"
 
     | MUSIC=n plays song n (0 none, 1-16 as the NES numbers them) everywhere; without it every package plays its own (PKG_MUSIC).
+    .ifndef DAMAGE
+    .equ DAMAGE, 8                          | the power an enemy's touch takes (debug keys H and G)
+    .endif
     .ifndef WINGS
     .equ WINGS, -1                          | seconds of wing boots left at the start (-1: none); the W key puts them on
     .endif
@@ -439,6 +442,11 @@ hero_step:
     moveq #0, %d4
     move.b %d0, %d4                         | the pad, kept (d0 becomes the horizontal choice)
     lea hero_x(%pc), %a1
+    .ifndef NO_PHYSICS
+    move.w hero_dead(%pc), %d1
+    bne.w 70f
+    bsr.w hurt_keys
+    .endif
     moveq #0, %d2                           | 1 when he moves
     | The ROM's ladders, jump, fall and landing. (The picture tests, NO_PHYSICS: up or down held moves him 2 pixels, nothing else.)
     .ifdef NO_PHYSICS
@@ -456,7 +464,16 @@ hero_step:
     clr.w 18(%a1)
 51: move.w %d4, %d0                         | (the pad again, and no move yet: hero_vertical used d0 and d2)
     moveq #0, %d2
-    tst.w 36(%a1)
+    tst.w 38(%a1)
+    beq.s 56f
+    clr.w 18(%a1)                           | knocked back (Player_HandleKnockback): one move away from the enemy, 8 pixels; every flag but the
+    move.w 4(%a1), -(%sp)                   | facing is gone (the jump and the attack end), the facing comes back after the move (hero_step 40)
+    moveq #2, %d0
+    tst.w 4(%a1)
+    bne.s 54f
+    moveq #1, %d0
+    bra.s 54f
+56: tst.w 36(%a1)
     bpl.s 57f                               | wing boots on: he steers in the air as on the ground
     move.w 18(%a1), %d1                     | in the air (jumping or falling) he cannot turn: he goes on the way he went
     andi.w #5, %d1
@@ -564,7 +581,10 @@ hero_step:
     beq.w 40f
     lea hero_wall(%pc), %a2
     move.w #1, (%a2)                        | blocked: he stays, scroll_check does not scroll
-40: .ifdef NO_PHYSICS
+40: tst.w 38(%a1)
+    beq.s 41f
+    move.w (%sp)+, 4(%a1)                   | knockback: the facing as it was
+41: .ifdef NO_PHYSICS
     btst #3, %d4                            | up (the demo's)
     beq.s 43f
     subq.w #2, 2(%a1)
@@ -574,7 +594,8 @@ hero_step:
     addq.w #2, 2(%a1)
     moveq #1, %d2
     .endif
-44: tst.w %d2                               | the limits only apply to a hero who moves (the start position may lie outside)
+44: bsr.w hero_iframes
+    tst.w %d2                               | the limits only apply to a hero who moves (the start position may lie outside)
     beq.s 8f
     cmpi.w #HERO_Y_MIN, 2(%a1)
     bge.s 7f
@@ -603,6 +624,250 @@ hero_step:
     bsr.w hero_pose
     .endif
     movem.l (%sp)+, %d0-%d4/%a0-%a2
+    rts
+70: bsr.w death_step                        | dead: no input, no moves; the death goes on
+    moveq #0, %d4
+    bra.s 10b
+
+| Player_HandleIFrames: the invincibility phase (hero_invinc, $3C when he is hit) counts down; the knockback lasts until it has reached $39.
+| a1 = hero_x. Clobbers d0.
+hero_iframes:
+    move.w 40(%a1), %d0
+    bne.s 1f
+    clr.w 38(%a1)
+    rts
+1:  subq.w #1, %d0
+    move.w %d0, 40(%a1)
+    cmpi.w #0x39, %d0
+    bhi.s 2f
+    bne.s 3f
+    move.w #0xC0, 12(%a1)                   | at $39 the speed is reset
+3:  clr.w 38(%a1)
+    rts
+2:  move.w #0xC0, 12(%a1)
+    rts
+
+| Debug keys for the damage, until there are enemies: H = something hits him from the right (he turns to it and is knocked back to the left), G from
+| the left. Player_HandleTouchEnemy: nothing happens during the 60 frames of invincibility; else he loses DAMAGE power and the HUD is told.
+| a1 = hero_x. Clobbers nothing.
+hurt_keys:
+    movem.l %d0-%d1/%a0, -(%sp)
+    lea input_state+IN_KEYS+0x23(%pc), %a0  | H
+    moveq #1, %d1                           | he will face right
+    tst.b (%a0)
+    bne.s 1f
+    lea input_state+IN_KEYS+0x22(%pc), %a0  | G
+    moveq #0, %d1
+    tst.b (%a0)
+    beq.s 9f
+1:  tst.w 40(%a1)
+    bne.s 9f                                | invincible
+    move.w #0x3C, 40(%a1)                   | Player_SetDamagedBySprite: 60 frames, facing the enemy, knocked back
+    move.w %d1, 4(%a1)
+    move.w #1, 38(%a1)
+    lea hud_state(%pc), %a0                 | Player_ReduceHP
+    moveq #0, %d0
+    move.b (%a0), %d0
+    subi.w #DAMAGE, %d0
+    bpl.s 2f
+    moveq #0, %d0
+2:  move.b %d0, (%a0)
+    lea hud_dirty(%pc), %a0
+    st (%a0)
+    tst.w %d0
+    bne.s 9f
+    bsr.w death_start                       | no power left (and no Elixir yet): dead
+9:  movem.l (%sp)+, %d0-%d1/%a0
+    rts
+
+| Player_ReduceHP found no power left: Player_HandleDeath starts. Every flag but the facing, the status and the invincibility are cleared, the music
+| stops. a1 = hero_x. Clobbers nothing.
+death_start:
+    movem.l %d0/%a0, -(%sp)
+    lea hero_dead(%pc), %a0
+    move.w #1, (%a0)
+    lea death_state(%pc), %a0
+    clr.w (%a0)                             | the pass of the death loop
+    move.w #0xFF, 2(%a0)                    | Player_DeathAnimationPhase $FF: not started
+    move.w #-1, 4(%a0)                      | Player_DeathAnimationCounter $FF
+    clr.w 6(%a0)                            | Screen_FadeOutCounter
+    move.w #4, 8(%a0)                       | Screen_FadeOutStage 4: no fade yet
+    clr.w 10(%a0)
+    clr.w 18(%a1)
+    clr.w 14(%a1)
+    clr.w 22(%a1)
+    clr.w 38(%a1)
+    clr.w 40(%a1)
+    move.w #-1, 36(%a1)
+    moveq #0, %d0
+    bsr.w sound_play_music
+    movem.l (%sp)+, %d0/%a0
+    rts
+
+| Player_HandleDeath's loop, a pass a frame (256 of them): he stands for 16, then dissolves in 8 phases of 8 tiles (Player_DrawDeathAnimation; the
+| picture is made by dissolve_image), from pass 80 the screen fades to black in four steps (Screen_NextTransitionState), and at the end he is
+| back at the start with all his power. (The ROM then shows a message and sets gold and experience; not done.) a1 = hero_x. Clobbers nothing.
+death_step:
+    movem.l %d0-%d3/%a0, -(%sp)
+    lea input_state(%pc), %a0
+    clr.b IN_PAD(%a0)
+    clr.b IN_PAD_NEW(%a0)
+    lea death_state(%pc), %a0
+    move.w (%a0), %d0
+    cmpi.w #80, %d0
+    bcs.s 3f
+    bne.s 2f
+    clr.w 8(%a0)                            | pass 80: the fade begins
+    bra.s 3f
+2:  move.w 8(%a0), %d1
+    cmpi.w #4, %d1
+    bcc.s 3f
+    addi.w #50, 6(%a0)
+    cmpi.w #256, 6(%a0)
+    bcs.s 3f
+    subi.w #256, 6(%a0)
+    addq.w #1, %d1
+    move.w %d1, 8(%a0)
+    bsr.w death_fade
+3:  move.w 2(%a0), %d1
+    cmpi.w #8, %d1
+    bcc.s 6f
+    move.w 4(%a0), %d2
+    bpl.s 4f
+    move.w %d0, %d3
+    andi.w #3, %d3
+    bne.s 6f
+    moveq #0, %d2
+4:  addq.w #1, %d2                          | the tile (d2 before this) is dissolved in this phase: dissolve_image reads the counts
+    move.w %d2, 4(%a0)
+    cmpi.w #8, %d2
+    bcs.s 6f
+    move.w #-1, 4(%a0)
+    addq.w #1, 2(%a0)
+6:  cmpi.w #0xFF, 2(%a0)
+    bne.s 7f
+    cmpi.w #16, %d0
+    bcs.s 7f
+    clr.w 2(%a0)
+    clr.w 4(%a0)
+7:  addq.w #1, %d0
+    move.w %d0, (%a0)
+    cmpi.w #256, %d0
+    bne.s 9f
+    bsr.w hero_respawn
+9:  movem.l (%sp)+, %d0-%d3/%a0
+    rts
+
+| The screen's colours a quarter darker each step: d1 = the step (1 to 4; 4 is black).
+death_fade:
+    movem.l %d0-%d4/%a0-%a1, -(%sp)
+    movea.l pkg_ptr+PKG_PALETTE(%pc), %a0
+    movea.l #PALETTE, %a1
+    moveq #4, %d4
+    sub.w %d1, %d4                          | the brightness in quarters
+    moveq #15, %d3
+1:  move.w (%a0)+, %d0
+    move.w %d0, %d1
+    andi.w #15, %d1
+    mulu.w %d4, %d1
+    lsr.w #2, %d1                           | blue
+    move.w %d0, %d2
+    lsr.w #4, %d2
+    andi.w #15, %d2
+    mulu.w %d4, %d2
+    lsr.w #2, %d2
+    lsl.w #4, %d2
+    or.w %d2, %d1                           | green
+    lsr.w #8, %d0
+    andi.w #15, %d0
+    mulu.w %d4, %d0
+    lsr.w #2, %d0
+    lsl.w #8, %d0
+    or.w %d0, %d1                           | red
+    move.w %d1, (%a1)+
+    dbra %d3, 1b
+    movem.l (%sp)+, %d0-%d4/%a0-%a1
+    rts
+
+| The start again (Game_InitStateForSpawn, Player_Spawn): full power, the start screen of the start package, the start position, the song.
+hero_respawn:
+    movem.l %d0-%d3/%a0-%a1, -(%sp)
+    lea hero_dead(%pc), %a0
+    clr.w (%a0)
+    lea hud_states(%pc), %a0
+    bsr.w hud_load_state
+    lea hero_flip(%pc), %a0
+    move.w #HERO_FLIP, (%a0)
+    move.w #START_SCREEN, %d0
+    move.w #(HERO_Y&0xF0)+(HERO_X/16), %d1
+    moveq #PACKAGE_AREA, %d2
+    moveq #PACKAGE_PALETTE, %d3
+    bsr.w enter_world
+    move.w pkg_ptr+PKG_MUSIC(%pc), %d0
+    bsr.w sound_play_music
+    lea cur_music(%pc), %a0
+    move.w %d0, (%a0)
+    movem.l (%sp)+, %d0-%d3/%a0-%a1
+    rts
+
+| The dissolved hero: a1 = the image of the next tile of the hero (8 lines of a mask and four plane bytes); on return a1 is a copy with the pixels
+| gone that Player_DrawDeathAnimation has removed so far: in each phase q a pixel a line, the one PPUBUFFER_DRAWCOMMAND_REMOVE_VERT_LINES_MASKS[(q - line) & 7]
+| says, and in the phase going on only the tiles done so far (death_state count). The ROM dissolves the pattern tiles $00-$07, the standing body's eight
+| tiles, which are the first eight of the list; the weapon and the shield (the rest) are not drawn while he dies. The masks are mirrored when he faces
+| right. Keeps every register but a1.
+dissolve_image:
+    movem.l %d0-%d5/%a0/%a2, -(%sp)
+    move.w hero_dead(%pc), %d0
+    beq.w 9f
+    lea death_state(%pc), %a0
+    move.w 10(%a0), %d3                     | which tile this is: 0-7 are the body's (the list has it first, in the order of the ROM's pattern tiles)
+    addq.w #1, 10(%a0)
+    cmpi.w #8, %d3
+    blt.s 10f
+    lea blank_image(%pc), %a1               | Player_DrawBody only: no sword, no shield
+    bra.w 9f
+10: move.w 2(%a0), %d4                      | the phases done
+    cmpi.w #8, %d4
+    bls.s 1f
+    moveq #0, %d4                           | $FF: not started
+1:  move.w 4(%a0), %d5                      | the tiles done in the phase going on
+    bmi.s 2f
+    cmp.w %d5, %d3
+    bge.s 2f
+    addq.w #1, %d4
+2:  tst.w %d4
+    beq.s 9f
+    lea dissolve_masks(%pc), %a0
+    lea dissolve_buf(%pc), %a2
+    moveq #0, %d2                           | the line
+3:  moveq #-1, %d0                          | what is left of the line's pixels
+    moveq #0, %d1                           | the phase
+4:  cmp.w %d4, %d1
+    bge.s 5f
+    move.w %d1, %d3
+    sub.w %d2, %d3
+    andi.w #7, %d3
+    and.b (%a0,%d3.w), %d0
+    addq.w #1, %d1
+    bra.s 4b
+5:  move.w hero_flip(%pc), %d3
+    beq.s 7f
+    moveq #7, %d3                           | facing right: the picture is mirrored
+    moveq #0, %d5
+6:  lsr.b #1, %d0
+    roxl.b #1, %d5
+    dbra %d3, 6b
+    move.b %d5, %d0
+7:  moveq #4, %d3
+8:  move.b (%a1)+, %d5
+    and.b %d0, %d5
+    move.b %d5, (%a2)+
+    dbra %d3, 8b
+    addq.w #1, %d2
+    cmpi.w #8, %d2
+    blt.s 3b
+    lea dissolve_buf(%pc), %a1
+9:  movem.l (%sp)+, %d0-%d5/%a0/%a2
     rts
 
 | Game_DecWingBootsDuration: the seconds of wing boots left (hero_wings, -1 none) go down once every 64 frames and the boots are gone when they
@@ -731,7 +996,11 @@ hero_accelerate:
     bne.s 1f
     move.w #0xC0, 12(%a1)
 1:  move.w #1, 14(%a1)
-    move.w %d4, %d1
+    tst.w 38(%a1)
+    beq.s 4f
+    move.w #0x800, 12(%a1)                  | Player_UpdatePosFromKnockback: 8 pixels a frame
+    rts
+4:  move.w %d4, %d1
     andi.w #0x0C, %d1                       | up or down beside a ladder: the standard speed, no acceleration
     beq.s 3f
     btst #3, 19(%a1)
@@ -1118,6 +1387,8 @@ climb_down:
 | Draws the hero in the pose his state says, into screen a4, and notes the rectangle in this screen's slot.
 draw_hero:
     movem.l %d0-%d7/%a0-%a3/%a5, -(%sp)
+    lea death_state(%pc), %a0
+    clr.w 10(%a0)                           | (dissolving: the first tile again)
     movea.l pkg_ptr+PKG_HERO_ANIM(%pc), %a5
     move.w hero_flip(%pc), %d0
     move.w hero_frame(%pc), %d1
@@ -1161,6 +1432,7 @@ draw_hero:
     move.w (%a5)+, %d2
     mulu.w #SPRITE_IMAGE_BYTES, %d2
     lea (%a3,%d2.l), %a1
+    bsr.w dissolve_image
     bsr.w blit_tile
     bra.s 1b
 2:  bsr.s clear_margins
@@ -2092,6 +2364,21 @@ hero_title:
     .word TITLE                             | PlayerTitle (the rank): the walking acceleration steps by its group; TITLE=n sets it (no experience yet)
 hero_wings:
     .word WINGS                             | seconds of wing boots left (Player_StatusFlag bit 7 is "this is 0 or more"); -1 none
+hero_knock:
+    .word 0                                 | Player_StatusFlag bit 1: knocked back
+hero_invinc:
+    .word 0                                 | Player_InvincibilityPhase: $3C when hit, counts down to 0
+hero_dead:
+    .word 0                                 | 1 while he dies (death_step)
+death_state:
+    .word 0, 0xFF, -1, 0, 4, 0              | the pass, Player_DeathAnimationPhase, ...Counter, Screen_FadeOutCounter, ...Stage, the tile being drawn
+dissolve_masks:
+    .byte 0xFE, 0xDF, 0xF7, 0xFD, 0xBF, 0xEF, 0x7F, 0xFB   | PPUBUFFER_DRAWCOMMAND_REMOVE_VERT_LINES_MASKS
+dissolve_buf:
+    .space 40
+blank_image:
+    .space 40
+    .even
 wings_key:
     .word 0                                 | the W key was down at the last frame
 wings_clock:

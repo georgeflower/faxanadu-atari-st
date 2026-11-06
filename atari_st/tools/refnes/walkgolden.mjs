@@ -18,7 +18,7 @@ const snap = (pad) => frames.push({
   pad, x: g.rd("Player_PosX_Block"), frac: g.rd("Player_PosX_Frac"), y: g.rd("Player_PosY"),
   acc: g.rd("Player_MoveAcceleration"), accU: g.rd("Player_MoveAcceleration_U"),
   flags: g.rd("Player_Flags"), tick: g.rd("Player_MovementTick"), joy: g.rd("Joy1_ButtonMask"),
-  title: g.rd("PlayerTitle"), status: g.rd("Player_StatusFlag"), changed: g.rd("Joy1_ChangedButtonMask"),
+  title: g.rd("PlayerTitle"), status: g.rd("Player_StatusFlag"), invinc: g.rd("Player_InvincibilityPhase"), changed: g.rd("Joy1_ChangedButtonMask"),
   jump: g.rd("Player_JumpCurveIndex"), climb: g.rd("Player_ClimbFlySpeedModifier"), atkTimer: g.rd("Player_AttackPhaseTimer"), atkFrame: g.rd("Player_AttackPhaseAnimFrame"),
 });
 const act = (buttons, n) => { for (const b of buttons) g.nes.buttonDown(1, b);
@@ -72,6 +72,15 @@ const cols = {right: Array.from({length: 16}, (_, r) => +(r === 10)), left: Arra
 put(0xE0, 144); frames[frames.length - 1].cols = cols; act([BTN.RIGHT], 30); act([], 3);       // stopped by the wall in the next screen's first column
 put(0x08, 144); act([BTN.LEFT], 30); act([], 3);                                              // the same on the left
 put(0x08, 48); act([BTN.LEFT], 30); act([], 3);                                               // in the air above the wall: free to leave (rows 3-4)
+// Being hit (Player_SetDamagedBySprite, written by hand between two frames): 60 frames of invincibility, he turns to the enemy and is knocked back
+// 8 pixels a frame for three frames. The argument is the enemy's direction bit.
+const hit = (bit) => { g.wr("Player_InvincibilityPhase", 0x3C); g.wr("Player_StatusFlag", g.rd("Player_StatusFlag") | 2);
+  g.wr("Player_Flags", (g.rd("Player_Flags") & 0xBF) | (bit ? 0 : 0x40)); snap(0); frames[frames.length - 1].hit = bit; };
+put(0x80 - 0x40, 144); act([], 5); hit(0); act([], 70);                     // standing, hit from the right: he faces right and goes back left
+put(0x10, 144); act([], 5); hit(1); act([], 70);                            // hit from the left
+put(0x60, 144); act([BTN.RIGHT], 8); hit(0); act([BTN.RIGHT], 8); act([], 62);   // walking right when hit, still holding right
+put(0x20, 144); act([], 5); act([BTN.A], 1); act([], 6); hit(0); act([], 60);   // hit in a jump
+put(0x70, 144); act([], 5); hit(1); act([], 60);                            // knocked towards the hole in the floor: he falls
 // Wing boots on (Player_StatusFlag bit 7, the game sets it every frame while the duration is not $FF): flying up and down with A, gliding with A held,
 // turning in the air, a jump with the boots on.
 g.wr("DurationWingBoots", 0x28); g.wr("Player_StatusFlag", g.rd("Player_StatusFlag") | 0x80);
