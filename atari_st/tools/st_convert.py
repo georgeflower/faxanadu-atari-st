@@ -332,6 +332,21 @@ def hero_anim_assets(rom: fr.Rom, hero: Hero, palette_index: int, plan: PaletteP
     return b"".join(o.to_bytes(2, "big") for o in offsets) + b"".join(records), b"".join(images)
 
 
+def hero_weapon_assets(rom: fr.Rom, hero: Hero) -> bytes:
+    """Where the weapon is and how far it reaches, for the sixteen poses (the ROM's body frame 0-7 + 8 * the flip bit) of `hero`: four words a pose,
+    dx and dy from the hero's x and y (signed) and the range in x and y (`Player_DrawWeapon`, `MAYBE_WEAPON_RANGES`; 0 and 0 without a weapon)."""
+    out = bytearray()
+    for left in (False, True):
+        for frame in POSE_FRAMES:
+            if hero.weapon == fs.NO_ITEM:
+                values = (0, 0, 0, 0)
+            else:
+                dx, dy = fs.weapon_offset(rom, hero.armor, hero.shield, hero.weapon, frame, left)
+                values = (dx, dy - 256 if dy > 127 else dy, *fs.weapon_range(rom, hero.weapon))
+            out += b"".join(v.to_bytes(2, "big", signed=True) for v in values)
+    return bytes(out)
+
+
 def expected_scroll_screen(rom: fr.Rom, area_index: int, from_screen: int, to_screen: int, offset: int, to_the_right: bool, camera: int,
                            state: dict | None = None, hero: Hero | None = None, tiles_index: int | None = None) -> list[list[int]]:
     """The ST screen while the picture has moved `offset` pixels (0-256, a multiple of 16) from one screen to the one on its right or left:

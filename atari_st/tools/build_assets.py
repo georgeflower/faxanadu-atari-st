@@ -81,7 +81,7 @@ def edge_table(rom: fr.Rom, a: fm.Area, ids: list[int], world: dict[int, list[in
 
 
 PACKAGE_PARTS = ("palette", "screens", "neighbours", "blocking", "ladders", "doors", "edges", "block_index", "blocks", "hud_tiles", "hud_partial",
-                 "hero_list", "hero_images", "hero_anim", "hero_anim_images")
+                 "hero_list", "hero_images", "hero_anim", "hero_anim_images", "hero_weapon")
 HEADER_WORDS = ("door_count", "screen_count", "edge_count", "music")
 
 
@@ -175,6 +175,7 @@ def main() -> int:
             "doors": doors, "edges": edges, "block_index": b"".join(v.to_bytes(2, "big") for v in table), "blocks": b"".join(images),
             "hud_tiles": sc.hud_tile_images(rom, pal_index, plan, start["hp"], start["mp"]), "hud_partial": sc.hud_partial_images(rom, pal_index, plan),
             "hero_list": hero_list, "hero_images": hero_images, "hero_anim": anim, "hero_anim_images": anim_images,
+            "hero_weapon": sc.hero_weapon_assets(rom, who),
         }
         counts = dict(door_count=len(doors) // DOOR_BYTES, screen_count=len(screens), edge_count=len(edges) // EDGE_BYTES, music=music)
         return make_package(parts, counts), door_targets + edge_targets, len(images)

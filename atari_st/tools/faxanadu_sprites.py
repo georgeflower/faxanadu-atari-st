@@ -158,13 +158,23 @@ def hero_sprites(rom: Rom, x: int, y: int, armor: int, shield: int, weapon: int,
     return sprites
 
 
-def _weapon_sprites(rom, x, y, armor, shield, weapon, frame, facing_left, scroll_x):
+def weapon_offset(rom, armor, shield, weapon, frame, facing_left) -> tuple[int, int]:
+    """Where `Player_DrawWeapon` puts the weapon relative to the hero: (dx signed, dy as the byte the ROM adds to y) for a body frame."""
     with_shield = armor_lookup(armor, shield) & 1
     pos_table = rom.word("PTR_ARRAY_PRG14__b89f", (weapon * 2 + with_shield) if weapon < 3 else (6 + with_shield))
     dx = rom.cpu(14, pos_table, 16)[2 * frame + (1 if facing_left else 0)]
-    wx = (x + _s8(dx)) & 0xFF
     y_table = rom.word("PTR_ARRAY_PRG14__b90f", weapon)
-    dy = rom.cpu(14, y_table, 8)[frame]
+    return _s8(dx), rom.cpu(14, y_table, 8)[frame]
+
+
+def weapon_range(rom, weapon) -> tuple[int, int]:
+    """MAYBE_WEAPON_RANGES: how far the weapon reaches (Maybe_WeaponRange_X, _Y): a dagger 8 and 4, the others 16 and 8."""
+    return rom.byte("MAYBE_WEAPON_RANGES", 2 * weapon), rom.byte("MAYBE_WEAPON_RANGES", 2 * weapon + 1)
+
+
+def _weapon_sprites(rom, x, y, armor, shield, weapon, frame, facing_left, scroll_x):
+    dx, dy = weapon_offset(rom, armor, shield, weapon, frame, facing_left)
+    wx = (x + dx) & 0xFF
     wy = (y + dy) & 0xFF
     first = WEAPON_FIRST_TILE[weapon]
     base = rom.byte("WEAPONS_SPRITE_L", weapon)

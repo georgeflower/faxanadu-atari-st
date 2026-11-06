@@ -221,6 +221,24 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual((word("hero_dead"), word("hud_state") >> 8, word("hero_x"), word("hero_y")), (0, power, 128, 144), "back at the start")
         self.assertEqual(word("hero_invinc"), 0)
 
+    def test_the_weapons_place_and_reach_follow_the_pose(self) -> None:
+        """`weapon_x`, `weapon_y`, `weapon_rx`, `weapon_ry` (Player_DrawWeapon's numbers, checked against the ROM in tests/test_hero_physics.py) for the
+        pose he is in: standing, and in each phase of an attack (a dagger, no shield)."""
+        import faxanadu_rom as fr
+        import faxanadu_sprites as fs
+
+        rom = fr.Rom(ROM)
+        seen = set()
+        for capture, stick in ((620, 0), (606, 0x80), (609, 0x80), (620, 0x80)):
+            ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1", "HERO=128,144,0,255,0,0,1"], [(599, "joy", stick), (601, "joy", 0)], capture, "shots_weapon")
+            frame, flip = word("hero_frame"), word("hero_flip")
+            seen.add(frame)
+            dx, dy = fs.weapon_offset(rom, 0, 255, 0, frame, bool(flip))
+            want = (word("hero_x") + dx, word("hero_y") + (dy - 256 if dy > 127 else dy), *fs.weapon_range(rom, 0))
+            got = tuple(word(f"weapon_x+{2 * i}") for i in range(4))
+            self.assertEqual(got, want, f"pose {frame}, flip {flip}")
+        self.assertGreaterEqual(len(seen), 2)
+
     def test_a_hud_change_during_play_reaches_both_screens(self) -> None:
         """The program is told through the debugger (poke hud_state, then hud_dirty) that the HUD changed; the HUD lines of both screens
         and of the clean background must show the new state."""

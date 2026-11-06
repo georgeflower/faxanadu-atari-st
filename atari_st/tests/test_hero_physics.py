@@ -65,6 +65,29 @@ class WalkingTests(unittest.TestCase):
             self.assertEqual(got, want, f"frame {n}, joy {joy}")
         self.assertGreater(jumps, 60)                       # both jumps were really checked
 
+    def test_the_weapons_place_and_reach_match_the_rom(self) -> None:
+        """`Player_DrawWeapon`: the weapon's x and y and its range (`MAYBE_WEAPON_RANGES`) for the four weapons with and without a shield, in the poses of
+        standing, walking, jumping and attacking (golden run `tools/refnes/weaponbox.mjs`; `hero_physics.body_frame` gives the pose)."""
+        import faxanadu_rom as fr
+        import faxanadu_sprites as fs
+        import hero_physics as hp
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "weapon.json"
+            subprocess.run(["node", "weaponbox.mjs", str(out)], cwd=ROOT / "tools" / "refnes", check=True, capture_output=True)
+            frames = json.loads(out.read_text())
+        rom = fr.Rom(ROM)
+        poses = set()
+        for n, f in enumerate(frames):
+            h = hp.Hero(x=f["x"], y=f["y"], flags=f["flags"], tick=f["tick"], status=f["status"], attack_frame=f["atkFrame"])
+            frame = hp.body_frame(h, f["joy"])
+            poses.add(frame)
+            dx, dy = fs.weapon_offset(rom, 0, f["shield"], f["weapon"], frame, bool(f["flags"] & 0x40))
+            want = (f["weaponX"], f["weaponY"], f["rangeX"], f["rangeY"])
+            got = ((f["x"] + dx) & 0xFF, (f["y"] + dy) & 0xFF, *fs.weapon_range(rom, f["weapon"]))
+            self.assertEqual(got, want, f"frame {n}: weapon {f['weapon']}, shield {f['shield']}, pose {frame}, flags {f['flags']:#x}")
+        self.assertEqual(poses, {0, 1, 2, 3, 4, 5, 6})
+
 
 if __name__ == "__main__":
     unittest.main()

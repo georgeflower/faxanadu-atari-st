@@ -2,7 +2,7 @@
 `tools/refnes/walkgolden.mjs`). Positions are 8.8 fixed point: `x` (the game's Player_PosX_Block) and `frac` (Player_PosX_Frac).
 
 Read from `Player_CheckHandleVertMovement`, `Player_CheckIfOnLadder`, `Player_CheckHandleClimbUp/Down`, `Player_CheckHandleJump`, `Player_TryMoveRight/Left`, `Player_UpdateAcceleration`, `Player_CheckIfPassable`, the `Area_CanPlayerMove*`
-routines and `Player_HandleVertLadderOrJump` / `Player_UpdateClimbOrJump` (jumping, falling, landing). Not here yet: magic. (There is no crouching
+routines and `Player_HandleVertLadderOrJump` / `Player_UpdateClimbOrJump` (jumping, falling, landing). Magic is not here (it needs an inventory). (There is no crouching
 in the game: body frame 3 is the pose in the air.) One ROM quirk is
 left out: `Player_HandleVertLadderOrJump` loads A instead of X before its down check, so with the hero in the top left corner of a screen it checks
 the wrong side.
@@ -149,6 +149,24 @@ def iframes_step(h: Hero) -> None:
     if h.invinc == KNOCKBACK_END:
         h.acc = 0xC0
     h.status &= ~STATUS_KNOCKBACK
+
+
+ATTACK_FRAMES = (4, 5, 6)                                          # BYTE_ARRAY_PRG15_MIRROR__ecf3: the body frames of the three attack phases
+WALK_FRAMES = (0, 1, 2, 1)                                         # BYTE_ARRAY_PRG15_MIRROR__ecef
+
+
+def body_frame(h: Hero, joy: int) -> int:
+    """Player_GetBodySpriteFrameOffset (also Maybe_Player_CalcAnimFrame, which the weapon uses): 3 in the air, 7 climbing, 4-6 attacking, 3 flying,
+    else the walk frames by the movement tick."""
+    if h.flags & FLAG_JUMPING:
+        return ATTACK_FRAMES[h.attack_frame] if h.flags & FLAG_ATTACKING else 3
+    if is_climbing(h):
+        return 7
+    if h.flags & FLAG_ATTACKING:
+        return ATTACK_FRAMES[h.attack_frame]
+    if flying(h, joy):
+        return 3
+    return WALK_FRAMES[(h.tick >> 3) & 3] if h.flags & FLAG_MOVING else 0
 
 
 def attack_step(h: Hero, changed: int) -> None:

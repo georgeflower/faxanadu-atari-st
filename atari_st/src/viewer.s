@@ -623,6 +623,7 @@ hero_step:
 10: .ifndef NO_PHYSICS
     bsr.w hero_pose
     .endif
+    bsr.w weapon_update
     movem.l (%sp)+, %d0-%d4/%a0-%a2
     rts
 70: bsr.w death_step                        | dead: no input, no moves; the death goes on
@@ -905,6 +906,26 @@ wings_update:
     bmi.s 9f
     subq.w #1, (%a0)
 9:  movem.l (%sp)+, %d0-%d1/%a0
+    rts
+
+| Player_DrawWeapon's numbers: where the weapon is (weapon_x, weapon_y: the hero's place and the package's offsets for the pose) and how far it
+| reaches (weapon_rx, weapon_ry; 0 without a weapon). The enemies will be hit by them as Sprites_IsSpriteOutOfWeaponRange does. a1 = hero_x.
+| Clobbers d0, a0.
+weapon_update:
+    movea.l pkg_ptr+PKG_HERO_WEAPON(%pc), %a0
+    move.w 4(%a1), %d0                      | the pose: the body frame + 8 for the flip bit
+    lsl.w #3, %d0
+    add.w 6(%a1), %d0
+    lsl.w #3, %d0                           | 8 bytes a pose
+    adda.w %d0, %a0
+    move.w (%a1), %d0
+    add.w (%a0)+, %d0
+    move.w %d0, weapon_x-hero_x(%a1)
+    move.w 2(%a1), %d0
+    add.w (%a0)+, %d0
+    move.w %d0, weapon_x+2-hero_x(%a1)
+    move.w (%a0)+, weapon_x+4-hero_x(%a1)
+    move.w (%a0)+, weapon_x+6-hero_x(%a1)
     rts
 
 | Player_GetBodySpriteFrameOffset: the pose from his state. 3 in the air (jumping), 4 (the ROM's frame 7) climbing, else the walk frames 0, 1, 2, 1
@@ -2368,6 +2389,8 @@ hero_knock:
     .word 0                                 | Player_StatusFlag bit 1: knocked back
 hero_invinc:
     .word 0                                 | Player_InvincibilityPhase: $3C when hit, counts down to 0
+weapon_x:
+    .word 0, 0, 0, 0                        | weapon_update: x, y, reach x, reach y
 hero_dead:
     .word 0                                 | 1 while he dies (death_step)
 death_state:
