@@ -16,7 +16,9 @@ CLIMBABLE = tuple(int(p in (2, 10)) for p in range(16))            # Area_IsBloc
 ACCELERATION_DELTA = (2, 4, 6, 8)                                  # PLAYER_ACCELERATION_DELTA_BY_RANK_GROUP
 
 JOY_RIGHT, JOY_LEFT, JOY_DOWN, JOY_UP = 1, 2, 4, 8                 # the NES pad bits (Joy1_ButtonMask)
-FLAG_JUMPING, FLAG_HOLDING, FLAG_FALLING, FLAG_CAN_CLIMB, FLAG_CLIMBING, FLAG_MOVING, FLAG_RIGHT = 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40     # Player_Flags
+FLAG_JUMPING, FLAG_HOLDING, FLAG_FALLING, FLAG_CAN_CLIMB, FLAG_CLIMBING, FLAG_MOVING, FLAG_RIGHT, FLAG_ATTACKING = 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80     # Player_Flags
+BUTTON_B = 0x40                                                    # in Joy1_ChangedButtonMask: B was pressed this frame
+ATTACK_PHASES = (8, 3, 8)                                          # PLAYER_ATTACK_ANIMATION_PHASES: thrust out, wait, withdraw
 BUTTON_A = 0x80                                                    # in Joy1_ChangedButtonMask: A was pressed this frame
 
 # PLAYER_JUMP_CURVE: how far up (index < 16) or down (index >= 16) the hero moves each frame of a jump
@@ -35,6 +37,9 @@ class Hero:
     title: int = 0        # PlayerTitle (rank): the acceleration steps by rank group title >> 2
     jump: int = 0         # Player_JumpCurveIndex
     climb: int = 0        # Player_ClimbFlySpeedModifier: the fraction of a pixel the climbing down adds up
+    status: int = 0       # Player_StatusFlag (bit 0: the attack button is down)
+    attack_timer: int = 0     # Player_AttackPhaseTimer
+    attack_frame: int = 0     # Player_AttackPhaseAnimFrame (0-2)
 
 
 def blocked(impassable: list[int], col: int, row: int) -> int:
@@ -94,9 +99,33 @@ def try_move_left(h: Hero, joy: int, impassable: list[int]) -> str | None:
     return None
 
 
+def attack_step(h: Hero, changed: int) -> None:
+    """Player_CheckHandleAttack: B pressed (not held) starts an attack of 8 + 3 + 8 frames, unless he is climbing."""
+    if not h.flags & FLAG_ATTACKING:
+        if is_climbing(h) or not changed & BUTTON_B:
+            h.status &= ~1
+            return
+        if h.status & 1:
+            return
+        h.flags |= FLAG_ATTACKING
+        h.status |= 1
+        h.attack_timer = h.attack_frame = 0
+    h.attack_timer += 1
+    if h.attack_timer < ATTACK_PHASES[h.attack_frame]:
+        return
+    h.attack_timer = 0
+    if h.attack_frame + 1 >= 3:
+        h.flags &= ~FLAG_ATTACKING & 0xFF
+    else:
+        h.attack_frame += 1
+
+
 def walk_step(h: Hero, joy: int, impassable: list[int]) -> str | None:
     """One frame of walking on the ground with `joy` held (right, then left wins nothing: right first, as in the ROM). Returns 'edge_right' or
-    'edge_left' when he has walked to the end of the screen."""
+    'edge_left' when he has walked to the end of the screen. Attacking on the ground he stands still."""
+    if h.flags & FLAG_ATTACKING:
+        h.flags &= ~FLAG_MOVING & 0xFF
+        return None
     if joy & (JOY_RIGHT | JOY_LEFT):
         h.tick = (h.tick + 1) & 0xFF
         if joy & JOY_RIGHT:
@@ -287,7 +316,8 @@ def air_step(h: Hero, joy: int, impassable: list[int]) -> str | None:
 
 
 def step(h: Hero, joy: int, changed: int, impassable: list[int], **edges) -> str | None:
-    """One frame of the hero as GameLoop_UpdatePlayer runs it (without attack and ladders): the vertical part first, then the horizontal part."""
+    """One frame of the hero as GameLoop_UpdatePlayer runs it (without magic, wing boots and knockback): the vertical part first, then the horizontal part."""
+    attack_step(h, changed)
     event = vertical_step(h, joy, changed, impassable, **edges)
     if h.flags & (FLAG_JUMPING | FLAG_FALLING):
         return air_step(h, joy, impassable) or event

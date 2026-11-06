@@ -30,7 +30,7 @@ class WalkingTests(unittest.TestCase):
         impassable = [hp.IMPASSABLE[props[b] & 15] for b in blocks]
         first = frames[0]
         h = hp.Hero(x=first["x"], frac=first["frac"], y=first["y"], acc=first["acc"] | first["accU"] << 8, flags=first["flags"], tick=first["tick"],
-                    title=first["title"], jump=first["jump"])
+                    title=first["title"], jump=first["jump"], status=first["status"])
         jumps = 0
         patched = False
         ladder = [0] * 208
@@ -48,14 +48,12 @@ class WalkingTests(unittest.TestCase):
                     for r in range(6, 11):
                         ladder[r * 16 + 13] = 1
                         impassable[r * 16 + 13] = 0
-                h = hp.Hero(x=f["x"], frac=f["frac"], y=f["y"], acc=0, flags=f["flags"], tick=f["tick"], title=f["title"], jump=f["jump"], climb=f["climb"])
+                h = hp.Hero(x=f["x"], frac=f["frac"], y=f["y"], acc=0, flags=f["flags"], tick=f["tick"], title=f["title"], jump=f["jump"], climb=f["climb"], status=f["status"])
                 continue
-            if joy & 0x40:                                  # B: the attack is not modelled yet, the golden run goes on with it
-                break
             jumps += bool(f["flags"] & 1)
             hp.step(h, joy, f["changed"], impassable, ladder=ladder)
-            got = (h.x, h.frac, h.y, h.acc, h.flags, h.tick, h.jump, h.climb)
-            want = (f["x"], f["frac"], f["y"], f["acc"] | f["accU"] << 8, f["flags"], f["tick"], f["jump"], f["climb"])
+            got = (h.x, h.frac, h.y, h.acc, h.flags, h.tick, h.jump, h.climb, h.status, h.attack_timer, h.attack_frame)
+            want = (f["x"], f["frac"], f["y"], f["acc"] | f["accU"] << 8, f["flags"], f["tick"], f["jump"], f["climb"], f["status"], f["atkTimer"], f["atkFrame"])
             self.assertEqual(got, want, f"frame {n}, joy {joy}")
         self.assertGreater(jumps, 60)                       # both jumps were really checked
 
