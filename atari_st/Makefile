@@ -90,9 +90,14 @@ VIEWER_DEFS ?=
 ROM_FILE ?= ../ext/Faxanadu_Europe.nes
 GENERATED := $(BUILD_DIR)/generated
 VIEWER_PRG := $(BUILD_DIR)/VIEWER.PRG
-.PHONY: viewer
+.PHONY: viewer sound
+# The songs and sound effects come from recording the ROM's own sound engine in the headless NES (tools/refnes; node and npm install
+# there). Without them the viewer is built without sound.
+sound:
+	$(PYTHON) $(TOOLS_DIR)/build_sound.py --record --out $(GENERATED)/sound.bin
 viewer:
 	@mkdir -p $(BUILD_DIR)
+	$(PYTHON) $(TOOLS_DIR)/build_sound.py --record --out $(GENERATED)/sound.bin
 	$(PYTHON) $(TOOLS_DIR)/build_assets.py --rom $(ROM_FILE) --area $(AREA) --screen $(SCREEN) --camera $(CAMERA) --hero $(HERO) --hud $(HUD) --hud2 '$(HUD2)' --out $(GENERATED)
 	$(AS) -m68000 -I $(GENERATED) -I $(SRC_DIR) $(VIEWER_DEFS) -al=$(BUILD_DIR)/viewer.lst -o $(BUILD_DIR)/viewer.o $(SRC_DIR)/viewer.s
 	$(LD) $(LDFLAGS) -o $(BUILD_DIR)/viewer.elf $(BUILD_DIR)/viewer.o

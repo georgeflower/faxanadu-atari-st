@@ -7,6 +7,10 @@
 
     .include "assets.inc"
 
+    .ifndef MUSIC
+    .equ MUSIC, 7                           | the song played: 0 none, 1-16 as the NES numbers them
+    .endif
+
     .equ PALETTE, 0xFF8240
     .equ STRIDE, 160
     .equ HUD_LINES, 32
@@ -165,8 +169,14 @@ start:
     movea.l buf_a(%pc), %a0
     bsr.w show_screen                       | the picture without the hero
     movea.l buf_b(%pc), %a4
+    lea game_start(%pc), %a0                | the songs are the last in the image (link.ld)
+    adda.l #sound_start, %a0
+    bsr.w sound_init
+    moveq #MUSIC, %d0                       | the area's song (7 is Eolis's); the F keys and the digit keys try the others (sound.s)
+    bsr.w sound_play_music
     bsr.w frame_init
 12: bsr.w input_poll
+    bsr.w sound_keys
     bsr.w hero_step
     bsr.w scroll_check                      | at the edge of the screen: scrolls to the next one (and comes back when it is done)
     bsr.w camera_follow                     | the window of the playfield follows him up and down
@@ -1617,3 +1627,8 @@ bench_result:
     .section .data                          | the stack sits with the variables, within reach of the boot code however much data follows
     .space 4096
 stack_end:
+
+    .section .sounddata
+sound_bin:
+    .incbin "sound.bin"
+    .even

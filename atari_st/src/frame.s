@@ -108,6 +108,7 @@ frame_exit:
     move.l (%a0), VBL_VECTOR
     lea old_ikbd(%pc), %a0
     move.l (%a0), IKBD_VECTOR
+    bsr.w sound_silence
     movea.l #IKBD_STATUS, %a0
     move.w #255, %d1
 1:  btst #0, (%a0)
@@ -136,6 +137,7 @@ vbl_isr:
     lea frame_count(%pc), %a0
     addq.l #1, (%a0)
     movea.l (%sp)+, %a0
+    bsr.w sound_tick
     rte
 
 | Waits for the next VBL. A VBL that passed before the call (the frame took longer than 20 ms) is counted in late_frames.
@@ -272,3 +274,5 @@ key_map:
     .byte 0x0F, NES_SELECT                  | Tab
     .byte 0
     .even
+
+    .include "sound.s"

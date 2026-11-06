@@ -25,7 +25,7 @@ The numbers are the order I intend to work in. A step is done when its tests pas
 
 - B1. **Horizontal scroll between screens** (DONE, 16 px every 4 frames, tested in Hatari; still **needs Göran** to judge on the real machine; original text: **needs Göran** to judge on the real machine): 64 frames of 4 px = 16 px every 4 frames. Pre-compose the neighbour screen into a wider buffer and move the picture 16 px at a time with word-aligned copies; nothing else runs during the scroll (checked in the harness). Measure the copy cost (about 168 lines x 256 px x 4 planes = 21 KB a step, a few hundred thousand cycles if done naively: this is the main budget problem; options are a 4-step cache, or scrolling by redrawing only the new column of blocks and moving the rest with `movem`).
 - B2. **Vertical scroll** (DONE, tested in Hatari for up and down; needs Göran's eyes): the two playfields lie one after the other in memory and the window is copied from a moving line of them, 16 lines every 4 frames (the ROM moves 208 lines at 4 a frame, the window is only 168 high, so the ST scrolls about 168). The camera follows the hero between scrolls in two positions (0 and 40) with hysteresis; a change redraws both screens (six frames of standing still). Open: the 14 waiting frames show a still hero, a smoother camera.
-- B3. **Screen setup**: loading a screen from the area data on entry (block ids, tiles, palette from the door, neighbours), area changes, the other two `Screen_HandleScroll` callers, `Game_UpdatePlayerOnScroll`. Compare the first frame after every kind of move with jsnes.
+- B3. **Screen setup** (decided by Göran, 6 Nov 2026: option 1, one area is loaded at a time, at the doors, with a pause at every area change): loading a screen from the area data on entry (block ids, tiles, palette from the door, neighbours), area changes, the other two `Screen_HandleScroll` callers, `Game_UpdatePlayerOnScroll`. Compare the first frame after every kind of move with jsnes.
 - B4. **Palette per screen**: one 16-colour palette per palette set, set from the door's palette index; sprite palettes loaded on top by `Screen_LoadSpritePalette` (enemy colours) counted into the 16.
 
 ### C. The hero plays
@@ -54,12 +54,12 @@ The numbers are the order I intend to work in. A step is done when its tests pas
 ### F. The rest of the game
 
 - F1. **Title screen, start screen, intro, ending, credits** (bank 12 differs in Europe: the start screen's code).
-- F2. **Music and sound** from the ROM's own sound engine (bank 5; the Europe bank differs, so read the Europe ROM): a converter from the NES's two pulse, triangle and noise channels to the YM2149's three channels and its envelope, run from a VBL interrupt. Independent of the rest: can start at any time. The Zelda port's sound code is the reference for the YM side.
+- F2. **Music and sound** (DONE, see `AGENTS.md` 5f; needs Göran's ears on the real machine): the ROM's own engine plays every song and effect in jsnes, the channels are recorded and converted to YM2149 frames, a player runs from the VBL. Open: the song of each area and event, priorities between sound effects, duty cycle.
 - F3. **Game flow**: death, continue, the time counter, area transitions that change music and palette, the final boss.
 
 ### G. Making it a product
 
-- G1. **Memory map**: all areas, tiles, sprite images, music and text must fit 512 KB with the program, two screens and the buffers. Estimate now, verify at each step. Load areas from disk when entering them if needed (the Gotek is a floppy: keep loads short and put them in doorways).
+- G1. **Memory map**: all areas, tiles, sprite images, music and text must fit 512 KB with the program, two screens and the buffers. Estimate now, verify at each step. Decided (Göran, 6 Nov 2026): one area is in memory at a time and the next is loaded from disk at the door, with a pause at every area change (that includes the area's song, 15 KB at most; all songs together are 150 KB, too much to keep).
 - G2. **Disk layout**, the final image, naming of images (a rule for no-PR numbering is still to be agreed with Göran), loading screen, a README for the disk.
 - G3. **Real hardware checks** after each of A, B, C: Göran runs the image on the 520 STFM and reports (speed, flicker, tearing, colours, sound). These are the real acceptance tests; Hatari timing is not exact.
 - G4. **Polish**: ST-specific options (joystick or keyboard, colour palette tweak, speed option) written in `AGENTS.md` section 8 as deliberate differences.

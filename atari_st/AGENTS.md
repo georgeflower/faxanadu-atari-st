@@ -111,6 +111,16 @@ The iNES header of the Europe ROM: NES 2.0, mapper 1 (MMC1), 16 PRG banks (256 K
 - **Not done yet:** climbing (frame 7 and its flip every 16 ticks is coded from the disassembly, never compared with a ladder in the harness), the sprite being drawn behind background blocks (`Player_CalculateVisibility`: blocks of type 4, 9 and 13), death and magic casting frames, the inside sprite palette.
 - **On the ST** (`src/viewer.s`, `blit_tile`): a sprite tile is 8 lines of a mask and four plane bytes (40 bytes), made by `tools/st_convert.py` for each (tile, palette, flip) the pose uses; it is shifted into the plane words and cut at the top of the window and the bottom of the screen. Pixel-exact in Hatari (`tests/test_viewer.py`: five pixel phases, cut at the top and the bottom). **Budget: this blitter takes about 600 cycles a line, 5,000 a tile, 50,000 for a hero: too slow for a frame with the background put back. For the game: compose a pose once into a mask and four planes (about 24x32 pixels) and shift that, or keep sprites word aligned.** Measure first.
 
+## 5f. Sound [verified: the 68000 player against a Python player; the viewer in Hatari plays Eolis's song frame by frame]
+
+The songs and sound effects are not read from the ROM's tables. The ROM's own sound engine (bank 5, a different one in Europe) plays them in the headless NES (`tools/refnes/soundrec.mjs`, run by `tools/record_sounds.py`) and what each channel sounds like after every frame is recorded: 16 songs (`Music_Current` 1-16; 1 and 12 end, the others loop) and 28 sound effects (`SoundEffect_SetCurrent`; 23 is silent). The PAL NES runs its engine at 50 Hz, the same as the ST's VBL: one NES frame is one ST frame.
+
+`tools/build_sound.py` turns that into YM2149 registers: pulse 1 is tone A, pulse 2 tone B, the triangle tone C an octave down, the noise the noise generator on channel C (with the triangle it is both, as loud as the louder). The NES' period t gives the YM period `(t+1) * 2 MHz / 1662607` (PAL CPU clock; the Europe note table is tuned for it). Volumes are 3 dB steps, the triangle (no volume on the NES) is level 12, the pulse duty is ignored (the YM only has a square wave). A song is cut where it starts to repeat (the length counters of the NES drift against the frames, so a note now and then ends a frame early: the loop is the shortest length with the fewest differences) and stored as changes from frame to frame, about 3 bytes a frame; all songs together are 150 KB, 15 KB at most for one. A sound effect takes over the channels it uses from its first sound to its last and gives them back.
+
+`src/sound.s` (included by `frame.s`) plays it from the VBL: `sound_init` (a0 = the data; the viewer finds it by its offset `sound_start` from link.ld, because it is the last in the image), `sound_play_music` (d0 = 1-16, 0 stops), `sound_play_sfx`, `sound_tick`. The viewer plays song 7 (`MUSIC`, Eolis's) and has debug keys: F1-F10 songs 1-10 (Ctrl 11-16), the digit keys sound effects 1-10 (Ctrl 11-20, Shift 21-28), Backspace stops. Register 14 (the floppy lines) is never touched.
+
+Open: the right song for each area and event (`Areas_DefaultMusic`, the hour glass, the shop and so on), a sound effect that stops another one (the ROM has priorities), the duty cycle, and judging it on the real machine.
+
 ## 6. Tools and layout
 
 ```
@@ -135,6 +145,9 @@ tools/faxanadu_sprites.py the hero: tiles, frames, positions (checked against js
 tools/st_convert.py     NES to ST: one 16-colour palette per palette set, planar block images, sprite images
 tools/build_assets.py   the ST data of one screen from the ROM, for the viewer
 src/frame.s             50 Hz VBL counter, IKBD ring and pad (`wait_vbl`, `input_poll`)
+src/sound.s             songs and sound effects on the YM2149, played from the VBL (included by frame.s)
+tools/record_sounds.py  has the ROM play every song and sound effect in jsnes and records the sound channels (`soundrec.mjs`)
+tools/build_sound.py    the recordings as YM2149 frames: sound.bin
 src/viewer.s            draws one screen with the HUD and a hero who walks with the stick (`make viewer HERO=x,y,armour,shield,weapon,frame,left`)
 tools/bench.py          cycles of the hero draw in Hatari (PAL TOS image)
 tools/refnes/           the jsnes ROM harness: read RAM by label, press buttons, take pictures, probes (see its README); heroshot.mjs and herowalk.mjs record the hero, scrollshot.mjs the scroll

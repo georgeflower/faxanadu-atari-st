@@ -3,7 +3,8 @@
  *
  * The order matters: .data (the variables) comes right behind the boot jump, so PC-relative references to it from
  * the first 32 KB of code stay inside the 68000's signed 16-bit displacement however large the code grows.
- * .stack goes last: it is zeros that nothing needs to reach with a displacement.
+ * .sounddata (the songs, 150 KB) and .stack go last: nothing reaches them with a displacement. The program finds the sounds from
+ * its first byte plus sound_start.
  *
  * image_size is the length of the whole image, for Mshrink.
  */
@@ -18,6 +19,8 @@ SECTIONS
     *(.text)
     *(.text.late)
     *(.rodata*)
+    sound_start = ABSOLUTE(.);
+    *(.sounddata)
     *(.stack*)
     image_size = ABSOLUTE(.);
   }

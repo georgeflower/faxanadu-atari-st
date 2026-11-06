@@ -22,3 +22,4 @@ jsnes runs NTSC timing. The game's logic runs once per NMI, so a jsnes frame is 
   The castle door (stand at x 192 and press Up) leads on to screen 1 of Eolis.
 - A is jump, so tapping A to get past text also makes the hero jump.
 - `Screen_ScrollDirection` is `$FF` when nothing scrolls; the main loop waits for the next frame at `$CA28`/`$CA2A`.
+- `soundrec.mjs music|sfx ID FRAMES OUT.json`: records what the ROM's sound engine does to the NES sound channels, frame by frame, for one song or sound effect (`tools/record_sounds.py` runs it for all of them; `tools/build_sound.py` converts them for the ST).
