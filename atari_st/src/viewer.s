@@ -48,6 +48,8 @@ hide_cursor:
     .asciz "\033f"
 show_cursor:
     .asciz "\033e"
+no_package:
+    .asciz "\r\nThe package file (A<area>P<palette>.DAT) is not next to the program.\r\nPress a key.\r\n"
     .even
 
     .text
@@ -56,7 +58,7 @@ start:
     lea stack_end(%pc), %sp
 
     move.l #image_size, %d0
-    addi.l #0x100+BUFFER_BYTES, %d0         | the image, the basepage and room for three screens behind the image
+    addi.l #0x100+BUFFER_BYTES+PACKAGE_MAX, %d0 | the image, the basepage and room behind the image for the screens and a package loaded from disk
     move.l %d0, -(%sp)
     move.l %a3, -(%sp)
     clr.w -(%sp)
@@ -84,17 +86,6 @@ start:
     trap #1
     addq.l #6, %sp
 
-    movea.l #PALETTE, %a2                   | keep TOS's palette, set the screen's
-    lea saved_palette(%pc), %a1
-    moveq #15, %d1
-1:  move.w (%a2)+, (%a1)+
-    dbra %d1, 1b
-    movea.l #PALETTE, %a2
-    lea palette_data(%pc), %a1
-    moveq #15, %d1
-2:  move.w (%a1)+, (%a2)+
-    dbra %d1, 2b
-
     move.w #2, -(%sp)
     trap #14                                | Physbase
     addq.l #2, %sp
@@ -111,7 +102,33 @@ start:
     move.l %d0, (%a0)+                      | pf_ptr: the playfield (208 lines) of the screen, without sprites
     addi.l #REGION_BYTES, %d0
     move.l %d0, (%a0)                       | next_ptr: the playfield of the screen scrolled to
+    addi.l #REGION_BYTES, %d0
+    lea pkg_buf(%pc), %a0
+    move.l %d0, (%a0)                       | where a package from disk is loaded
     movea.l buf_a(%pc), %a4
+
+    movea.l #PALETTE, %a2                   | keep TOS's palette, set the screen's
+    lea saved_palette(%pc), %a1
+    moveq #15, %d1
+1:  move.w (%a2)+, (%a1)+
+    dbra %d1, 1b
+    moveq #PACKAGE_PALETTE, %d0             | the first package is read from the disk like the others
+    bsr.w load_package
+    move.l pkg_result(%pc), %d0
+    bpl.s 5f
+    pea no_package(%pc)
+    move.w #9, -(%sp)
+    trap #1                                 | Cconws
+    addq.l #6, %sp
+    move.w #8, -(%sp)
+    trap #1                                 | Cnecin: a key press
+    addq.l #2, %sp
+    bra.w viewer_quit
+5:  movea.l #PALETTE, %a2
+    movea.l pkg_ptr+PKG_PALETTE(%pc), %a1
+    moveq #15, %d1
+2:  move.w (%a1)+, (%a2)+
+    dbra %d1, 2b
 
     | Clear the screen (32,000 bytes) and the two playfields (their margins are never drawn), then draw.
     movea.l %a4, %a0
@@ -123,7 +140,7 @@ start:
 13: clr.l (%a0)+
     dbra %d1, 13b
 
-    lea screen_data(%pc), %a5               | the start screen's block ids
+    movea.l pkg_ptr+PKG_SCREENS(%pc), %a5               | the start screen's block ids
     adda.l #START_SCREEN*208, %a5
     move.l %a4, -(%sp)
     movea.l pf_ptr(%pc), %a4
@@ -151,12 +168,12 @@ start:
 
     .ifdef BENCH
     | Time the hero: draw it BENCH times over itself and count the VBLs that took (frame_init starts the counter at 0).
-    lea hero_list(%pc), %a5
-    lea hero_images(%pc), %a3
+    movea.l pkg_ptr+PKG_HERO_LIST(%pc), %a5
+    movea.l pkg_ptr+PKG_HERO_IMAGES(%pc), %a3
     bsr.w frame_init
     move.w #BENCH-1, %d6
 15: movem.l %d6, -(%sp)
-    lea hero_list(%pc), %a5
+    movea.l pkg_ptr+PKG_HERO_LIST(%pc), %a5
     bsr.w draw_sprites
     movem.l (%sp)+, %d6
     dbra %d6, 15b
@@ -196,6 +213,7 @@ start:
     tst.b IN_QUIT(%a0)
     beq.s 12b
     bsr.w frame_exit
+viewer_quit:
     movea.l orig_screen(%pc), %a0
     bsr.w show_screen                       | TOS's screen again
 
@@ -651,7 +669,7 @@ column_blocked:
     lea cur_screen(%pc), %a2
     move.w (%a2), %d2
     mulu.w #208, %d2
-    lea blocking(%pc), %a2
+    movea.l pkg_ptr+PKG_BLOCKING(%pc), %a2
     adda.w %d2, %a2                         | this screen's 13 rows of 16 flags
     lsr.w #4, %d1                           | the column
     move.w hero_y(%pc), %d2
@@ -683,7 +701,7 @@ neighbour_of:
     move.w cur_screen(%pc), %d0
     lsl.w #2, %d0
     add.w %d1, %d0
-    lea neighbours(%pc), %a2
+    movea.l pkg_ptr+PKG_NEIGHBOURS(%pc), %a2
     move.b (%a2,%d0.w), %d0
     rts
 
@@ -692,7 +710,7 @@ neighbour_of:
 body_blocked:
     move.w cur_screen(%pc), %d2
     mulu.w #208, %d2
-    lea blocking(%pc), %a2
+    movea.l pkg_ptr+PKG_BLOCKING(%pc), %a2
     adda.l %d2, %a2
     lsr.w #4, %d1
     lsl.w #4, %d1                           | the row's first flag
@@ -743,7 +761,7 @@ blocked_below:
     beq.s 1f
     andi.w #0xFF, %d0
     mulu.w #208, %d0
-    lea blocking(%pc), %a2
+    movea.l pkg_ptr+PKG_BLOCKING(%pc), %a2
     adda.l %d0, %a2
     bra.w edge_row
 1:  moveq #0, %d0
@@ -762,7 +780,7 @@ blocked_above:
     beq.s 1f
     andi.w #0xFF, %d0
     mulu.w #208, %d0
-    lea blocking(%pc), %a2
+    movea.l pkg_ptr+PKG_BLOCKING(%pc), %a2
     adda.l %d0, %a2
     adda.w #192, %a2
     bra.w edge_row
@@ -879,7 +897,7 @@ check_on_ladder:
     lsr.w #4, %d3                           | the column
     move.w cur_screen(%pc), %d2
     mulu.w #208, %d2
-    lea ladders(%pc), %a2
+    movea.l pkg_ptr+PKG_LADDERS(%pc), %a2
     adda.l %d2, %a2
     move.w 2(%a1), %d1
     bsr.s ladder_at
@@ -969,7 +987,7 @@ climb_down:
 | Draws the hero in the pose his state says, into screen a4, and notes the rectangle in this screen's slot.
 draw_hero:
     movem.l %d0-%d7/%a0-%a3/%a5, -(%sp)
-    lea hero_anim(%pc), %a5
+    movea.l pkg_ptr+PKG_HERO_ANIM(%pc), %a5
     move.w hero_flip(%pc), %d0
     move.w hero_frame(%pc), %d1
     cmpi.w #7, %d1
@@ -1002,7 +1020,7 @@ draw_hero:
     move.w (%a5)+, %d0
     add.w %d5, %d0
     move.w %d0, (%a0)+
-    lea hero_anim_images(%pc), %a3
+    movea.l pkg_ptr+PKG_HERO_ANIM_IMAGES(%pc), %a3
 1:  move.w (%a5)+, %d0
     bmi.s 2f
     add.w hero_x(%pc), %d0
@@ -1057,8 +1075,8 @@ clear_margins:
 | Draws a screen's whole playfield (208 lines, stride 160, x from byte 16) into a buffer. a5 = the block ids (16 to a row), a4 = the buffer.
 | Clobbers d0-d7, a0-a3, a6.
 draw_playfield:
-    lea block_index(%pc), %a2
-    lea block_images(%pc), %a3
+    movea.l pkg_ptr+PKG_BLOCK_INDEX(%pc), %a2
+    movea.l pkg_ptr+PKG_BLOCKS(%pc), %a3
     moveq #0, %d6                           | window line
 4:  move.w %d6, %d0                         | line of the playfield
     move.w %d0, %d1
@@ -1149,7 +1167,7 @@ scroll_check:
     move.w cur_screen(%pc), %d0
     lsl.w #2, %d0
     add.w %d1, %d0                          | screen * 4 + 0 (left) or 1 (right)
-    lea neighbours(%pc), %a0
+    movea.l pkg_ptr+PKG_NEIGHBOURS(%pc), %a0
     move.b (%a0,%d0.w), %d0                 | its number in the table, $FF for none
     cmpi.b #0xFF, %d0
     beq.s 5f
@@ -1176,7 +1194,7 @@ scroll_check:
     move.w cur_screen(%pc), %d0
     lsl.w #2, %d0
     add.w %d1, %d0
-    lea neighbours(%pc), %a0
+    movea.l pkg_ptr+PKG_NEIGHBOURS(%pc), %a0
     move.b (%a0,%d0.w), %d0
     cmpi.b #0xFF, %d0
     beq.s 5f
@@ -1200,7 +1218,7 @@ do_scroll:
     move.l %a4, -(%sp)
     movea.l next_ptr(%pc), %a4              | the screen scrolled to, drawn once into its own buffer
     mulu.w #208, %d0
-    lea screen_data(%pc), %a5
+    movea.l pkg_ptr+PKG_SCREENS(%pc), %a5
     adda.l %d0, %a5
     bsr.w draw_playfield
     movea.l (%sp)+, %a4
@@ -1278,7 +1296,7 @@ do_vscroll:
     movea.l next_ptr(%pc), %a4
     move.w scroll_target(%pc), %d0
     mulu.w #208, %d0
-    lea screen_data(%pc), %a5
+    movea.l pkg_ptr+PKG_SCREENS(%pc), %a5
     adda.l %d0, %a5
     bsr.w draw_playfield
     movea.l (%sp)+, %a4
@@ -1517,10 +1535,9 @@ camera_follow:
 | (this screen set, this palette) and doors that need no key are followed here.
 door_check:
     movem.l %d0-%d4/%a0-%a1, -(%sp)
-    .if DOOR_COUNT
     lea input_state(%pc), %a0
     btst #3, IN_PAD_NEW(%a0)
-    beq.s 9f
+    beq.w 9f
     move.w hero_x(%pc), %d1
     move.w hero_y(%pc), %d2
     andi.w #0xF0, %d2
@@ -1534,8 +1551,10 @@ door_check:
     bne.s 1f
     moveq #1, %d3                           | on a block boundary the next block is a candidate too
 1:  move.w cur_screen(%pc), %d4
-    lea doors(%pc), %a1
-    move.w #DOOR_COUNT-1, %d0
+    movea.l pkg_ptr+PKG_DOORS(%pc), %a1
+    move.w pkg_ptr+PKG_DOOR_COUNT(%pc), %d0
+    beq.s 9f
+    subq.w #1, %d0
 2:  cmp.b (%a1), %d4
     bne.s 4f
     moveq #0, %d1
@@ -1550,16 +1569,21 @@ door_check:
 4:  lea DOOR_BYTES(%a1), %a1
     dbra %d0, 2b
     bra.s 9f
-5:  tst.b 2(%a1)                            | kind 0 only
-    bne.s 9f
-    tst.b 6(%a1)                            | and no key
+5:  tst.b 6(%a1)                            | no key
     bne.s 9f
     moveq #0, %d0
     move.b 3(%a1), %d0
     moveq #0, %d1
     move.b 4(%a1), %d1
-    bsr.w enter_screen
-    .endif
+    move.b 2(%a1), %d2
+    beq.s 6f                                | kind 0: another screen of this package
+    cmpi.b #1, %d2
+    bne.s 9f                                | kinds 2 and 3 (buildings, outside) are not done
+    moveq #0, %d2
+    move.b 5(%a1), %d2                      | kind 1: the same area in another palette set, which is another package
+    bsr.w enter_package
+    bra.s 9f
+6:  bsr.w enter_screen
 9:  movem.l (%sp)+, %d0-%d4/%a0-%a1
     rts
 
@@ -1600,7 +1624,7 @@ enter_screen:
     move.l %a4, -(%sp)
     movea.l pf_ptr(%pc), %a4
     mulu.w #208, %d3
-    lea screen_data(%pc), %a5
+    movea.l pkg_ptr+PKG_SCREENS(%pc), %a5
     adda.l %d3, %a5
     bsr.w draw_playfield
     movea.l (%sp)+, %a4
@@ -1613,7 +1637,7 @@ enter_screen:
 3:  move.w %d0, (%a0)
     bsr.w refresh_screens
     bsr.w refresh_screens
-    lea palette_data(%pc), %a0
+    movea.l pkg_ptr+PKG_PALETTE(%pc), %a0
     movea.l #PALETTE, %a1
     moveq #15, %d7
 4:  move.w (%a0)+, (%a1)+
@@ -1621,6 +1645,100 @@ enter_screen:
     movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5-%a6
     rts
 
+
+| d0 = the screen to go to, d1 = where the hero stands there, d2 = the palette set: the area's package for that palette is loaded from the
+| disk (A<area>P<palette>.DAT, the biggest thing the viewer waits for) and the screen is entered in it. The picture goes black first; the HUD
+| is drawn again, its tiles are in the colours of the package.
+enter_package:
+    movem.l %d0-%d2/%a0-%a2, -(%sp)
+    lea black_palette(%pc), %a0
+    movea.l #PALETTE, %a1
+    moveq #15, %d0
+1:  move.w (%a0)+, (%a1)+
+    dbra %d0, 1b
+    move.l %d2, %d0
+    bsr.w load_package
+    movem.l (%sp), %d0-%d2
+    lea hud_shown(%pc), %a0
+    moveq #(3*128/4)-1, %d2
+2:  move.l #-1, (%a0)+
+    dbra %d2, 2b
+    lea hud_dirty(%pc), %a0
+    move.b #1, (%a0)
+    bsr.w enter_screen
+    movem.l (%sp)+, %d0-%d2/%a0-%a2
+    rts
+
+black_palette:
+    .space 32
+
+| d0 = the palette set: loads A<area>P<d0>.DAT into pkg_buf and makes it the package in use. Silences the YM, and TOS's own VBL runs
+| while the disk is read (it switches the drive off again; ours would not).
+load_package:
+    movem.l %d0-%d2/%a0-%a2, -(%sp)
+    lea pkg_name(%pc), %a0
+    move.b #'0'+PACKAGE_NAME_AREA, 1(%a0)
+    ext.l %d0
+    divu.w #10, %d0
+    addi.b #'0', %d0
+    move.b %d0, 3(%a0)
+    swap %d0
+    addi.b #'0', %d0
+    move.b %d0, 4(%a0)
+    bsr.w sound_silence
+    move.l old_vbl(%pc), %d2                | 0 before frame_init: TOS's vector is still the one in use
+    beq.s 8f
+    lea saved_vbl(%pc), %a1
+    move.w %sr, -(%sp)
+    ori.w #0x0700, %sr
+    move.l VBL_VECTOR, (%a1)
+    move.l %d2, VBL_VECTOR
+    move.w (%sp)+, %sr
+8:
+    clr.w -(%sp)                            | Fopen(name, read)
+    move.l %a0, -(%sp)
+    move.w #0x3D, -(%sp)
+    trap #1
+    addq.l #8, %sp
+    lea pkg_result(%pc), %a1
+    move.l %d0, (%a1)                       | what Fopen answered (a handle, or a negative error)
+    tst.l %d0
+    bmi.s 9f
+    move.w %d0, %d2                         | the handle
+    move.l pkg_buf(%pc), -(%sp)             | Fread(handle, count, buffer)
+    move.l #PACKAGE_MAX, -(%sp)
+    move.w %d2, -(%sp)
+    move.w #0x3F, -(%sp)
+    trap #1
+    lea 12(%sp), %sp
+    move.w %d2, -(%sp)                      | Fclose
+    move.w #0x3E, -(%sp)
+    trap #1
+    addq.l #4, %sp
+    movea.l pkg_buf(%pc), %a0
+    bsr.w pkg_attach
+9:  move.l old_vbl(%pc), %d2
+    beq.s 10f
+    move.w %sr, -(%sp)
+    ori.w #0x0700, %sr
+    move.l saved_vbl(%pc), VBL_VECTOR
+    move.w (%sp)+, %sr
+10: movem.l (%sp)+, %d0-%d2/%a0-%a2
+    rts
+
+| a0 = a package (the block make_package writes): its parts' offsets become addresses in pkg_ptr.
+pkg_attach:
+    movem.l %d0-%d1/%a0-%a2, -(%sp)
+    lea pkg_ptr(%pc), %a1
+    movea.l %a0, %a2
+    moveq #(PKG_DOOR_COUNT/4)-1, %d1
+1:  move.l (%a2)+, %d0
+    add.l %a0, %d0
+    move.l %d0, (%a1)+
+    dbra %d1, 1b
+    move.l (%a2), (%a1)                     | the numbers of doors and screens
+    movem.l (%sp)+, %d0-%d1/%a0-%a2
+    rts
 
 hud_load_state:
     lea hud_state(%pc), %a1
@@ -1633,42 +1751,26 @@ hud_load_state:
     .include "frame.s"
 
     .section .rodata
-hero_list:
-    .incbin "hero_list.bin"
-    .even
-hero_images:
-    .incbin "hero_images.bin"
-hero_anim:
-    .incbin "hero_anim.bin"
-hero_anim_images:
-    .incbin "hero_anim_images.bin"
 hud_layout:
     .incbin "hud_layout.bin"
-hud_partial:
-    .incbin "hud_partial.bin"
 hud_states:
     .incbin "hud_states.bin"
-palette_data:
-    .incbin "palette.bin"
-screen_data:
-    .incbin "screen.bin"
-neighbours:
-    .incbin "neighbours.bin"
-doors:
-    .incbin "doors.bin"
-blocking:
-    .incbin "blocking.bin"
-ladders:
-    .incbin "ladders.bin"
     .even
-block_index:
-    .incbin "block_index.bin"
-block_images:
-    .incbin "blocks.bin"
 
     .section .data
 orig_screen:
     .long 0
+pkg_ptr:
+    .space PKG_SIZE                         | the addresses of the package in use (PKG_xxx are the offsets), then its door and screen counts
+pkg_buf:
+    .long 0
+pkg_result:
+    .long 0
+saved_vbl:
+    .long 0
+pkg_name:
+    .asciz "A0P00.DAT"
+    .even
 cur_screen:
     .word START_SCREEN                      | the screen shown: its number in the table
 scroll_dir:
@@ -1738,8 +1840,6 @@ vscroll_req:
 jump_curve:
     .byte 8, 4, 4, 4, 4, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0, 0       | PLAYER_JUMP_CURVE: up, then down
     .byte 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 4, 4, 4, 4, 8
-hud_tiles:
-    .incbin "hud_tiles.bin"
 bench_result:
     .long 0
 

@@ -48,7 +48,7 @@ $(PRG): $(BIN) $(TOOLS_DIR)/make_prg.py
 
 # A 720 KB floppy image for a Gotek, a real drive or an emulator.
 viewerdisk: viewer
-	$(PYTHON) $(TOOLS_DIR)/make_disk.py $(VIEWER_DISK) $(VIEWER_PRG)
+	$(PYTHON) $(TOOLS_DIR)/make_disk.py $(VIEWER_DISK) $(VIEWER_PRG) $(wildcard $(BUILD_DIR)/*.DAT)
 
 disk: all
 	$(PYTHON) $(TOOLS_DIR)/make_disk.py $(DISK) $(PRG)
@@ -100,9 +100,12 @@ sound:
 viewer:
 	@mkdir -p $(BUILD_DIR)
 	$(PYTHON) $(TOOLS_DIR)/build_sound.py --record --out $(GENERATED)/sound.bin
+	rm -f $(GENERATED)/*.DAT
 	$(PYTHON) $(TOOLS_DIR)/build_assets.py --rom $(ROM_FILE) --area $(AREA) --screen $(SCREEN) --camera $(CAMERA) $(if $(ALL),--all) --hero $(HERO) --hud $(HUD) --hud2 '$(HUD2)' --out $(GENERATED)
 	$(AS) -m68000 -I $(GENERATED) -I $(SRC_DIR) $(VIEWER_DEFS) -al=$(BUILD_DIR)/viewer.lst -o $(BUILD_DIR)/viewer.o $(SRC_DIR)/viewer.s
 	$(LD) $(LDFLAGS) -o $(BUILD_DIR)/viewer.elf $(BUILD_DIR)/viewer.o
 	$(PYTHON) $(TOOLS_DIR)/check_reach.py --nm $(NM) --text-base start --listing $(BUILD_DIR)/viewer.lst $(BUILD_DIR)/viewer.elf $(SRC_DIR)/viewer.s
 	$(OBJCOPY) -O binary $(BUILD_DIR)/viewer.elf $(BUILD_DIR)/viewer.bin
 	$(PYTHON) $(TOOLS_DIR)/make_prg.py $(BUILD_DIR)/viewer.bin $(VIEWER_PRG)
+	rm -f $(BUILD_DIR)/*.DAT
+	cp $(GENERATED)/*.DAT $(BUILD_DIR)/

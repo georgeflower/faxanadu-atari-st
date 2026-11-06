@@ -26,12 +26,14 @@ DOOR_BYTES = 8
 DOOR_SAME, DOOR_PALETTE, DOOR_BUILDING, DOOR_OUTSIDE = 0, 1, 2, 3
 
 
-def door_table(rom: fr.Rom, a: fm.Area, ids: list[int]) -> bytes:
+def door_table(rom: fr.Rom, a: fm.Area, ids: list[int], palette_index: int | None = None) -> bytes:
     """The doors on the screens in `ids`, 8 bytes each: screen (its number in the tables), block (row * 16 + column), kind, the screen it
     leads to (its number in the tables, or the ROM's for another area), where the hero stands there (Y/16 << 4 | X/16), the destination's palette,
     the key it needs (`Game_RunDoorRequirementHandler`'s number), a pad. Kinds (`Player_CheckHandleEnterDoor`): 0 another screen of this area in
     the area's palette, 1 the same with another palette, 2 a building (the destination index is 32 or more; area 3's are all), 3 back outside
-    (index $FE or $FF). A door whose destination screen is not in `ids` is left out."""
+    (index $FE or $FF). Kind 0 or 1 is relative to `palette_index`, the palette set in use (the area's own by default). A door whose destination
+    screen is not in `ids` is left out."""
+    palette_index = a.palette_index if palette_index is None else palette_index
     out = bytearray()
     for d in fm.doors(rom, a):
         if d.screen not in ids:
@@ -46,9 +48,29 @@ def door_table(rom: fr.Rom, a: fm.Area, ids: list[int]) -> bytes:
         screen, palette, key, _ = fm.door_destination(rom, a, d)
         if screen not in ids:
             continue
-        kind = DOOR_SAME if palette == a.palette_index else DOOR_PALETTE
+        kind = DOOR_SAME if palette == palette_index else DOOR_PALETTE
         out += bytes([ids.index(d.screen), d.block, kind, ids.index(screen), d.start, palette, key, 0])
     return bytes(out)
+
+
+PACKAGE_PARTS = ("palette", "screens", "neighbours", "blocking", "ladders", "doors", "block_index", "blocks", "hud_tiles", "hud_partial",
+                 "hero_list", "hero_images", "hero_anim", "hero_anim_images")
+
+
+def package_name(area: int, palette: int) -> str:
+    return f"A{area}P{palette:02d}.DAT"
+
+
+def make_package(parts: dict[str, bytes], door_count: int, screen_count: int) -> bytes:
+    """An area's data in one palette set as one block: a long offset from its start for each of PACKAGE_PARTS, the number of doors and of
+    screens (words), then the parts, each on a multiple of 4."""
+    head = 4 * len(PACKAGE_PARTS) + 4
+    offsets, body = [], bytearray()
+    for name in PACKAGE_PARTS:
+        offsets.append(head + len(body))
+        body += parts[name]
+        body += b"\0" * (-len(body) % 4)
+    return b"".join(o.to_bytes(4, "big") for o in offsets) + door_count.to_bytes(2, "big") + screen_count.to_bytes(2, "big") + bytes(body)
 
 
 def main() -> int:
@@ -84,47 +106,64 @@ def main() -> int:
                     ids.append(n)
                     step.append(n)
         frontier = step
-    plan, table, images = sc.build_area_blocks(rom, args.area, screens=ids)
     blocks = b"".join(fm.decode_screen(rom, a, sid)[:fm.SCREEN_ROWS * fm.SCREEN_COLS] for sid in ids)
     around = bytearray()
     for sid in ids:
         around += bytes(ids.index(n) if n in ids else 0xFF for n in fm.neighbours(rom, a, sid))
     args.out.mkdir(parents=True, exist_ok=True)
-    (args.out / "palette.bin").write_bytes(plan.words())
-    (args.out / "blocks.bin").write_bytes(b"".join(images))
-    (args.out / "block_index.bin").write_bytes(b"".join(v.to_bytes(2, "big") for v in table))
-    (args.out / "screen.bin").write_bytes(bytes(blocks))
-    (args.out / "neighbours.bin").write_bytes(bytes(around))
     props = fm.block_properties(rom, a)
-    (args.out / "blocking.bin").write_bytes(bytes(hp.IMPASSABLE[props[b] & 15] for b in blocks))   # 1 a block he cannot walk through
-    (args.out / "ladders.bin").write_bytes(bytes(hp.CLIMBABLE[props[b] & 15] for b in blocks))      # 1 a ladder
-    (args.out / "doors.bin").write_bytes(door_table(rom, a, ids))
-    pal_index = a.palette_index
     keys = ("hp", "mp", "experience", "gold", "seconds")
     start = dict(zip(keys, (int(v) for v in args.hud.split(","))))
     second = dict(zip(keys, (int(v) for v in args.hud2.split(",")))) if args.hud2 else start
     (args.out / "hud_states.bin").write_bytes(sc.hud_state_bytes(start) + sc.hud_state_bytes(second))
-    (args.out / "hud_partial.bin").write_bytes(sc.hud_partial_images(rom, pal_index, plan))
     hero = sc.Hero(*[bool(v) if i == 6 else v for i, v in enumerate(int(t) for t in args.hero.split(","))])
-    hero_list, hero_images = sc.hero_assets(rom, hero, pal_index, plan, args.camera)
-    (args.out / "hero_list.bin").write_bytes(hero_list)
-    (args.out / "hero_images.bin").write_bytes(hero_images)
-    anim, anim_images = sc.hero_anim_assets(rom, hero, pal_index, plan)
-    (args.out / "hero_anim.bin").write_bytes(anim)
-    (args.out / "hero_anim_images.bin").write_bytes(anim_images)
-    (args.out / "hud_tiles.bin").write_bytes(sc.hud_tile_images(rom, pal_index, plan, start["hp"], start["mp"]))
+
+    def package(pal_index: int) -> tuple[bytes, int, bytes]:
+        """The data of this area in this palette set (everything that depends on the colours), as the file the viewer loads."""
+        doors = door_table(rom, a, ids, pal_index)
+        plan, table, images = sc.build_area_blocks(rom, args.area, palette_index=pal_index, screens=ids)
+        hero_list, hero_images = sc.hero_assets(rom, hero, pal_index, plan, args.camera)
+        anim, anim_images = sc.hero_anim_assets(rom, hero, pal_index, plan)
+        parts = {
+            "palette": plan.words(), "screens": bytes(blocks), "neighbours": bytes(around),
+            "blocking": bytes(hp.IMPASSABLE[props[b] & 15] for b in blocks),          # 1 a block he cannot walk through
+            "ladders": bytes(hp.CLIMBABLE[props[b] & 15] for b in blocks),             # 1 a ladder
+            "doors": doors, "block_index": b"".join(v.to_bytes(2, "big") for v in table), "blocks": b"".join(images),
+            "hud_tiles": sc.hud_tile_images(rom, pal_index, plan, start["hp"], start["mp"]), "hud_partial": sc.hud_partial_images(rom, pal_index, plan),
+            "hero_list": hero_list, "hero_images": hero_images, "hero_anim": anim, "hero_anim_images": anim_images,
+        }
+        return make_package(parts, len(doors) // DOOR_BYTES, len(ids)), len(images), doors
+
+    pal_index = a.palette_index
+    initial, n_images, first_doors = package(pal_index)
+    names = [package_name(args.area, pal_index)]
+    (args.out / names[0]).write_bytes(initial)
+    biggest = len(initial)
+    if args.all:        # the palettes the area's doors lead to, and those their doors lead to
+        pending = [first_doors]
+        while pending:
+            doors = pending.pop()
+            for d in range(0, len(doors), DOOR_BYTES):
+                if doors[d + 2] == DOOR_PALETTE and package_name(args.area, doors[d + 5]) not in names:
+                    names.append(package_name(args.area, doors[d + 5]))
+                    data, _, more = package(doors[d + 5])
+                    (args.out / names[-1]).write_bytes(data)
+                    biggest = max(biggest, len(data))
+                    pending.append(more)
     layout = gfx.hud_layout(start["hp"], start["mp"], start["experience"], start["gold"], start["seconds"])
     (args.out / "hud_layout.bin").write_bytes(bytes(t for row in layout for t in row))
     (args.out / "assets.inc").write_text(
         f"| generated by tools/build_assets.py from the ROM: area {args.area}, screen {args.screen}\n"
         f"    .equ CAMERA, {args.camera}\n"
-        f"    .equ SCREEN_COUNT, {len(ids)}\n"
         f"    .equ START_SCREEN, {ids.index(args.screen)}\n"
-        f"    .equ DOOR_COUNT, {len(door_table(rom, a, ids)) // DOOR_BYTES}\n"
-        f"    .equ HERO_X, {hero.x}\n    .equ HERO_Y, {hero.y}\n    .equ HERO_FLIP, {int(hero.left)}\n    .equ HERO_FRAME, {hero.frame % 3}\n"
-        f"    .equ BLOCK_IMAGES, {len(images)}\n", encoding="ascii")
-    print(f"area {args.area} screens {ids}: {len(images)} block images ({len(images) * sc.BLOCK_BYTES} bytes), "
-          f"{len(plan.colours)} colours, {len(plan.merged)} merged -> {args.out}")
+        f"    .equ AREA_INDEX, {args.area}\n"
+        f"    .equ PACKAGE_MAX, {biggest}\n    .equ PACKAGE_PALETTE, {pal_index}\n"
+        + "".join(f"    .equ PKG_{n.upper()}, {4 * i}\n" for i, n in enumerate(PACKAGE_PARTS))
+        + f"    .equ PKG_DOOR_COUNT, {4 * len(PACKAGE_PARTS)}\n    .equ PKG_SCREEN_COUNT, {4 * len(PACKAGE_PARTS) + 2}\n    .equ PKG_SIZE, {4 * len(PACKAGE_PARTS) + 4}\n"
+        f"    .equ PACKAGE_NAME_AREA, {args.area}\n"
+        f"    .equ HERO_X, {hero.x}\n    .equ HERO_Y, {hero.y}\n    .equ HERO_FLIP, {int(hero.left)}\n    .equ HERO_FRAME, {hero.frame % 3}\n", encoding="ascii")
+    print(f"area {args.area} screens {ids}: {n_images} block images ({n_images * sc.BLOCK_BYTES} bytes); packages {', '.join(names)} "
+          f"(the biggest {biggest} bytes) -> {args.out}")
     return 0
 
 

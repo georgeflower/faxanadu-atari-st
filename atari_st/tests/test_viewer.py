@@ -507,6 +507,45 @@ class ViewerTests(unittest.TestCase):
         bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
 
+    def test_up_at_a_palette_door_loads_the_other_package(self) -> None:
+        """Area 6 (palette 12): the door of screen 12 (block 72) leads to screen 16 in palette 13, which is another package, A6P13.DAT, read from
+        the disk while the picture is black. The picture afterwards is screen 16 in palette 13 with the hero at the door's other end (x 16,
+        y 144) and the HUD in the colours of the new palette."""
+        import faxanadu_rom as fr
+        import hatari_shot as hs
+        import st_convert as sc
+
+        subprocess.run(["make", "-C", str(ROOT), "viewer", "ALL=1", "AREA=6", "SCREEN=12", "HERO=128,64,0,255,0,0,1"],
+                       check=True, capture_output=True)
+        self.assertTrue((ROOT / "build" / "A6P13.DAT").is_file())
+        nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
+        sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
+        image = (ROOT / "build" / "viewer.bin").read_bytes()
+        work = ROOT / "build" / "shots_palette_door"
+        work.mkdir(parents=True, exist_ok=True)
+        prg = ROOT / "build" / "VIEWER.PRG"
+        hatari = shutil.which("hatari")
+        (work / "c0.ini").write_text(f"savebin {work / 'ram0.bin'} 0 $80000\ncont\n", encoding="utf-8")
+        hs.run_hatari(hatari, TOS, prg, work, 500, "0", f"b VBL > 499 :once :file {work / 'c0.ini'}\n", None)
+        ram = (work / "ram0.bin").read_bytes()
+        base = ram.find(image[sym["start"]:sym["start"] + 48]) - sym["start"]
+        self.assertGreater(base, 0)
+        word = lambda data, name: int.from_bytes(data[base + sym[name]:base + sym[name] + 2], "big", signed=True)
+        self.assertEqual(word(ram, "cur_screen"), 12)
+        joy = base + sym["input_state"] + 259
+        (work / "up.ini").write_text(f"memwrite ${joy:x} 0x01\ncont\n", encoding="utf-8")
+        (work / "stop.ini").write_text(f"memwrite ${joy:x} 0x00\ncont\n", encoding="utf-8")
+        (work / "cap.ini").write_text(f"savebin {work / 'ram1.bin'} 0 $80000\nm $ff8200-$ff8260\ncont\n", encoding="utf-8")
+        script = "".join(f"b VBL > {v} :once :file {work / f}\n" for v, f in ((599, "up.ini"), (602, "stop.ini"), (799, "cap.ini")))
+        log = hs.run_hatari(hatari, TOS, prg, work, 800, "0", script, None)
+        ram = (work / "ram1.bin").read_bytes()
+        self.assertEqual(word(ram, "cur_screen"), 16)
+        self.assertEqual((word(ram, "hero_x"), word(ram, "hero_y")), (16, 144))
+        rows = hs.decode_screen(ram, hs.video_base(log))
+        expected = sc.expected_screen(fr.Rom(ROM), 6, 16, word(ram, "camera"), palette_index=13, hero=sc.Hero(16, 144, 0, 255, 0, 0, True))
+        bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
+        self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
+
 
 if __name__ == "__main__":
     unittest.main()

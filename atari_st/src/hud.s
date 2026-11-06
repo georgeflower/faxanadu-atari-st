@@ -51,8 +51,8 @@ hud_copy_shown:
 | Makes the tile ids (hud_buffer) and the partial tiles' pictures from hud_state. Clobbers d0-d5, a0-a3, a5, a6.
 hud_build:
     lea hud_state(%pc), %a5
-    lea hud_tiles(%pc), %a3
-    lea hud_partial(%pc), %a0
+    movea.l pkg_ptr+PKG_HUD_TILES(%pc), %a3
+    movea.l pkg_ptr+PKG_HUD_PARTIAL(%pc), %a0
 
     | The partial tiles' pictures for the two values.
     moveq #0, %d0
@@ -118,7 +118,7 @@ hud_build:
 | Draws the tiles of hud_buffer that are not shown yet. a4 = the screen, a2 = what is shown on it (128 bytes). Clobbers d0-d4, a0-a3, a6.
 hud_draw:
     lea hud_buffer(%pc), %a6
-    lea hud_tiles(%pc), %a3
+    movea.l pkg_ptr+PKG_HUD_TILES(%pc), %a3
     moveq #HUD_FIRST, %d1
 4:  moveq #0, %d0
     move.b (%a6,%d1.w), %d0
