@@ -123,6 +123,7 @@ tools/ram_labels.py     the disassembly's RAM labels as JSON (names and addresse
 tools/faxanadu_rom.py   tables by label name from your ROM (labels cached, no ROM data)
 tools/faxanadu_maps.py  areas, screens, blocks, neighbours, block properties, doors from the ROM
 tools/faxanadu_gfx.py   the HUD and letter tiles
+tools/dump_graphics.py  every tile of the ROM as PNG sheets in build/graphics (banks, tilesets in their palettes, labelled sprite groups); needs Pillow
 tools/render_screen.py  draw a screen from the ROM's data; compare with a jsnes picture
 tools/nes_palette.py    the 64 NES colours as jsnes shows them
 tools/faxanadu_sprites.py the hero: tiles, frames, positions (checked against jsnes)
