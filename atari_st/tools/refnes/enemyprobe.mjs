@@ -27,7 +27,7 @@ for (let f = 0; f < frames; f++) {
     slots.push(s);
   }
   const blocks = f === 0 ? Array.from({length: 256}, (_, i) => g.rd(g.addr("ScreenBuffer") + i)) : undefined;
-  rec.push({f, chr: f === 0 ? Array.from(g.nes.ppu.vramMem.slice(0x900, 0xD00)) : undefined, ic: g.rd("InterruptCounter"), oam: g.oam().filter((o) => o[0] >= 32 && o[0] < 240 && o[1] >= 0x90), rnd: g.rd("Random_Offset"), mask: g.rd("Joy1_ButtonMask"), blocks, px: g.rd("Player_PosX_Block"), py: g.rd("Player_PosY"), counter: g.rd("SpriteUpdateCounter"), slots});
+  rec.push({f, chr: f === 10 ? Array.from(g.nes.ppu.vramMem.slice(0x900, 0x1000)) : undefined, ic: g.rd("InterruptCounter"), oam: g.oam().filter((o) => o[0] >= 32 && o[0] < 240 && o[1] >= 0x90), rnd: g.rd("Random_Offset"), mask: g.rd("Joy1_ButtonMask"), blocks, px: g.rd("Player_PosX_Block"), py: g.rd("Player_PosY"), counter: g.rd("SpriteUpdateCounter"), slots});
 }
 if (out) fs.writeFileSync(out, JSON.stringify(rec));
 for (const r of rec.slice(0, 40)) {

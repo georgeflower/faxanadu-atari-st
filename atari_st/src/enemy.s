@@ -181,6 +181,8 @@ en_behaviour:
     beq.w beh_wave
     cmpi.w #27, %d0
     beq.w beh_fireball
+    cmpi.w #30, %d0
+    beq.w beh_finish
     cmpi.w #63, %d0
     beq.w beh_buzz
     tst.w %d0
@@ -550,6 +552,11 @@ beh_wave:
 11: move.b %d0, E_Y(%a3)
     eori.b #0x80, E_FLAGS(%a3)
 10: addq.b #1, E_D3(%a3)
+    bra.w en_behaviour_end
+
+| The thunk to Sprite_FinishBehavior (Geributa's first behaviour): over at once, the script goes on.
+beh_finish:
+    bsr.w en_finish
     bra.w en_behaviour_end
 
 | Charron's fireball (EnemyMagic): two pixels forward a frame, through everything; at the edge of the screen it is put on a block edge, turned round and gone.
@@ -1208,7 +1215,7 @@ draw_enemies:
     movea.l E_KIND(%a3), %a0
     move.w K_POSE(%a0), %d6
     move.w K_RULE(%a0), %d0
-    beq.s 2f
+    beq.w 2f
     cmpi.w #1, %d0
     beq.w 3f
     cmpi.w #5, %d0
@@ -1227,6 +1234,18 @@ draw_enemies:
     beq.w 18f
     cmpi.w #12, %d0
     beq.w 19f
+    cmpi.w #13, %d0
+    beq.w 21f
+    cmpi.w #14, %d0
+    beq.w 23f
+    cmpi.w #15, %d0
+    beq.w 20f
+    cmpi.w #16, %d0
+    beq.w 24f
+    cmpi.w #17, %d0
+    beq.w 25f
+    cmpi.w #18, %d0
+    beq.w 26f
     moveq #0, %d1
     cmpi.w #2, %d0
     bne.s 5f
@@ -1293,6 +1312,69 @@ draw_enemies:
     bne.w 7f
 15: move.w en_counter(%pc), %d0
     lsr.w %d1, %d0
+    andi.w #1, %d0
+    bra.w 7f
+20: move.w en_counter(%pc), %d0              | rule 15, the Lamprey: eight pictures of 8 updates, some mirrored whichever way it faces
+    lsr.w #3, %d0
+    andi.w #7, %d0
+    lea lamprey_poses(%pc), %a1
+    moveq #0, %d1
+    move.b (%a1,%d0.w), %d1                 | 2 * picture + mirrored
+    move.b E_FLAGS(%a3), %d0
+    eor.b %d1, %d0
+    andi.w #1, %d0
+    andi.w #2, %d1
+    add.w %d1, %d6
+    add.w %d0, %d6
+    bra.w 4f
+21: moveq #0, %d2                           | rule 13, Raiden: step 2: pictures 2 and 3 (every 8 updates), else 0 and 1 (every 4)
+    move.b E_PHASE(%a3), %d2
+    cmpi.b #2, %d2
+    bne.s 22f
+    move.w en_counter(%pc), %d0
+    lsr.w #3, %d0
+    andi.w #1, %d0
+    ori.w #2, %d0
+    bra.w 7f
+22: move.w en_counter(%pc), %d0
+    lsr.w #2, %d0
+    andi.w #1, %d0
+    bra.w 7f
+23: moveq #0, %d2                           | rule 14, Grimlock: picture 3 in steps 9 and 11, 0 below 8, else 0, 1, 2, 1
+    move.b E_PHASE(%a3), %d2
+    moveq #3, %d0
+    cmpi.b #9, %d2
+    beq.w 7f
+    cmpi.b #11, %d2
+    beq.w 7f
+    moveq #0, %d0
+    cmpi.b #8, %d2
+    bcs.w 7f
+    move.w en_counter(%pc), %d0
+    lsr.w #3, %d0
+    andi.w #3, %d0
+    lea zombie_frames(%pc), %a1
+    move.b (%a1,%d0.w), %d0
+    bra.w 7f
+24: moveq #2, %d0                           | rule 16, Giant Strider: picture 2 in step 2, else a change every 4 updates
+    cmpi.b #2, E_PHASE(%a3)
+    beq.w 7f
+    move.w en_counter(%pc), %d0
+    lsr.w #2, %d0
+    andi.w #1, %d0
+    bra.w 7f
+25: moveq #4, %d0                           | rule 17, Maskman: picture 4 in the odd steps, else a change every 8 updates
+    btst #0, E_PHASE(%a3)
+    bne.w 7f
+    move.w en_counter(%pc), %d0
+    lsr.w #3, %d0
+    andi.w #1, %d0
+    bra.w 7f
+26: moveq #2, %d0                           | rule 18, Geributa: picture 2 in step 0, else a change every 4 updates
+    tst.b E_PHASE(%a3)
+    beq.w 7f
+    move.w en_counter(%pc), %d0
+    lsr.w #2, %d0
     andi.w #1, %d0
     bra.w 7f
 18: moveq #0, %d2                           | rule 11, Charron: picture 2 in step 5, 1 in step 0 and the odd ones, else a change every 8 updates
@@ -1409,6 +1491,8 @@ buzz_frac:                                  | SPRITE_BEHAVIOR_BUZZ_AROUND_Y_FRAC
     .byte 0x00, 0x00, 0x80, 0x40, 0x00, 0x40, 0x80, 0x00
 buzz_full:
     .byte 2, 1, 0, 0, 0, 0, 0, 1
+lamprey_poses:                              | 2 * the picture (BYTE_ARRAY_PRG14__978b) + the mirror bit (LAMPREY_HORIZ_FLIP_BITS) for each eighth of a 64-update turn
+    .byte 0, 2, 3, 1, 3, 2, 0, 3
 zombie_frames:                              | SPRITEBEHAVIOR_ENEMY_ZOMBIE_PHASES
     .byte 0, 1, 2, 1
 monodron_frames:                            | SPRITE_MONODRON_APPEARANCE_PHASES

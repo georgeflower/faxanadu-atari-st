@@ -17,7 +17,7 @@ LADDER = 2                                                         # block prope
 F_RIGHT, F_FLY, F_AIR, F_READY, F_DOWN = 0x01, 0x02, 0x04, 0x40, 0x80
 NONE = 0xFF
 
-BEH_MOVE, BEH_WAIT, BEH_BOUNCE, BEH_WALK, BEH_DEATH, BEH_HOP, BEH_FALL, BEH_WAVE, BEH_FIREBALL, BEH_BUZZ = 0, 1, 2, 4, 7, 9, 21, 25, 27, 63
+BEH_MOVE, BEH_WAIT, BEH_BOUNCE, BEH_WALK, BEH_DEATH, BEH_HOP, BEH_FALL, BEH_WAVE, BEH_FIREBALL, BEH_FINISH, BEH_BUZZ = 0, 1, 2, 4, 7, 9, 21, 25, 27, 30, 63
 BUZZ_Y = (0x00, 0x00, 0x80, 0x40, 0x00, 0x40, 0x80, 0x00)        # SPRITE_BEHAVIOR_BUZZ_AROUND_Y_FRAC and ..._X_FRAC (the whole pixels of the vertical step)
 BUZZ_Y_FULL = (2, 1, 0, 0, 0, 0, 0, 1)
 E_BREAD, E_COIN, E_DEATH, E_BOSS_DEATH, E_FIREBALL = 1, 2, 0x13, 0x64, 0x54
@@ -327,6 +327,10 @@ class Engine:
         d.hbox = self.kinds[E_FIREBALL]["hbox"]
         d.phase = 0
 
+    def behaviour_finish(self, s: Sprite) -> None:
+        """The thunk to Sprite_FinishBehavior: the behaviour is over at once and the script goes on."""
+        self.finish(s)
+
     def behaviour_buzz(self, s: Sprite) -> None:
         """SpriteBehavior_BuzzAround (the Hornet): two pixels sideways a frame, turning at a wall; up and down in steps from a table of 8, each for 8 frames."""
         if not s.flags & F_READY:
@@ -382,7 +386,7 @@ class Engine:
         elif s.d3 >= HOP_GROUND[s.internal]:
             s.d3 = (s.d3 - 1) & 255
 
-    BEHAVIOURS = {BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_BUZZ: "behaviour_buzz", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death",
+    BEHAVIOURS = {BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death",
                   BEH_HOP: "behaviour_hop", BEH_FALL: "behaviour_fall"}
 
     # -- the dropped coin: SpriteBehavior_BounceAndExpire
@@ -665,11 +669,34 @@ def appearance_offset(ent: int, phase: int, counter: int, d2: int = 0) -> int:
         return 1 if phase == 0 or phase & 1 else (counter >> 3) & 1
     if ent == E_FIREBALL:
         return (counter >> 2) & 3
+    if ent == 0x04:                                  # Raiden: step 2 changes every 8 updates (pictures 2, 3), the others every 4 (0, 1)
+        return 2 | (counter >> 3) & 1 if phase == 2 else (counter >> 2) & 1
+    if ent == 0x19:                                  # Grimlock: picture 3 in steps 9 and 11, 0 below 8, else 0, 1, 2, 1 by the counter
+        if phase in (9, 11):
+            return 3
+        return 0 if phase < 8 else ZOMBIE_PHASES[(counter >> 3) & 3]
+    if ent == 0x28:                                  # Lamprey: eight pictures of 8 updates, some of them mirrored (`flip_extra`)
+        return LAMPREY_FRAMES[(counter >> 3) & 7]
+    if ent == 0x1E:                                  # Giant Strider: picture 2 in step 2, else a change every 4 updates
+        return 2 if phase == 2 else (counter >> 2) & 1
+    if ent == 0x20:                                  # Maskman: picture 4 in the odd steps, else a change every 8 updates
+        return 4 if phase & 1 else (counter >> 3) & 1
+    if ent == 0x17:                                  # Geributa: picture 2 in step 0, else a change every 4 updates
+        return 2 if phase == 0 else (counter >> 2) & 1
     if ent == 0x0B:                                  # Yuinaru: the second frame while bit 3 of the behaviour's count is set
         return (d2 >> 3) & 1
     if ent == 7:                                     # Hornet: a change every 4 updates
         return (counter >> 2) & 1
     raise NotImplementedError(f"the pictures of entity {ent}")
+
+
+LAMPREY_FRAMES = (0, 1, 1, 0, 1, 1, 0, 1)        # BYTE_ARRAY_PRG14__978b
+LAMPREY_FLIPS = (0, 0, 0x40, 0x40, 0x40, 0, 0, 0x40)      # LAMPREY_HORIZ_FLIP_BITS
+
+
+def flip_extra(ent: int, counter: int) -> int:
+    """What a kind's update handler does to the flip mask after the facing has set it (the Lamprey turns round on its own)."""
+    return LAMPREY_FLIPS[(counter >> 3) & 7] if ent == 0x28 else 0
 
 
 def flip_mask(flags: int) -> int:

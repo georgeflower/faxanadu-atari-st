@@ -12,8 +12,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 ROM = ROOT.parent / "ext" / "Faxanadu_Europe.nes"
-SCENES = ((0, 4, "left", 400), (0, 5, "left", 400), (0, 8, "right", 400), (1, 16, "right", 400), (1, 6, "right", 400), (1, 19, "right", 400), (1, 22, "right", 400), (1, 23, "right", 400), (1, 29, "right", 400), (1, 45, "right", 400), (1, 25, "right", 400))
-HEROX = {(1, 23): 80, (1, 29): 16}       # where the hero stands when the default (64) has him fall off the screen or walk into a wall
+SCENES = ((0, 4, "left", 400), (0, 5, "left", 400), (0, 8, "right", 400), (1, 16, "right", 400), (1, 6, "right", 400), (1, 19, "right", 400), (1, 22, "right", 400), (1, 23, "right", 400), (1, 29, "right", 400), (1, 45, "right", 400), (1, 25, "right", 400),
+          (2, 23, "right", 400), (2, 39, "right", 400), (2, 60, "right", 400), (5, 25, "right", 400), (5, 2, "right", 400), (5, 31, "right", 400))
+HEROX = {(1, 23): 80, (1, 29): 16, (2, 23): 144, (2, 39): 80, (2, 60): 144, (5, 25): 144, (5, 2): 144, (5, 31): 144}       # where the hero stands when the default (64) has him fall off the screen or walk into a wall
 FIELDS = (("ent", "Entities"), ("x", "x"), ("xf", "xf"), ("y", "y"), ("yf", "yf"), ("flags", "Flags"), ("phase", "Phases"), ("beh", "Behaviors"), ("arg1", "BehaviorArg1"),
           ("d2", "BehaviorData2"), ("d3", "BehaviorData3"), ("internal", "InternalBehaviorStates"), ("bxf", "BehaviorState_XFrac"), ("bxfull", "BehaviorState_XFull"))
 
@@ -26,7 +27,7 @@ class EnemyTests(unittest.TestCase):
         import faxanadu_rom as fr
 
         cls.rom = fr.Rom(ROM)
-        cls.props_by_area = {a: fm.block_properties(cls.rom, fm.area(cls.rom, a)) for a in (0, 1)}
+        cls.props_by_area = {a: fm.block_properties(cls.rom, fm.area(cls.rom, a)) for a in (0, 1, 2, 5)}
         cls.bank14 = cls.rom.prg(14)
         o = cls.rom.label("Sprites_UpdateAll").offset - fr.HEADER - 14 * fr.BANK
         cls.random_table = cls.bank14[o:o + 256]
@@ -150,7 +151,7 @@ class EnemyTests(unittest.TestCase):
         return kills, pickups
 
     def test_the_sword_kills_and_the_drops_are_picked_up_as_in_the_rom(self) -> None:
-        for area, screen, weapon, armour in ((0, 4, 1, 0), (0, 8, 2, 1), (0, 5, 3, 2), (1, 16, 2, 1), (1, 7, 2, 1), (1, 31, 2, 1), (1, 22, 2, 1), (1, 25, 2, 1), (1, 28, 2, 1)):
+        for area, screen, weapon, armour in ((0, 4, 1, 0), (0, 8, 2, 1), (0, 5, 3, 2), (1, 16, 2, 1), (1, 7, 2, 1), (1, 31, 2, 1), (1, 22, 2, 1), (1, 25, 2, 1), (1, 28, 2, 1), (2, 39, 2, 1), (5, 31, 2, 1)):
             with self.subTest(area=area, screen=screen):
                 kills, pickups = self.fight(screen, weapon, armour, area)
                 self.assertGreaterEqual(kills, 1)
@@ -184,6 +185,11 @@ class EnemyTests(unittest.TestCase):
     def test_the_hornet_buzzes_as_in_the_rom(self) -> None:
         self.check(45, area=1)
 
+    def test_the_kinds_of_the_other_areas_move_as_in_the_rom(self) -> None:
+        for area, screen in ((2, 23), (2, 39), (2, 60), (5, 25), (5, 2), (5, 31)):
+            with self.subTest(area=area, screen=screen):
+                self.check(screen, area=area)
+
     def test_the_pictures_are_the_roms_sprites_one_frame_later(self) -> None:
         import enemy_data as ed
         import enemy_model as em
@@ -202,20 +208,27 @@ class EnemyTests(unittest.TestCase):
                         continue
                     app = fs.appearance(self.rom, ed.entity(self.rom, s["Entities"])["appearance"] + em.appearance_offset(s["Entities"], s["Phases"], rec[n]["counter"], s["BehaviorData2"]),
                                         "TILEINFO_ENTITY_ADDRS")
-                    want += [(sp.y, sp.tile, sp.attr, sp.x) for sp in fs.place(app, s["x"], s["y"], em.flip_mask(s["Flags"]), s["PPUOffsets"]) if sp.y < 240]    # (the NES hides a tile from line 240)
+                    want += [(sp.y, sp.tile, sp.attr, sp.x) for sp in fs.place(app, s["x"], s["y"], em.flip_mask(s["Flags"]) ^ em.flip_extra(s["Entities"], rec[n]["counter"]), s["PPUOffsets"]) if sp.y < 240]    # (the NES hides a tile from line 240)
                 got = [(y, t, a & ~0x20, x) for y, t, a, x in rec[n + 1]["oam"]]       # (a sprite goes behind blocks of some kinds: not modelled yet)
                 self.assertEqual(sorted(want), sorted(got), f"screen {screen} frame {n}")
                 checked += 1
         self.assertGreater(checked, 150)
 
     def test_the_enemy_tiles_are_the_ones_the_game_loads(self) -> None:
+        import enemy_data as ed
         import faxanadu_sprites as fs
 
         for screen in self.runs:
-            first = self.runs[screen][0]
+            first = self.runs[screen][10]               # (the tiles are in the PPU a few frames after the screen is)
             for s in first["slots"]:
                 if s["Entities"] != 255:
-                    for n, tile in fs.entity_tiles(self.rom, s["Entities"]).items():
+                    ent = s["Entities"]
+                    used = None                                    # (the tiles a kind's pictures use; the ROM does not load the whole count of some)
+                    if ent in ed.KINDS:
+                        used = {sp.tile for f in range(ed.KINDS[ent]) for sp in fs.place(fs.appearance(self.rom, ed.entity(self.rom, ent)["appearance"] + f, "TILEINFO_ENTITY_ADDRS"), 0, 0, 0)}
+                    for n, tile in fs.entity_tiles(self.rom, ent).items():
+                        if used is not None and n not in used:
+                            continue
                         at = (s["PPUOffsets"] - 0x90 + n) * 16
                         self.assertEqual(tile, bytes(first["chr"][at:at + 16]), f"screen {screen} entity {s['Entities']} tile {n}")
 
