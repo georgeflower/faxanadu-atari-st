@@ -76,7 +76,7 @@ start:
     lea stack_end(%pc), %sp
 
     move.l #image_size, %d0
-    addi.l #0x100+BUFFER_BYTES+PACKAGE_MAX+PACKAGE_EXPAND, %d0 | the image, the basepage and room behind the image for the screens, a package loaded from disk and its flag tables
+    addi.l #0x100+BUFFER_BYTES+PACKAGE_SPAN, %d0 | the image, the basepage and room behind the image for the screens and the package in use with its flag tables (the packed file is read to the end of that room)
     move.l %d0, -(%sp)
     move.l %a3, -(%sp)
     clr.w -(%sp)
@@ -2663,8 +2663,10 @@ load_package:
     tst.l %d0
     bmi.s 9f
     move.w %d0, %d2                         | the handle
-    move.l pkg_buf(%pc), -(%sp)             | Fread(handle, count, buffer)
-    move.l #PACKAGE_MAX, -(%sp)
+    movea.l pkg_buf(%pc), %a0
+    adda.l #PACKAGE_SPAN-PACKAGE_COMP, %a0  | the packed file goes to the end of the package's room
+    move.l %a0, -(%sp)                      | Fread(handle, count, buffer)
+    move.l #PACKAGE_COMP, -(%sp)
     move.w %d2, -(%sp)
     move.w #0x3F, -(%sp)
     trap #1
@@ -2673,6 +2675,10 @@ load_package:
     move.w #0x3E, -(%sp)
     trap #1
     addq.l #4, %sp
+    movea.l pkg_buf(%pc), %a1
+    movea.l %a1, %a0
+    adda.l #PACKAGE_SPAN-PACKAGE_COMP, %a0
+    bsr.w unpack
     movea.l pkg_buf(%pc), %a0
     bsr.w pkg_attach
 9:  bsr.w loading_hide
@@ -2744,6 +2750,51 @@ loading_clear:                              | clears the screen a3
     move.w #7999, %d0
 1:  clr.l (%a0)+
     dbra %d0, 1b
+    rts
+
+| a0 = a packed block (tools/lz.py: the length as a long, then sequences), a1 = where the data goes (may be just before the packed block: the
+| writes stay behind the reads, `lz.overrun`). Keeps every register.
+unpack:
+    movem.l %d0-%d3/%a0-%a3, -(%sp)
+    move.l (%a0)+, %d0
+    lea (%a1,%d0.l), %a2                    | the end of the data
+1:  moveq #0, %d1
+    move.b (%a0)+, %d1                      | the token
+    move.w %d1, %d2
+    lsr.w #4, %d1                           | literals
+    cmpi.w #15, %d1
+    bne.s 3f
+2:  moveq #0, %d3
+    move.b (%a0)+, %d3
+    add.w %d3, %d1
+    cmpi.b #255, %d3
+    beq.s 2b
+3:  tst.w %d1
+    beq.s 5f
+    subq.w #1, %d1
+4:  move.b (%a0)+, (%a1)+
+    dbra %d1, 4b
+5:  cmpa.l %a2, %a1
+    bcc.s 9f                                | the last sequence has only literals
+    moveq #0, %d3
+    move.b (%a0)+, %d3
+    lsl.w #8, %d3
+    move.b (%a0)+, %d3                      | how far back
+    movea.l %a1, %a3
+    suba.l %d3, %a3
+    andi.w #15, %d2                         | the match length - 4
+    cmpi.w #15, %d2
+    bne.s 7f
+6:  moveq #0, %d3
+    move.b (%a0)+, %d3
+    add.w %d3, %d2
+    cmpi.b #255, %d3
+    beq.s 6b
+7:  addq.w #3, %d2                          | + 4, - 1 for dbra
+8:  move.b (%a3)+, (%a1)+
+    dbra %d2, 8b
+    bra.s 1b
+9:  movem.l (%sp)+, %d0-%d3/%a0-%a3
     rts
 
 | a0 = a package (the block make_package writes): its parts' offsets become addresses in pkg_ptr.

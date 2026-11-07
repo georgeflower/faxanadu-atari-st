@@ -20,6 +20,7 @@ import enemy_data as ed
 import faxanadu_gfx as gfx  # noqa: E402
 import faxanadu_maps as fm
 import hero_physics as hp  # noqa: E402
+import lz
 import faxanadu_rom as fr  # noqa: E402
 import faxanadu_text as ft  # noqa: E402
 import st_convert as sc  # noqa: E402
@@ -199,9 +200,10 @@ def main() -> int:
 
     first = (args.area, a.palette_index)
     initial, targets, n_images = package(*first)
-    names, biggest = [package_name(*first)], len(initial)
+    small = lz.pack(initial)
+    names, biggest, packed, over = [package_name(*first)], len(initial), len(small), lz.overrun(small)
     expand = 2 * 208 * int.from_bytes(initial[4 * len(PACKAGE_PARTS) + 2:4 * len(PACKAGE_PARTS) + 4], "big")
-    (args.out / names[0]).write_bytes(initial)
+    (args.out / names[0]).write_bytes(small)
     pending, seen = list(targets), {first}
     while pending:                                   # every package the doors and edges lead to, and those they lead to
         target = pending.pop()
@@ -210,10 +212,14 @@ def main() -> int:
         seen.add(target[:2])
         data, more, _ = package(*target)
         names.append(package_name(*target[:2]))
-        (args.out / names[-1]).write_bytes(data)
-        biggest = max(biggest, len(data))
+        small = lz.pack(data)
+        (args.out / names[-1]).write_bytes(small)
+        biggest, packed, over = max(biggest, len(data)), max(packed, len(small)), max(over, lz.overrun(small))
         expand = max(expand, 2 * 208 * int.from_bytes(data[4 * len(PACKAGE_PARTS) + 2:4 * len(PACKAGE_PARTS) + 4], "big"))
         pending += more
+    # a package is unpacked where it lies: the packed file sits at the end of the span, and the data never overtakes it
+    span = max(-(-biggest // 4) * 4 + expand, -(-packed // 4) * 4 + over + 4)
+    span += -span % 4
     layout = gfx.hud_layout(start["hp"], start["mp"], start["experience"], start["gold"], start["seconds"])
     (args.out / "hud_layout.bin").write_bytes(bytes(t for row in layout for t in row))
     (args.out / "assets.inc").write_text(
@@ -221,7 +227,7 @@ def main() -> int:
         f"    .equ CAMERA, {args.camera}\n"
         f"    .equ START_SCREEN, {ids.index(args.screen)}\n"
         f"    .equ AREA_INDEX, {args.area}\n"
-        f"    .equ PACKAGE_MAX, {-(-biggest // 4) * 4}\n    .equ PACKAGE_EXPAND, {expand}\n    .equ PACKAGE_AREA, {args.area}\n    .equ PACKAGE_PALETTE, {first[1]}\n"
+        f"    .equ PACKAGE_MAX, {-(-biggest // 4) * 4}\n    .equ PACKAGE_EXPAND, {expand}\n    .equ PACKAGE_COMP, {-(-packed // 4) * 4}\n    .equ PACKAGE_SPAN, {span}\n    .equ PACKAGE_AREA, {args.area}\n    .equ PACKAGE_PALETTE, {first[1]}\n"
         + "".join(f"    .equ PKG_{n.upper()}, {4 * i}\n" for i, n in enumerate(PACKAGE_PARTS))
         + "".join(f"    .equ PKG_{n.upper()}, {4 * len(PACKAGE_PARTS) + 2 * i}\n" for i, n in enumerate(HEADER_WORDS))
         + f"    .equ PKG_SIZE, {4 * len(PACKAGE_PARTS) + 2 * len(HEADER_WORDS)}\n"

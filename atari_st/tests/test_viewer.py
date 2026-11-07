@@ -813,10 +813,10 @@ class ViewerTests(unittest.TestCase):
         bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
 
-    ENEMY_SCENES = ((0, 8, "16,144", 360), (0, 4, "240,144", 260), (0, 5, "240,144", 260), (1, 16, "16,144", 240),
-                    (1, 7, "240,144", 260), (1, 31, "240,144", 260), (1, 22, "16,144", 240),
-                    (1, 29, "16,144", 260), (1, 45, "64,144", 260), (1, 60, "208,144", 260), (1, 25, "16,144", 360),
-                    (2, 39, "16,144", 260), (2, 23, "16,144", 260), (2, 60, "16,144", 260), (5, 25, "16,144", 260), (5, 2, "16,144", 260), (5, 31, "16,144", 260))    # area, screen, hero, the capture's VBL
+    ENEMY_SCENES = ((0, 8, "16,144", 360), (0, 4, "240,144", 260), (0, 5, "240,144", 260), (1, 16, "16,144", 260),
+                    (1, 7, "240,144", 280), (1, 31, "240,144", 280), (1, 22, "16,144", 260),
+                    (1, 29, "16,144", 280), (1, 45, "64,144", 280), (1, 60, "208,144", 280), (1, 25, "16,144", 378),
+                    (2, 39, "16,144", 284), (2, 23, "16,144", 284), (2, 60, "16,144", 284), (5, 25, "16,144", 279), (5, 2, "16,144", 278), (5, 31, "16,144", 279))    # area, screen, hero, the capture's VBL
 
     def enemy_engine(self, rom, area_index: int, screen: int, word):
         """The model with the enemies of a screen as they are placed, the hero where the viewer has him."""
@@ -939,7 +939,7 @@ class ViewerTests(unittest.TestCase):
 
     def test_a_fireball_takes_eight_power_and_is_gone(self) -> None:
         """Area 1 screen 25, the hero on Charron's floor (96, 64): two fireballs hit him in the first 400 frames (8 off the power each) and are gone."""
-        ram, word, _ = self.run_scenario(["ALL=1", "AREA=1", "SCREEN=25", "HERO=96,64,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], 400, "shots_touch")
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=1", "SCREEN=25", "HERO=96,64,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], 430, "shots_touch")
         self.assertEqual(word.raw("hud_state", 1)[0], 64)
         self.assertNotIn(0x54, [word.raw("enemies", 8 * 28)[i * 28] for i in range(8)])
 
