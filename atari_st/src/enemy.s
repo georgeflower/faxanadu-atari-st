@@ -168,7 +168,7 @@ enemies_update:
 en_behaviour:
     moveq #0, %d6
     move.w E_SCRIPT(%a3), %d6
-    bsr.s en_ops
+    bsr.w en_ops
     moveq #0, %d0
     move.b E_BEH(%a3), %d0
     andi.w #0x7F, %d0
@@ -176,6 +176,10 @@ en_behaviour:
     bcc.s en_behaviour_end
     cmpi.w #4, %d0
     beq.w beh_walk
+    cmpi.w #25, %d0
+    beq.w beh_wave
+    cmpi.w #63, %d0
+    beq.w beh_buzz
     tst.w %d0
     beq.w beh_move_toward
     cmpi.w #2, %d0
@@ -435,6 +439,112 @@ beh_move_toward:
 2:  move.w E_D3(%a3), %d3
     bsr.w en_step_x
     bsr.w en_countdown
+    bra.w en_behaviour_end
+
+| Yuinaru: through everything, sideways on one triangle wave (the count in E_D2) and up and down on another (E_D3), turning at the edges of the screen.
+beh_wave:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    clr.b E_D2(%a3)
+    move.b #0x80, E_D3(%a3)
+    bsr.w en_ready
+1:  moveq #0, %d0
+    move.b E_D2(%a3), %d0
+    move.w %d0, %d1
+    andi.w #0x7F, %d1
+    btst #7, %d0
+    beq.s 2f
+    moveq #0x7F, %d2
+    sub.w %d1, %d2
+    move.w %d2, %d1
+2:  move.w %d1, %d2                         | the step: the wave's value x 8 (whole pixels in the high byte, at most 3)
+    lsl.w #3, %d1
+    andi.w #0xFF, %d1
+    lsr.w #5, %d2
+    andi.w #3, %d2
+    lsl.w #8, %d2
+    or.w %d1, %d2
+    move.w E_X(%a3), %d0
+    btst #0, E_FLAGS(%a3)
+    beq.s 3f
+    add.w %d2, %d0
+    bra.s 4f
+3:  sub.w %d2, %d0
+4:  move.w %d0, E_X(%a3)
+    cmpi.w #0xF000, %d0
+    bcs.s 5f                                | at the right edge (or wrapped round the left one): put on a block edge, turn
+    move.b E_X(%a3), %d0
+    andi.b #0xF0, %d0
+    btst #0, E_FLAGS(%a3)
+    bne.s 6f
+    addi.b #0x10, %d0
+6:  move.b %d0, E_X(%a3)
+    eori.b #1, E_FLAGS(%a3)
+5:  addq.b #1, E_D2(%a3)
+    moveq #0, %d0
+    move.b E_D3(%a3), %d0
+    move.w %d0, %d1
+    andi.w #0x3F, %d1
+    btst #6, %d0
+    beq.s 7f
+    moveq #0x3F, %d2
+    sub.w %d1, %d2
+    move.w %d2, %d1
+7:  move.w %d1, %d2
+    lsl.w #3, %d1
+    andi.w #0xFF, %d1
+    lsr.w #5, %d2
+    andi.w #1, %d2
+    lsl.w #8, %d2
+    or.w %d1, %d2
+    move.w E_Y(%a3), %d0
+    btst #7, E_FLAGS(%a3)
+    beq.s 8f
+    add.w %d2, %d0
+    bra.s 9f
+8:  sub.w %d2, %d0
+9:  move.w %d0, E_Y(%a3)
+    cmpi.w #0xE000, %d0
+    bcs.s 10f                               | at the bottom of the screen: put on a block edge, turn
+    move.b E_Y(%a3), %d0
+    andi.b #0xF0, %d0
+    btst #7, E_FLAGS(%a3)
+    bne.s 11f
+    addi.b #0x10, %d0
+11: move.b %d0, E_Y(%a3)
+    eori.b #0x80, E_FLAGS(%a3)
+10: addq.b #1, E_D3(%a3)
+    bra.w en_behaviour_end
+
+| Hornet (BuzzAround): two pixels sideways a frame, turning at a wall; up and down by a table of eight steps, each for eight frames.
+beh_buzz:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    clr.b E_PHASE(%a3)
+    clr.b E_D2(%a3)
+    bsr.w en_ready
+1:  move.w #0x0200, %d3
+    bsr.w en_step_x
+    tst.w %d0
+    beq.s 2f
+    eori.b #1, E_FLAGS(%a3)
+2:  moveq #0, %d0
+    move.b E_D2(%a3), %d0
+    lsr.w #3, %d0
+    andi.w #7, %d0
+    lea buzz_frac(%pc), %a0
+    moveq #0, %d3
+    move.b (%a0,%d0.w), %d3
+    lea buzz_full(%pc), %a0
+    moveq #0, %d1
+    move.b (%a0,%d0.w), %d1
+    lsl.w #8, %d1
+    or.w %d1, %d3
+    bsr.w en_step_y
+    tst.w %d0
+    beq.s 3f
+    eori.b #0x80, E_FLAGS(%a3)
+3:  addq.b #1, E_D2(%a3)
     bra.w en_behaviour_end
 
 beh_fall:
@@ -1048,6 +1158,10 @@ draw_enemies:
     beq.w 12f
     cmpi.w #8, %d0
     beq.w 13f
+    cmpi.w #9, %d0
+    beq.w 16f
+    cmpi.w #10, %d0
+    beq.w 17f
     moveq #0, %d1
     cmpi.w #2, %d0
     bne.s 5f
@@ -1083,7 +1197,7 @@ draw_enemies:
     move.b E_PHASE(%a3), %d2
     subq.b #1, %d2
     btst #0, %d2
-    bne.s 7f
+    bne.w 7f
     move.w en_counter(%pc), %d0
     lsr.w #3, %d0
     andi.w #3, %d0
@@ -1114,6 +1228,15 @@ draw_enemies:
     bne.s 7f
 15: move.w en_counter(%pc), %d0
     lsr.w %d1, %d0
+    andi.w #1, %d0
+    bra.s 7f
+16: moveq #0, %d0                           | rule 9, Yuinaru: the second picture while bit 3 of its count is set
+    btst #3, E_D2(%a3)
+    beq.s 7f
+    moveq #1, %d0
+    bra.s 7f
+17: move.w en_counter(%pc), %d0              | rule 10, the Hornet: a change every 4 updates
+    lsr.w #2, %d0
     andi.w #1, %d0
     bra.s 7f
 3:  moveq #0, %d0                           | rule 1: by the script's step
@@ -1199,6 +1322,10 @@ armour_multiplier:                          | ARMOR_DEFENSE_MULTIPLIERS
     .byte 0, 1, 2, 4
 hop_maybe:
     .byte 0x00, 0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02
+buzz_frac:                                  | SPRITE_BEHAVIOR_BUZZ_AROUND_Y_FRAC, ..._X_FRAC (the whole pixels of the vertical step)
+    .byte 0x00, 0x00, 0x80, 0x40, 0x00, 0x40, 0x80, 0x00
+buzz_full:
+    .byte 2, 1, 0, 0, 0, 0, 0, 1
 zombie_frames:                              | SPRITEBEHAVIOR_ENEMY_ZOMBIE_PHASES
     .byte 0, 1, 2, 1
 monodron_frames:                            | SPRITE_MONODRON_APPEARANCE_PHASES

@@ -17,7 +17,9 @@ LADDER = 2                                                         # block prope
 F_RIGHT, F_FLY, F_AIR, F_READY, F_DOWN = 0x01, 0x02, 0x04, 0x40, 0x80
 NONE = 0xFF
 
-BEH_MOVE, BEH_WAIT, BEH_BOUNCE, BEH_WALK, BEH_DEATH, BEH_HOP, BEH_FALL = 0, 1, 2, 4, 7, 9, 21
+BEH_MOVE, BEH_WAIT, BEH_BOUNCE, BEH_WALK, BEH_DEATH, BEH_HOP, BEH_FALL, BEH_WAVE, BEH_BUZZ = 0, 1, 2, 4, 7, 9, 21, 25, 63
+BUZZ_Y = (0x00, 0x00, 0x80, 0x40, 0x00, 0x40, 0x80, 0x00)        # SPRITE_BEHAVIOR_BUZZ_AROUND_Y_FRAC and ..._X_FRAC (the whole pixels of the vertical step)
+BUZZ_Y_FULL = (2, 1, 0, 0, 0, 0, 0, 1)
 E_BREAD, E_COIN, E_DEATH, E_BOSS_DEATH = 1, 2, 0x13, 0x64
 
 # SPRITE_BEHAVIOR_HOP_* (indexed by the hop kind, the third script byte), SPRITE_BEHAVIOR_HOP_PEAK_TICKS and SPRITES_MAYBE_GRAVITY (by gravity)
@@ -277,6 +279,42 @@ class Engine:
         self.move_horiz(s, s.d2, s.d3)
         self.countdown(s)
 
+    @staticmethod
+    def triangle(a: int, peak: int, top: int) -> int:
+        """Sprites_CalcYFromGravity: a counter as a wave that rises to `peak` and falls again (`top` is the counter's bit that turns it)."""
+        t = a & peak
+        return peak - t if a & top else t
+
+    def behaviour_wave(self, s: Sprite) -> None:
+        """SpriteBehavior_Yuinaru: it flies through walls, sideways and up and down on two triangle waves of different length, turning at the edges of the screen."""
+        if not s.flags & F_READY:
+            s.d2, s.d3 = 0, 0x80
+            s.flags |= F_READY
+        t = self.triangle(s.d2, 0x7F, 0x80)
+        self.add_x(s, (t << 3) & 255, (t >> 5) & 3, 1 if s.flags & F_RIGHT else -1)
+        if s.x >= 0xF0:
+            s.x = (s.x & 0xF0) + (0 if s.flags & F_RIGHT else 0x10) & 255
+            s.flags ^= F_RIGHT
+        s.d2 = (s.d2 + 1) & 255
+        t = self.triangle(s.d3, 0x3F, 0x40)
+        v = (s.y << 8 | s.yf) + ((((t >> 5) & 1) << 8) | (t << 3) & 255) * (1 if s.flags & F_DOWN else -1)
+        s.y, s.yf = (v >> 8) & 255, v & 255
+        if s.y >= 0xE0:
+            s.y = (s.y & 0xF0) if s.flags & F_DOWN else (s.y & 0xF0) + 0x10 & 255
+            s.flags ^= F_DOWN
+        s.d3 = (s.d3 + 1) & 255
+
+    def behaviour_buzz(self, s: Sprite) -> None:
+        """SpriteBehavior_BuzzAround (the Hornet): two pixels sideways a frame, turning at a wall; up and down in steps from a table of 8, each for 8 frames."""
+        if not s.flags & F_READY:
+            s.phase = s.d2 = 0
+            s.flags |= F_READY
+        self.move_horiz_and_turn(s, 0, 2)
+        i = (s.d2 >> 3) & 7
+        if self.move_vertical(s, BUZZ_Y[i], BUZZ_Y_FULL[i]):
+            s.flags ^= F_DOWN
+        s.d2 = (s.d2 + 1) & 255
+
     def behaviour_walk(self, s: Sprite) -> None:
         if not s.flags & F_READY:
             s.d2, s.d3 = self.byte(self.ip), self.byte(self.ip + 1)
@@ -321,7 +359,7 @@ class Engine:
         elif s.d3 >= HOP_GROUND[s.internal]:
             s.d3 = (s.d3 - 1) & 255
 
-    BEHAVIOURS = {BEH_MOVE: "behaviour_move_toward", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death",
+    BEHAVIOURS = {BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_BUZZ: "behaviour_buzz", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death",
                   BEH_HOP: "behaviour_hop", BEH_FALL: "behaviour_fall"}
 
     # -- the dropped coin: SpriteBehavior_BounceAndExpire
@@ -576,7 +614,7 @@ ZOMBIE_PHASES = (0, 1, 2, 1)           # SPRITEBEHAVIOR_ENEMY_ZOMBIE_PHASES, by 
 MONODRON_PHASES = (0, 2, 0, 1)      # SPRITE_MONODRON_APPEARANCE_PHASES, by (phase - 1) & 3
 
 
-def appearance_offset(ent: int, phase: int, counter: int) -> int:
+def appearance_offset(ent: int, phase: int, counter: int, d2: int = 0) -> int:
     """The frame (added to SPRITE_APPEARANCE_PHASE_OFFSETS[ent]) the update handler of this kind picks. `counter` is SpriteUpdateCounter."""
     if ent == 0x47:                                  # Zozura: two frames, a change every 16 updates
         return (counter >> 4) & 1
@@ -594,6 +632,10 @@ def appearance_offset(ent: int, phase: int, counter: int) -> int:
         if phase in (1, 3):
             return (counter >> 4) & 1
         return (counter >> 3) & 1 if phase == 5 else 0
+    if ent == 0x0B:                                  # Yuinaru: the second frame while bit 3 of the behaviour's count is set
+        return (d2 >> 3) & 1
+    if ent == 7:                                     # Hornet: a change every 4 updates
+        return (counter >> 2) & 1
     raise NotImplementedError(f"the pictures of entity {ent}")
 
 

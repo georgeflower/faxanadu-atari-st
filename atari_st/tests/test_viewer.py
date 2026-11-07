@@ -728,7 +728,7 @@ class ViewerTests(unittest.TestCase):
         import hatari_shot as hs
         import st_convert as sc
 
-        subprocess.run(["make", "-C", str(ROOT), "viewer", "ALL=1", "AREA=6", "SCREEN=12", "HERO=128,64,0,255,0,0,1"],
+        subprocess.run(["make", "-C", str(ROOT), "viewer", "ALL=1", "AREA=6", "SCREEN=12", "HERO=128,64,0,255,0,0,1", "VIEWER_DEFS=--defsym NO_ENEMIES=1"],
                        check=True, capture_output=True)
         self.assertTrue((ROOT / "build" / "A6P13.DAT").is_file())
         nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
@@ -814,7 +814,8 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
 
     ENEMY_SCENES = ((0, 8, "16,144", 360), (0, 4, "240,144", 260), (0, 5, "240,144", 260), (1, 16, "16,144", 240),
-                    (1, 7, "240,144", 260), (1, 31, "240,144", 260), (1, 22, "16,144", 240))    # area, screen, hero, the capture's VBL
+                    (1, 7, "240,144", 260), (1, 31, "240,144", 260), (1, 22, "16,144", 240),
+                    (1, 29, "16,144", 260), (1, 45, "64,144", 260), (1, 60, "208,144", 260))    # area, screen, hero, the capture's VBL
 
     def enemy_engine(self, rom, area_index: int, screen: int, word):
         """The model with the enemies of a screen as they are placed, the hero where the viewer has him."""
@@ -827,7 +828,7 @@ class ViewerTests(unittest.TestCase):
         free = next(b for b in range(256) if em.IMPASSABLE[props[b] & 15] == 0 and props[b] & 15 != em.LADDER)
         eng = em.Engine(rom.prg(14), ed.random_table(rom), bytes(fm.decode_screen(rom, area, screen)[:208]) + bytes([free]) * 48, props)
         eng.hero_x, eng.hero_y = word("hero_x"), word("hero_y")
-        for i, (ent, x, y) in enumerate(ed.placements(rom, area_index, screen)):
+        for i, (ent, x, y) in enumerate(p for p in ed.placements(rom, area_index, screen) if p[0] in ed.ENEMIES):
             s = eng.sprites[7 - i]
             s.ent, s.x, s.y, s.beh, s.hbox = ent, x, y, 0xFF, ed.entity(rom, ent)["hitbox"]
             s.script = rom.word("SPRITE_BSCRIPTS", ent)

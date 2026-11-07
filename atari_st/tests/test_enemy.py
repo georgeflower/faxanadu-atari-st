@@ -12,7 +12,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 ROM = ROOT.parent / "ext" / "Faxanadu_Europe.nes"
-SCENES = ((0, 4, "left", 400), (0, 5, "left", 400), (0, 8, "right", 400), (1, 16, "right", 400), (1, 6, "right", 400), (1, 19, "right", 400), (1, 22, "right", 400))
+SCENES = ((0, 4, "left", 400), (0, 5, "left", 400), (0, 8, "right", 400), (1, 16, "right", 400), (1, 6, "right", 400), (1, 19, "right", 400), (1, 22, "right", 400), (1, 23, "right", 400), (1, 29, "right", 400), (1, 45, "right", 400))
+HEROX = {(1, 23): 80, (1, 29): 16}       # where the hero stands when the default (64) has him fall off the screen or walk into a wall
 FIELDS = (("ent", "Entities"), ("x", "x"), ("xf", "xf"), ("y", "y"), ("yf", "yf"), ("flags", "Flags"), ("phase", "Phases"), ("beh", "Behaviors"), ("arg1", "BehaviorArg1"),
           ("d2", "BehaviorData2"), ("d3", "BehaviorData3"), ("internal", "InternalBehaviorStates"), ("bxf", "BehaviorState_XFrac"), ("bxfull", "BehaviorState_XFull"))
 
@@ -35,7 +36,7 @@ class EnemyTests(unittest.TestCase):
         for area, screen, direction, frames in SCENES:
             out = Path(cls.tmp.name) / f"{area}_{screen}.json"
             subprocess.run(["node", "enemyprobe.mjs", str(screen), str(frames), str(out), direction], cwd=ROOT / "tools" / "refnes", check=True, capture_output=True,
-                           env={**os.environ, "AREA": str(area)})
+                           env={**os.environ, "AREA": str(area), "HEROX": str(HEROX.get((area, screen), 64))})
             cls.runs[(area, screen)] = json.loads(out.read_text())
 
     @classmethod
@@ -59,8 +60,10 @@ class EnemyTests(unittest.TestCase):
 
         blob, where = self.packed(s["Entities"] for s in rec[0]["slots"] if s["Entities"] != 255) if packed else (self.bank14, {})
         eng = em.Engine(blob, self.random_table, bytes(rec[0]["blocks"]), self.props_by_area[area])
-        eng.rnd = rec[0]["rnd"]
-        for i, s in enumerate(rec[0]["slots"]):
+        # (a screen the hero has just entered may stand still for a few records, the counter already running: start at the first record that has moved)
+        start = next((n for n in range(1, 12) if rec[n]["slots"] != rec[0]["slots"]), 0)
+        eng.rnd = rec[start]["rnd"]
+        for i, s in enumerate(rec[start]["slots"]):
             sp = eng.sprites[i]
             for mine, theirs in FIELDS:
                 setattr(sp, mine, s[theirs])
@@ -68,7 +71,7 @@ class EnemyTests(unittest.TestCase):
             sp.script = s["BehaviorAddrs_L"] | s["BehaviorAddrs_U"] << 8
             if packed and sp.ent != 255:
                 sp.script = where[sp.ent][sp.script]
-        for n in range(1, len(rec)):
+        for n in range(start + 1, len(rec)):
             eng.hero_x, eng.hero_y, eng.mask = rec[n]["px"], rec[n]["py"], rec[n]["mask"]
             if rec[n]["counter"] != rec[n - 1]["counter"]:         # the game stops the sprites while the screen scrolls
                 eng.update_all()
@@ -164,6 +167,13 @@ class EnemyTests(unittest.TestCase):
     def test_the_myconid_moves_as_in_the_rom(self) -> None:
         self.check(22, area=1)
 
+    def test_the_yuinaru_waves_as_in_the_rom(self) -> None:
+        self.check(23, area=1)
+        self.check(29, area=1)
+
+    def test_the_hornet_buzzes_as_in_the_rom(self) -> None:
+        self.check(45, area=1)
+
     def test_the_pictures_are_the_roms_sprites_one_frame_later(self) -> None:
         import enemy_data as ed
         import enemy_model as em
@@ -180,9 +190,9 @@ class EnemyTests(unittest.TestCase):
                 for s in rec[n]["slots"]:
                     if s["Entities"] == 255:
                         continue
-                    app = fs.appearance(self.rom, ed.entity(self.rom, s["Entities"])["appearance"] + em.appearance_offset(s["Entities"], s["Phases"], rec[n]["counter"]),
+                    app = fs.appearance(self.rom, ed.entity(self.rom, s["Entities"])["appearance"] + em.appearance_offset(s["Entities"], s["Phases"], rec[n]["counter"], s["BehaviorData2"]),
                                         "TILEINFO_ENTITY_ADDRS")
-                    want += [(sp.y, sp.tile, sp.attr, sp.x) for sp in fs.place(app, s["x"], s["y"], em.flip_mask(s["Flags"]), s["PPUOffsets"])]
+                    want += [(sp.y, sp.tile, sp.attr, sp.x) for sp in fs.place(app, s["x"], s["y"], em.flip_mask(s["Flags"]), s["PPUOffsets"]) if sp.y < 240]    # (the NES hides a tile from line 240)
                 got = [(y, t, a & ~0x20, x) for y, t, a, x in rec[n + 1]["oam"]]       # (a sprite goes behind blocks of some kinds: not modelled yet)
                 self.assertEqual(sorted(want), sorted(got), f"screen {screen} frame {n}")
                 checked += 1

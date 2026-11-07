@@ -11,15 +11,15 @@ NONE = 0xFF
 CATEGORY_ENEMY, CATEGORY_DROPPED, CATEGORY_NPC, CATEGORY_EFFECT, CATEGORY_TRIGGER, CATEGORY_ITEM, CATEGORY_MAGIC, CATEGORY_BOSS = range(8)
 
 # The kinds the ST code runs so far: entity -> (frames of pictures, the picture rule of `enemy_model.appearance_offset`).
-ENEMIES = (0x47, 0x2A, 0x0C, 0x06, 0x26, 0x1B)      # Zozura, Monodron, Snowman, Zombie, Ikeda, Myconid
-KINDS = {0x47: 2, 0x2A: 3, 0x0C: 2, 0x06: 3, 0x26: 3, 0x1B: 2, 0x13: 8, 1: 1, 2: 2}      # + the death effect (a picture for each of its 8 frames), bread, coin
-RULE = {0x47: 0, 0x2A: 1, 0x0C: 5, 0x06: 6, 0x26: 7, 0x1B: 8, 0x13: 2, 1: 3, 2: 4}
+ENEMIES = (0x47, 0x2A, 0x0C, 0x06, 0x26, 0x1B, 0x0B, 0x07)      # Zozura, Monodron, Snowman, Zombie, Ikeda, Myconid, Yuinaru, Hornet
+KINDS = {0x47: 2, 0x2A: 3, 0x0C: 2, 0x06: 3, 0x26: 3, 0x1B: 2, 0x0B: 2, 0x07: 2, 0x13: 8, 1: 1, 2: 2}      # + the death effect (a picture for each of its 8 frames), bread, coin
+RULE = {0x47: 0, 0x2A: 1, 0x0C: 5, 0x06: 6, 0x26: 7, 0x1B: 8, 0x0B: 9, 0x07: 10, 0x13: 2, 1: 3, 2: 4}
 EXTRAS = (0x13, 1, 2)                   # what an enemy leaves: they are in every package that has enemies; their tiles are the common sprite tiles
 KIND_BYTES = 32
 PLACE_BYTES = 6
 
 # The bytes of data a behaviour takes from the script when it starts (the number it adds to Sprites_ReadInfoAddr), for the behaviours modelled.
-BEHAVIOUR_DATA = {0: 2, 1: 0, 2: 0, 4: 2, 7: 0, 9: 3, 21: 0}
+BEHAVIOUR_DATA = {0: 2, 1: 0, 2: 0, 4: 2, 7: 0, 9: 3, 21: 0, 25: 0, 63: 0}
 # The length of each op's own bytes; op 0 (switch behaviour) is followed by its behaviour's data.
 OP_BYTES = {0: 3, 1: 3, 2: 2, 3: 7, 4: 1, 5: 3, 7: 2}
 JUMPS = {1: (1,), 5: (1,), 3: (3, 5)}       # the byte offsets of the addresses in an op
