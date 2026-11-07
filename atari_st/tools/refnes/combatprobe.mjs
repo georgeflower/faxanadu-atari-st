@@ -35,7 +35,7 @@ const slotsNow = () => {
   return slots;
 };
 // the hero as the sprites see him: read when Sprites_UpdateAll is entered
-const ENEMIES = [0x47, 0x2A, 0x0C, 0x06, 0x26, 0x1B];        // Zozura, Monodron, Snowman, Zombie, Ikeda, Myconid: what the hero fights
+const ENEMIES = [0x47, 0x2A, 0x0C, 0x06, 0x26, 0x1B, 0x15];        // Zozura, Monodron, Snowman, Zombie, Ikeda, Myconid, Charron: what the hero fights
 let pre = null, preSlots = null, preState = null;
 const entry = g.romLabels["Sprites_UpdateAll"][0] - 1, cpu = g.nes.cpu, emulate = cpu.emulate.bind(cpu);
 cpu.emulate = function () {

@@ -41,6 +41,7 @@
     .equ E_BREAD, 1                         | the entities that are not enemies: bread and a coin (drops), the death effect
     .equ E_COIN, 2
     .equ E_DEATH, 0x13
+    .equ E_FIREBALL, 0x54                   | Charron's fireball (cast, never placed)
 
     .text
 | All slots empty, their drawn boxes forgotten (the screens are clean when this is called).
@@ -178,6 +179,8 @@ en_behaviour:
     beq.w beh_walk
     cmpi.w #25, %d0
     beq.w beh_wave
+    cmpi.w #27, %d0
+    beq.w beh_fireball
     cmpi.w #63, %d0
     beq.w beh_buzz
     tst.w %d0
@@ -301,20 +304,23 @@ op_distance:                                | 3: the distance to the hero, sidew
 | BSCRIPT_ACTIONS: d0 = the action.
 en_action:
     tst.w %d0
-    beq.s ac_face_x
+    beq.w ac_face_x
     cmpi.w #1, %d0
-    beq.s ac_flip_x
+    beq.w ac_flip_x
     cmpi.w #2, %d0
-    beq.s ac_face_y
+    beq.w ac_face_y
     cmpi.w #3, %d0
-    beq.s ac_flip_y
+    beq.w ac_flip_y
     cmpi.w #4, %d0
-    beq.s ac_random_x
+    beq.w ac_random_x
     cmpi.w #5, %d0
-    beq.s ac_random_y
+    beq.w ac_random_y
     cmpi.w #6, %d0
-    bne.s 9f
+    bne.s 8f
     bclr #7, E_FLAGS(%a3)                   | fly up
+    rts
+8:  cmpi.w #7, %d0
+    beq.s ac_cast
 9:  rts
 ac_flip_x:
     eori.b #1, E_FLAGS(%a3)
@@ -356,6 +362,36 @@ ac_random_y:
     rts
 
 | GetRandom: a byte of the ROM's own code, mixed with the buttons held. Out: d0.b. Clobbers a0, d1.
+ac_cast:                                    | BScript_Action_CastMagic: a fireball in the highest free slot, from the caster's x and 8 lines below its top, the way it faces
+    movem.l %d0-%d1/%a0-%a1, -(%sp)
+    lea enemies(%pc), %a0
+    adda.w #7*E_BYTES, %a0
+    moveq #7, %d0
+1:  cmpi.b #0xFF, E_ENT(%a0)
+    beq.s 2f
+    lea -E_BYTES(%a0), %a0
+    dbra %d0, 1b
+    bra.s 8f
+2:  movea.l %a0, %a1
+    moveq #E_FIREBALL, %d0
+    bsr.w en_find_kind
+    move.l %a0, %d0
+    beq.s 8f
+    move.b #E_FIREBALL, E_ENT(%a1)
+    move.b E_FLAGS(%a3), %d0
+    andi.b #1, %d0
+    move.b %d0, E_FLAGS(%a1)
+    move.b E_X(%a3), E_X(%a1)
+    move.b E_Y(%a3), %d0
+    addq.b #8, %d0
+    move.b %d0, E_Y(%a1)
+    clr.b E_PHASE(%a1)
+    move.b #0xFF, E_BEH(%a1)
+    move.b 3(%a0), E_HBOX(%a1)
+    move.w 6(%a0), E_SCRIPT(%a1)
+    move.l %a0, E_KIND(%a1)
+8:  movem.l (%sp)+, %d0-%d1/%a0-%a1
+    rts
 en_random:
     lea en_rnd(%pc), %a0
     moveq #0, %d1
@@ -515,6 +551,28 @@ beh_wave:
     eori.b #0x80, E_FLAGS(%a3)
 10: addq.b #1, E_D3(%a3)
     bra.w en_behaviour_end
+
+| Charron's fireball (EnemyMagic): two pixels forward a frame, through everything; at the edge of the screen it is put on a block edge, turned round and gone.
+beh_fireball:
+    bsr.w en_ready
+    move.w E_X(%a3), %d0
+    btst #0, E_FLAGS(%a3)
+    beq.s 1f
+    addi.w #0x0200, %d0
+    bra.s 2f
+1:  subi.w #0x0200, %d0
+2:  move.w %d0, E_X(%a3)
+    cmpi.w #0xF000, %d0
+    bcs.s 3f
+    move.b E_X(%a3), %d0
+    andi.b #0xF0, %d0
+    btst #0, E_FLAGS(%a3)
+    bne.s 4f
+    addi.b #0x10, %d0
+4:  move.b %d0, E_X(%a3)
+    eori.b #1, E_FLAGS(%a3)
+    move.b #0xFF, E_ENT(%a3)
+3:  bra.w en_behaviour_end
 
 | Hornet (BuzzAround): two pixels sideways a frame, turning at a wall; up and down by a table of eight steps, each for eight frames.
 beh_buzz:
@@ -962,7 +1020,7 @@ en_touch:
     cmpi.b #E_BREAD, %d5
     beq.s 5f
     cmpi.b #E_COIN, %d5
-    beq.s 6f
+    beq.w 6f
     move.w hero_invinc(%pc), %d0            | an enemy: nothing happens while he is invincible
     bne.w 9f
     moveq #4, %d0
@@ -990,6 +1048,9 @@ en_touch:
 3:  sub.w %d1, %d0
 4:  dbra %d3, 3b
 2:  bsr.w en_reduce_hp
+    cmpi.b #E_FIREBALL, E_ENT(%a3)          | (magic is gone when it has hurt him)
+    bne.s 9f
+    move.b #0xFF, E_ENT(%a3)
     bra.s 9f
 5:  move.b #0xFF, E_ENT(%a3)                | bread: Player_AddHP, at most 80
     moveq #0x1B, %d0
@@ -1162,6 +1223,10 @@ draw_enemies:
     beq.w 16f
     cmpi.w #10, %d0
     beq.w 17f
+    cmpi.w #11, %d0
+    beq.w 18f
+    cmpi.w #12, %d0
+    beq.w 19f
     moveq #0, %d1
     cmpi.w #2, %d0
     bne.s 5f
@@ -1169,11 +1234,11 @@ draw_enemies:
     btst #0, %d0
     bne.w 8f
     move.b E_D2(%a3), %d1
-    bra.s 6f
+    bra.w 6f
 5:  cmpi.w #4, %d0
-    bne.s 6f
+    bne.w 6f
     btst #3, E_INT(%a3)                     | a coin: the second picture while bit 3 of its count is set
-    beq.s 6f
+    beq.w 6f
     moveq #1, %d1
 6:  add.w %d1, %d6                          | (these have one picture, whichever way they face)
     bra.w 4f
@@ -1203,17 +1268,17 @@ draw_enemies:
     andi.w #3, %d0
     lea zombie_frames(%pc), %a1
     move.b (%a1,%d0.w), %d0
-    bra.s 7f
+    bra.w 7f
 12: moveq #0, %d2                           | rule 7, Ikeda: picture 2 while the step before is odd, else a change every 4 updates
     move.b E_PHASE(%a3), %d2
     subq.b #1, %d2
     moveq #2, %d0
     btst #0, %d2
-    bne.s 7f
+    bne.w 7f
     move.w en_counter(%pc), %d0
     lsr.w #2, %d0
     andi.w #1, %d0
-    bra.s 7f
+    bra.w 7f
 13: moveq #0, %d0                           | rule 8, the Myconid: moves in steps 1, 3 (a change every 16 updates) and 5 (every 8)
     moveq #0, %d2
     move.b E_PHASE(%a3), %d2
@@ -1225,16 +1290,34 @@ draw_enemies:
 14: cmpi.b #1, %d2
     beq.s 15f
     cmpi.b #3, %d2
-    bne.s 7f
+    bne.w 7f
 15: move.w en_counter(%pc), %d0
     lsr.w %d1, %d0
     andi.w #1, %d0
-    bra.s 7f
+    bra.w 7f
+18: moveq #0, %d2                           | rule 11, Charron: picture 2 in step 5, 1 in step 0 and the odd ones, else a change every 8 updates
+    move.b E_PHASE(%a3), %d2
+    moveq #2, %d0
+    cmpi.b #5, %d2
+    beq.w 7f
+    moveq #1, %d0
+    tst.b %d2
+    beq.w 7f
+    btst #0, %d2
+    bne.w 7f
+    move.w en_counter(%pc), %d0
+    lsr.w #3, %d0
+    andi.w #1, %d0
+    bra.w 7f
+19: move.w en_counter(%pc), %d0              | rule 12, the fireball: four pictures, a change every 4 updates
+    lsr.w #2, %d0
+    andi.w #3, %d0
+    bra.w 7f
 16: moveq #0, %d0                           | rule 9, Yuinaru: the second picture while bit 3 of its count is set
     btst #3, E_D2(%a3)
-    beq.s 7f
+    beq.w 7f
     moveq #1, %d0
-    bra.s 7f
+    bra.w 7f
 17: move.w en_counter(%pc), %d0              | rule 10, the Hornet: a change every 4 updates
     lsr.w #2, %d0
     andi.w #1, %d0

@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 ROM = ROOT.parent / "ext" / "Faxanadu_Europe.nes"
-SCENES = ((0, 4, "left", 400), (0, 5, "left", 400), (0, 8, "right", 400), (1, 16, "right", 400), (1, 6, "right", 400), (1, 19, "right", 400), (1, 22, "right", 400), (1, 23, "right", 400), (1, 29, "right", 400), (1, 45, "right", 400))
+SCENES = ((0, 4, "left", 400), (0, 5, "left", 400), (0, 8, "right", 400), (1, 16, "right", 400), (1, 6, "right", 400), (1, 19, "right", 400), (1, 22, "right", 400), (1, 23, "right", 400), (1, 29, "right", 400), (1, 45, "right", 400), (1, 25, "right", 400))
 HEROX = {(1, 23): 80, (1, 29): 16}       # where the hero stands when the default (64) has him fall off the screen or walk into a wall
 FIELDS = (("ent", "Entities"), ("x", "x"), ("xf", "xf"), ("y", "y"), ("yf", "yf"), ("flags", "Flags"), ("phase", "Phases"), ("beh", "Behaviors"), ("arg1", "BehaviorArg1"),
           ("d2", "BehaviorData2"), ("d3", "BehaviorData3"), ("internal", "InternalBehaviorStates"), ("bxf", "BehaviorState_XFrac"), ("bxfull", "BehaviorState_XFull"))
@@ -49,13 +49,15 @@ class EnemyTests(unittest.TestCase):
         import enemy_data as ed
 
         blob, where = bytearray(), {}
-        for e in sorted(set(entities)):
+        entities = set(entities)
+        for e in sorted(entities | {ed.SPAWNED[e] for e in entities if e in ed.SPAWNED}):
             chunk, _, mapping = ed.script_chunk(self.rom, self.rom.word("SPRITE_BSCRIPTS", e), 0x8000 + len(blob))
             where[e] = {old: 0x8000 + len(blob) + new for old, new in mapping.items()}
             blob += chunk
         return bytes(blob), where
 
     def replay(self, rec: list, packed: bool = False, area: int = 0):
+        import enemy_data as ed
         import enemy_model as em
 
         blob, where = self.packed(s["Entities"] for s in rec[0]["slots"] if s["Entities"] != 255) if packed else (self.bank14, {})
@@ -63,6 +65,10 @@ class EnemyTests(unittest.TestCase):
         # (a screen the hero has just entered may stand still for a few records, the counter already running: start at the first record that has moved)
         start = next((n for n in range(1, 12) if rec[n]["slots"] != rec[0]["slots"]), 0)
         eng.rnd = rec[start]["rnd"]
+        for ent in ed.EXTRAS + ed.ENEMIES + tuple(ed.SPAWNED.values()):
+            eng.kinds[ent] = dict(ed.kind_info(self.rom, ent))
+            if packed and ent in where:
+                eng.kinds[ent]["script"] = where[ent][eng.kinds[ent]["script"]]
         for i, s in enumerate(rec[start]["slots"]):
             sp = eng.sprites[i]
             for mine, theirs in FIELDS:
@@ -79,9 +85,10 @@ class EnemyTests(unittest.TestCase):
 
     def check(self, screen: int, packed: bool = False, area: int = 0) -> None:
         rec = self.runs[(area, screen)]
-        first = [s["Entities"] for s in rec[0]["slots"]]
+        placed = lambda slots: [s["Entities"] if s["Entities"] != 0x54 else 255 for s in slots]       # (a fireball comes and goes)
+        first = placed(rec[0]["slots"])
         for n, eng in self.replay(rec, packed, area):
-            if [s["Entities"] for s in rec[n]["slots"]] != first:     # the hero went on (the screen scrolled, the sprites were loaded anew)
+            if placed(rec[n]["slots"]) != first:     # the hero went on (the screen scrolled, the sprites were loaded anew)
                 self.assertGreater(n, 100, f"screen {screen}: the run ended early")
                 return
             for i, s in enumerate(rec[n]["slots"]):
@@ -103,7 +110,7 @@ class EnemyTests(unittest.TestCase):
         run = json.loads(out.read_text())
         frames = run["frames"]
         eng = em.Engine(self.bank14, self.random_table, bytes(run["start"]["blocks"]), self.props_by_area[area])
-        for ent in ed.EXTRAS + ed.ENEMIES:
+        for ent in ed.EXTRAS + ed.ENEMIES + tuple(ed.SPAWNED.values()):
             eng.kinds[ent] = ed.kind_info(self.rom, ent)
         eng.combat = ed.tables(self.rom)
         for i, s in enumerate(frames[0]["preSlots"]):
@@ -143,7 +150,7 @@ class EnemyTests(unittest.TestCase):
         return kills, pickups
 
     def test_the_sword_kills_and_the_drops_are_picked_up_as_in_the_rom(self) -> None:
-        for area, screen, weapon, armour in ((0, 4, 1, 0), (0, 8, 2, 1), (0, 5, 3, 2), (1, 16, 2, 1), (1, 7, 2, 1), (1, 31, 2, 1), (1, 22, 2, 1)):
+        for area, screen, weapon, armour in ((0, 4, 1, 0), (0, 8, 2, 1), (0, 5, 3, 2), (1, 16, 2, 1), (1, 7, 2, 1), (1, 31, 2, 1), (1, 22, 2, 1), (1, 25, 2, 1), (1, 28, 2, 1)):
             with self.subTest(area=area, screen=screen):
                 kills, pickups = self.fight(screen, weapon, armour, area)
                 self.assertGreaterEqual(kills, 1)
@@ -166,6 +173,9 @@ class EnemyTests(unittest.TestCase):
 
     def test_the_myconid_moves_as_in_the_rom(self) -> None:
         self.check(22, area=1)
+
+    def test_charron_walks_and_casts_fireballs_as_in_the_rom(self) -> None:
+        self.check(25, area=1)
 
     def test_the_yuinaru_waves_as_in_the_rom(self) -> None:
         self.check(23, area=1)

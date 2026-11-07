@@ -11,15 +11,16 @@ NONE = 0xFF
 CATEGORY_ENEMY, CATEGORY_DROPPED, CATEGORY_NPC, CATEGORY_EFFECT, CATEGORY_TRIGGER, CATEGORY_ITEM, CATEGORY_MAGIC, CATEGORY_BOSS = range(8)
 
 # The kinds the ST code runs so far: entity -> (frames of pictures, the picture rule of `enemy_model.appearance_offset`).
-ENEMIES = (0x47, 0x2A, 0x0C, 0x06, 0x26, 0x1B, 0x0B, 0x07)      # Zozura, Monodron, Snowman, Zombie, Ikeda, Myconid, Yuinaru, Hornet
-KINDS = {0x47: 2, 0x2A: 3, 0x0C: 2, 0x06: 3, 0x26: 3, 0x1B: 2, 0x0B: 2, 0x07: 2, 0x13: 8, 1: 1, 2: 2}      # + the death effect (a picture for each of its 8 frames), bread, coin
-RULE = {0x47: 0, 0x2A: 1, 0x0C: 5, 0x06: 6, 0x26: 7, 0x1B: 8, 0x0B: 9, 0x07: 10, 0x13: 2, 1: 3, 2: 4}
+ENEMIES = (0x47, 0x2A, 0x0C, 0x06, 0x26, 0x1B, 0x0B, 0x07, 0x15)      # Zozura, Monodron, Snowman, Zombie, Ikeda, Myconid, Yuinaru, Hornet, Charron
+KINDS = {0x47: 2, 0x2A: 3, 0x0C: 2, 0x06: 3, 0x26: 3, 0x1B: 2, 0x0B: 2, 0x07: 2, 0x15: 3, 0x54: 4, 0x13: 8, 1: 1, 2: 2}      # + the death effect (a picture for each of its 8 frames), bread, coin
+RULE = {0x47: 0, 0x2A: 1, 0x0C: 5, 0x06: 6, 0x26: 7, 0x1B: 8, 0x0B: 9, 0x07: 10, 0x15: 11, 0x54: 12, 0x13: 2, 1: 3, 2: 4}
+SPAWNED = {0x15: 0x54}                 # what an enemy makes: Charron's fireball (it is in a package whenever its maker is, but is never placed on a screen)
 EXTRAS = (0x13, 1, 2)                   # what an enemy leaves: they are in every package that has enemies; their tiles are the common sprite tiles
 KIND_BYTES = 32
 PLACE_BYTES = 6
 
 # The bytes of data a behaviour takes from the script when it starts (the number it adds to Sprites_ReadInfoAddr), for the behaviours modelled.
-BEHAVIOUR_DATA = {0: 2, 1: 0, 2: 0, 4: 2, 7: 0, 9: 3, 21: 0, 25: 0, 63: 0}
+BEHAVIOUR_DATA = {0: 2, 1: 0, 2: 0, 4: 2, 7: 0, 9: 3, 21: 0, 25: 0, 27: 0, 63: 0}
 # The length of each op's own bytes; op 0 (switch behaviour) is followed by its behaviour's data.
 OP_BYTES = {0: 3, 1: 3, 2: 2, 3: 7, 4: 1, 5: 3, 7: 2}
 JUMPS = {1: (1,), 5: (1,), 3: (3, 5)}       # the byte offsets of the addresses in an op
@@ -137,6 +138,7 @@ def package_parts(rom: fr.Rom, area: int, screens: list[int], palette_index: int
     for sid in screens:
         lists.append([p for p in placements(rom, area, sid) if p[0] in ENEMIES] if sid is not None else [])
     used = sorted({p[0] for items in lists for p in items})
+    used += [SPAWNED[e] for e in used if e in SPAWNED]
     if used:
         used += list(EXTRAS)
     palettes = sc.sprite_palettes(rom, palette_index)
@@ -153,7 +155,7 @@ def package_parts(rom: fr.Rom, area: int, screens: list[int], palette_index: int
         for frame in range(KINDS[ent]):
             base = rom.byte("SPRITE_APPEARANCE_PHASE_OFFSETS", ent)
             # an enemy's picture is mirrored when it faces right; the others have one picture (the same record serves both poses)
-            for flip in ((0, 0x40) if ent in ENEMIES else (0,)):
+            for flip in ((0, 0x40) if ent in ENEMIES or ent in SPAWNED.values() else (0,)):
                 entries_ = []
                 # the death effect (SpriteUpdateHandler_Effect_EnemyDeath) is three pieces: the first where the enemy was, the second 4 * frame lines above it, the third as far below
                 pieces = [(base + 0, 0), (base + 1, -4 * frame), (base + 2, 4 * frame)] if ent == 0x13 else [(base + frame, 0)]

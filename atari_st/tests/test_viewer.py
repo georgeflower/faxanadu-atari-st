@@ -815,7 +815,7 @@ class ViewerTests(unittest.TestCase):
 
     ENEMY_SCENES = ((0, 8, "16,144", 360), (0, 4, "240,144", 260), (0, 5, "240,144", 260), (1, 16, "16,144", 240),
                     (1, 7, "240,144", 260), (1, 31, "240,144", 260), (1, 22, "16,144", 240),
-                    (1, 29, "16,144", 260), (1, 45, "64,144", 260), (1, 60, "208,144", 260))    # area, screen, hero, the capture's VBL
+                    (1, 29, "16,144", 260), (1, 45, "64,144", 260), (1, 60, "208,144", 260), (1, 25, "16,144", 360))    # area, screen, hero, the capture's VBL
 
     def enemy_engine(self, rom, area_index: int, screen: int, word):
         """The model with the enemies of a screen as they are placed, the hero where the viewer has him."""
@@ -828,6 +828,8 @@ class ViewerTests(unittest.TestCase):
         free = next(b for b in range(256) if em.IMPASSABLE[props[b] & 15] == 0 and props[b] & 15 != em.LADDER)
         eng = em.Engine(rom.prg(14), ed.random_table(rom), bytes(fm.decode_screen(rom, area, screen)[:208]) + bytes([free]) * 48, props)
         eng.hero_x, eng.hero_y = word("hero_x"), word("hero_y")
+        for ent in ed.EXTRAS + ed.ENEMIES + tuple(ed.SPAWNED.values()):
+            eng.kinds[ent] = ed.kind_info(rom, ent)
         for i, (ent, x, y) in enumerate(p for p in ed.placements(rom, area_index, screen) if p[0] in ed.ENEMIES):
             s = eng.sprites[7 - i]
             s.ent, s.x, s.y, s.beh, s.hbox = ent, x, y, 0xFF, ed.entity(rom, ent)["hitbox"]
@@ -925,6 +927,20 @@ class ViewerTests(unittest.TestCase):
         power = word.raw("hud_state", 1)[0]
         self.assertLess(power, 80)
         self.assertEqual((80 - power) % 4, 0, power)
+
+    def test_charron_casts_a_fireball(self) -> None:
+        """Area 1 screen 25: Charron stands on the upper floor (y 64) and casts a fireball (entity 84) into a free slot; the hero, far below, is not hurt."""
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=1", "SCREEN=25", "HERO=16,144,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], 360, "shots_touch")
+        slots = [word.raw("enemies", 8 * 28)[i * 28] for i in range(8)]
+        self.assertIn(0x15, slots)
+        self.assertIn(0x54, slots, "a fireball in flight")
+        self.assertEqual(word.raw("hud_state", 1)[0], 80)
+
+    def test_a_fireball_takes_eight_power_and_is_gone(self) -> None:
+        """Area 1 screen 25, the hero on Charron's floor (96, 64): two fireballs hit him in the first 400 frames (8 off the power each) and are gone."""
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=1", "SCREEN=25", "HERO=96,64,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], 400, "shots_touch")
+        self.assertEqual(word.raw("hud_state", 1)[0], 64)
+        self.assertNotIn(0x54, [word.raw("enemies", 8 * 28)[i * 28] for i in range(8)])
 
     def test_a_zozura_that_walks_into_him_takes_seven_power_and_he_is_invincible_for_a_while(self) -> None:
         ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=4", "HERO=200,144,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], 700, "shots_touch")
