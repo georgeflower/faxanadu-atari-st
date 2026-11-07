@@ -17,7 +17,7 @@ LADDER = 2                                                         # block prope
 F_RIGHT, F_FLY, F_AIR, F_READY, F_DOWN = 0x01, 0x02, 0x04, 0x40, 0x80
 NONE = 0xFF
 
-BEH_MOVE, BEH_WAIT, BEH_BOUNCE, BEH_WALK, BEH_DEATH, BEH_HOP, BEH_FALL, BEH_BIHORUDA, BEH_WAVE, BEH_FIREBALL, BEH_FINISH, BEH_GAWAINE, BEH_BUZZ = 0, 1, 2, 4, 7, 9, 21, 23, 25, 27, 30, 40, 63
+BEH_MOVE, BEH_WAIT, BEH_BOUNCE, BEH_WALK, BEH_DEATH, BEH_HOP, BEH_FALL, BEH_BIHORUDA, BEH_WAVE, BEH_FIREBALL, BEH_FINISH, BEH_NAGA, BEH_YAREEKA, BEH_GAWAINE, BEH_BUZZ = 0, 1, 2, 4, 7, 9, 21, 23, 25, 27, 30, 33, 34, 40, 63
 BUZZ_Y = (0x00, 0x00, 0x80, 0x40, 0x00, 0x40, 0x80, 0x00)        # SPRITE_BEHAVIOR_BUZZ_AROUND_Y_FRAC and ..._X_FRAC (the whole pixels of the vertical step)
 BUZZ_Y_FULL = (2, 1, 0, 0, 0, 0, 0, 1)
 E_BREAD, E_COIN, E_DEATH, E_BOSS_DEATH, E_FIREBALL = 1, 2, 0x13, 0x64, 0x54
@@ -356,6 +356,52 @@ class Engine:
             s.flags ^= F_DOWN
         s.d3 = (s.d3 + 1) & 255
 
+    def behaviour_naga(self, s: Sprite) -> None:
+        """SpriteBehavior_Naga: it faces the hero and bobs up and down on a triangle wave of 32 ticks, turning up or down every 32 ticks; when he is 16 or more
+        lines above or below it also creeps towards his height (3/4 of a pixel a frame, without changing the way it bobs)."""
+        if not s.flags & F_READY:
+            s.d3 = s.phase = 0
+            s.flags |= F_READY
+        self.actions(s, 0)
+        t = self.triangle(s.d3, 0x0F, 0x10)
+        self.move_vertical(s, (t << 5) & 255, (t >> 3) & 1)
+        s.d3 = (s.d3 + 1) & 255
+        if not s.d3 & 0x1F:
+            s.flags ^= F_DOWN
+        if self.distance_y(s) < 0x10:
+            return
+        keep = s.flags
+        self.actions(s, 2)
+        self.move_vertical(s, 0xC0, 0)
+        s.flags = keep
+
+    def yareeka_wave(self, s: Sprite) -> None:
+        t = self.triangle(s.d2, 0x3F, 0x40)
+        s.d2 = (s.d2 + 1) & 255
+        self.move_horiz_and_turn(s, (t << 3) & 255, (t >> 5) & 1)
+
+    def behaviour_yareeka(self, s: Sprite) -> None:
+        """SpriteBehavior_Yareeka: three steps. 0: sideways on the rising half of a triangle wave (64 ticks); 1: two pixels a frame for 64 frames;
+        2: the falling half of the wave (64 ticks); then again."""
+        if not s.flags & F_READY:
+            s.d2 = s.phase = 0
+            s.flags |= F_READY
+        if s.phase == 2:
+            self.yareeka_wave(s)
+            if s.d2 >= 0x80:
+                s.phase = s.d2 = 0
+        elif s.phase == 1:
+            self.move_horiz_and_turn(s, 0, 2)
+            s.d2 = (s.d2 - 1) & 255
+            if not s.d2:
+                s.phase = 2
+                s.d2 = 0x40
+        else:
+            self.yareeka_wave(s)
+            if s.d2 >= 0x40:
+                s.phase += 1
+                s.d2 = 0x40
+
     def behaviour_gawaine(self, s: Sprite) -> None:
         """SpriteBehavior_SirGawaineWolfman: walks to the hero (a pixel a frame) until it is 24 away; then it stands facing him, and when he is in the air
         it rushes at him, two pixels a frame. The step is the picture."""
@@ -429,7 +475,7 @@ class Engine:
         elif s.d3 >= HOP_GROUND[s.internal]:
             s.d3 = (s.d3 - 1) & 255
 
-    BEHAVIOURS = {BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_BIHORUDA: "behaviour_bihoruda", BEH_GAWAINE: "behaviour_gawaine", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death",
+    BEHAVIOURS = {BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_BIHORUDA: "behaviour_bihoruda", BEH_GAWAINE: "behaviour_gawaine", BEH_NAGA: "behaviour_naga", BEH_YAREEKA: "behaviour_yareeka", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death",
                   BEH_HOP: "behaviour_hop", BEH_FALL: "behaviour_fall"}
 
     # -- the dropped coin: SpriteBehavior_BounceAndExpire
@@ -739,6 +785,8 @@ def appearance_offset(ent: int, phase: int, counter: int, d2: int = 0) -> int:
         return (counter >> 2) & 1
     if ent == 0x08:                                  # Bihoruda: picture 0 while d2 & 127 is 48 to 95, else 1
         return 0 if (d2 & 0x7F) - 0x30 & 255 < 0x30 else 1
+    if ent in (0x1C, 0x22):                          # Naga and Yareeka: a change every 8 updates
+        return (counter >> 3) & 1
     if ent in (0x1F, 0x21):                          # Sir Gawaine and the Wolfman: the step is the picture
         return phase
     raise NotImplementedError(f"the pictures of entity {ent}")

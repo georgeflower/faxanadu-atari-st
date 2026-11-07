@@ -185,6 +185,10 @@ en_behaviour:
     beq.w beh_fireball
     cmpi.w #30, %d0
     beq.w beh_finish
+    cmpi.w #33, %d0
+    beq.w beh_naga
+    cmpi.w #34, %d0
+    beq.w beh_yareeka
     cmpi.w #40, %d0
     beq.w beh_gawaine
     cmpi.w #63, %d0
@@ -702,6 +706,90 @@ beh_gawaine:
     bne.w en_behaviour_end
     addq.b #1, E_PHASE(%a3)
     bra.w en_behaviour_end
+
+| Naga: it faces the hero and bobs up and down on a triangle wave of 32 ticks (E_D3 counts them), turning up or down every 32 ticks; when he is
+| 16 or more lines above or below it also creeps towards his height, 3/4 of a pixel a frame, without changing the way it bobs.
+beh_naga:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    clr.b E_D3(%a3)
+    clr.b E_PHASE(%a3)
+    bsr.w en_ready
+1:  bsr.w ac_face_x
+    moveq #0, %d0
+    move.b E_D3(%a3), %d0
+    move.w %d0, %d1
+    andi.w #0x0F, %d0
+    btst #4, %d1
+    beq.s 2f
+    moveq #0x0F, %d1
+    sub.w %d0, %d1
+    move.w %d1, %d0
+2:  lsl.w #5, %d0                           | the step: 16 bits, the whole pixels (0 or 1) in the high byte
+    move.w %d0, %d3
+    bsr.w en_step_y
+    addq.b #1, E_D3(%a3)
+    move.b E_D3(%a3), %d0
+    andi.b #0x1F, %d0
+    bne.s 3f
+    eori.b #0x80, E_FLAGS(%a3)
+3:  bsr.w en_distance_y
+    cmpi.b #0x10, %d0
+    bcs.w en_behaviour_end
+    move.b E_FLAGS(%a3), -(%sp)
+    bsr.w ac_face_y
+    move.w #0x00C0, %d3
+    bsr.w en_step_y
+    move.b (%sp)+, E_FLAGS(%a3)
+    bra.w en_behaviour_end
+
+| Yareeka: three steps (E_PHASE), E_D2 counting. 0: sideways on the rising half of a triangle wave (64 ticks); 1: two pixels a frame for 64 frames;
+| 2: the falling half of the wave (64 ticks); then again.
+beh_yareeka:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    clr.b E_D2(%a3)
+    clr.b E_PHASE(%a3)
+    bsr.w en_ready
+1:  move.b E_PHASE(%a3), %d0
+    cmpi.b #2, %d0
+    beq.s 4f
+    cmpi.b #1, %d0
+    beq.s 5f
+    bsr.w en_yareeka_wave
+    cmpi.b #0x40, E_D2(%a3)
+    bcs.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    move.b #0x40, E_D2(%a3)
+    bra.w en_behaviour_end
+5:  move.w #0x0200, %d3
+    bsr.w en_step_x
+    tst.w %d0
+    beq.s 6f
+    eori.b #1, E_FLAGS(%a3)
+6:  subq.b #1, E_D2(%a3)
+    bne.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    move.b #0x40, E_D2(%a3)
+    bra.w en_behaviour_end
+4:  bsr.w en_yareeka_wave
+    cmpi.b #0x80, E_D2(%a3)
+    bcs.w en_behaviour_end
+    clr.b E_PHASE(%a3)
+    clr.b E_D2(%a3)
+    bra.w en_behaviour_end
+
+en_yareeka_wave:                            | one step sideways on the triangle wave of E_D2, turning at a wall
+    moveq #0, %d0
+    move.b E_D2(%a3), %d0
+    bsr.w en_triangle
+    move.w %d0, %d3
+    addq.b #1, E_D2(%a3)
+    bsr.w en_step_x
+    tst.w %d0
+    beq.s 9f
+    eori.b #1, E_FLAGS(%a3)
+9:  rts
 
 beh_fall:
     bsr.w en_ready
@@ -1361,6 +1449,8 @@ draw_enemies:
     beq.w 27f
     cmpi.w #20, %d0
     beq.w 28f
+    cmpi.w #21, %d0
+    beq.w 29f
     moveq #0, %d1
     cmpi.w #2, %d0
     bne.s 5f
@@ -1502,6 +1592,10 @@ draw_enemies:
     bra.w 7f
 28: moveq #0, %d0                           | rule 20, Sir Gawaine and the Wolfman: the step is the picture
     move.b E_PHASE(%a3), %d0
+    bra.w 7f
+29: move.w en_counter(%pc), %d0              | rule 21, Naga and Yareeka: a change every 8 updates
+    lsr.w #3, %d0
+    andi.w #1, %d0
     bra.w 7f
 18: moveq #0, %d2                           | rule 11, Charron: picture 2 in step 5, 1 in step 0 and the odd ones, else a change every 8 updates
     move.b E_PHASE(%a3), %d2

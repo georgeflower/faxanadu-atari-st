@@ -14,8 +14,10 @@ sys.path.insert(0, str(ROOT / "tools"))
 ROM = ROOT.parent / "ext" / "Faxanadu_Europe.nes"
 SCENES = ((0, 4, "left", 400), (0, 5, "left", 400), (0, 8, "right", 400), (1, 16, "right", 400), (1, 6, "right", 400), (1, 19, "right", 400), (1, 22, "right", 400), (1, 23, "right", 400), (1, 29, "right", 400), (1, 45, "right", 400), (1, 25, "right", 400),
           (2, 23, "right", 400), (2, 39, "right", 400), (2, 60, "right", 400), (5, 25, "right", 400), (5, 2, "right", 400), (5, 31, "right", 400),
-          (2, 4, "right", 400), (2, 14, "right", 400), (2, 19, "right", 400), (5, 21, "right", 400), (5, 35, "right", 400), (5, 36, "right", 400))
-HEROX = {(1, 23): 80, (1, 29): 16, (2, 23): 144, (2, 39): 80, (2, 60): 144, (5, 25): 144, (5, 2): 144, (5, 31): 144, (5, 21): 144, (5, 35): 144, (5, 36): 144}       # where the hero stands when the default (64) has him fall off the screen or walk into a wall
+          (2, 4, "right", 400), (2, 14, "right", 400), (2, 19, "right", 400), (5, 21, "right", 400), (5, 35, "right", 400), (5, 36, "right", 400),
+          (2, 1, "right", 400), (2, 3, "right", 400), (2, 25, "right", 400), (2, 29, "right", 400), (2, 32, "right", 400), (2, 37, "right", 400),
+          (2, 45, "right", 400))
+HEROX = {(1, 23): 80, (1, 29): 16, (2, 23): 144, (2, 39): 80, (2, 60): 144, (5, 25): 144, (5, 2): 144, (5, 31): 144, (5, 21): 144, (5, 35): 144, (5, 36): 144, (2, 1): 16, (2, 3): 144, (2, 25): 144}       # where the hero stands when the default (64) has him fall off the screen or walk into a wall
 FIELDS = (("ent", "Entities"), ("x", "x"), ("xf", "xf"), ("y", "y"), ("yf", "yf"), ("flags", "Flags"), ("phase", "Phases"), ("beh", "Behaviors"), ("arg1", "BehaviorArg1"),
           ("d2", "BehaviorData2"), ("d3", "BehaviorData3"), ("internal", "InternalBehaviorStates"), ("bxf", "BehaviorState_XFrac"), ("bxfull", "BehaviorState_XFull"))
 
@@ -154,7 +156,7 @@ class EnemyTests(unittest.TestCase):
         return kills, pickups
 
     def test_the_sword_kills_and_the_drops_are_picked_up_as_in_the_rom(self) -> None:
-        for area, screen, weapon, armour in ((0, 4, 1, 0), (0, 8, 2, 1), (0, 5, 3, 2), (1, 16, 2, 1), (1, 7, 2, 1), (1, 31, 2, 1), (1, 22, 2, 1), (1, 25, 2, 1), (1, 28, 2, 1), (2, 39, 2, 1), (5, 31, 2, 1), (2, 19, 2, 1), (5, 35, 2, 1)):
+        for area, screen, weapon, armour in ((0, 4, 1, 0), (0, 8, 2, 1), (0, 5, 3, 2), (1, 16, 2, 1), (1, 7, 2, 1), (1, 31, 2, 1), (1, 22, 2, 1), (1, 25, 2, 1), (1, 28, 2, 1), (2, 39, 2, 1), (5, 31, 2, 1), (2, 19, 2, 1), (5, 35, 2, 1), (2, 45, 2, 1)):
             with self.subTest(area=area, screen=screen):
                 kills, pickups = self.fight(screen, weapon, armour, area)
                 self.assertGreaterEqual(kills, 1)
@@ -189,7 +191,8 @@ class EnemyTests(unittest.TestCase):
         self.check(45, area=1)
 
     def test_the_kinds_of_the_other_areas_move_as_in_the_rom(self) -> None:
-        for area, screen in ((2, 23), (2, 39), (2, 60), (5, 25), (5, 2), (5, 31), (2, 4), (2, 14), (2, 19), (5, 21), (5, 35), (5, 36)):
+        for area, screen in ((2, 23), (2, 39), (2, 60), (5, 25), (5, 2), (5, 31), (2, 4), (2, 14), (2, 19), (5, 21), (5, 35), (5, 36),
+                             (2, 1), (2, 3), (2, 25), (2, 29), (2, 32), (2, 37), (2, 45)):
             with self.subTest(area=area, screen=screen):
                 self.check(screen, area=area)
 
