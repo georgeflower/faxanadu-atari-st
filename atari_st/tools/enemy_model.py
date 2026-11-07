@@ -17,7 +17,7 @@ LADDER = 2                                                         # block prope
 F_RIGHT, F_FLY, F_AIR, F_READY, F_DOWN = 0x01, 0x02, 0x04, 0x40, 0x80
 NONE = 0xFF
 
-BEH_MOVE, BEH_WAIT, BEH_BOUNCE, BEH_WALK, BEH_DEATH, BEH_HOP, BEH_FALL, BEH_WAVE, BEH_FIREBALL, BEH_FINISH, BEH_BUZZ = 0, 1, 2, 4, 7, 9, 21, 25, 27, 30, 63
+BEH_MOVE, BEH_WAIT, BEH_BOUNCE, BEH_WALK, BEH_DEATH, BEH_HOP, BEH_FALL, BEH_BIHORUDA, BEH_WAVE, BEH_FIREBALL, BEH_FINISH, BEH_GAWAINE, BEH_BUZZ = 0, 1, 2, 4, 7, 9, 21, 23, 25, 27, 30, 40, 63
 BUZZ_Y = (0x00, 0x00, 0x80, 0x40, 0x00, 0x40, 0x80, 0x00)        # SPRITE_BEHAVIOR_BUZZ_AROUND_Y_FRAC and ..._X_FRAC (the whole pixels of the vertical step)
 BUZZ_Y_FULL = (2, 1, 0, 0, 0, 0, 0, 1)
 E_BREAD, E_COIN, E_DEATH, E_BOSS_DEATH, E_FIREBALL = 1, 2, 0x13, 0x64, 0x54
@@ -94,6 +94,7 @@ class Engine:
         self.props = props
         self.sprites = [Sprite() for _ in range(8)]
         self.rnd = 0                  # Random_Offset
+        self.counter = 0              # SpriteUpdateCounter (a byte, one more at the start of every update)
         self.mask = 0                 # Joy1_ButtonMask
         self.i = 0                    # CurrentSpriteIndex
         self.ip = 0                   # Sprites_ReadInfoAddr
@@ -342,6 +343,48 @@ class Engine:
             s.flags ^= F_DOWN
         s.d2 = (s.d2 + 1) & 255
 
+    def behaviour_bihoruda(self, s: Sprite) -> None:
+        """SpriteBehavior_Bihoruda: it flies, sideways and up and down each on a triangle wave of 64 ticks (the two waves start 64 ticks apart), turning at a wall."""
+        if not s.flags & F_READY:
+            s.d2, s.d3 = 0, 0x40
+            s.flags |= F_READY
+        t = self.triangle(s.d2, 0x3F, 0x40)
+        self.move_horiz_and_turn(s, (t << 3) & 255, (t >> 5) & 1)
+        s.d2 = (s.d2 + 1) & 255
+        t = self.triangle(s.d3, 0x3F, 0x40)
+        if self.move_vertical(s, (t << 3) & 255, (t >> 5) & 1):
+            s.flags ^= F_DOWN
+        s.d3 = (s.d3 + 1) & 255
+
+    def behaviour_gawaine(self, s: Sprite) -> None:
+        """SpriteBehavior_SirGawaineWolfman: walks to the hero (a pixel a frame) until it is 24 away; then it stands facing him, and when he is in the air
+        it rushes at him, two pixels a frame. The step is the picture."""
+        if not s.flags & F_READY:
+            s.phase = 0
+            s.flags |= F_READY
+        if self.can_move(s):
+            self.handle_fall(s)
+        s.phase = 0
+        d = self.distance_x(s)
+        if d == 0x18:
+            return
+        if d > 0x18:
+            self.actions(s, 0)
+            self.move_horiz(s, 0, 1)
+            if self.counter & 8:
+                s.phase += 1
+            return
+        s.phase = 1
+        if not self.hero.flags & 1:                                # (Player_Flags bit 0: jumping)
+            self.actions(s, 0)
+            s.phase = 2 if self.counter & 0x10 else 0
+            return
+        s.phase = 0
+        self.actions(s, 0)
+        self.move_horiz(s, 0, 2)
+        if not self.counter & 4:
+            s.phase += 1
+
     def behaviour_walk(self, s: Sprite) -> None:
         if not s.flags & F_READY:
             s.d2, s.d3 = self.byte(self.ip), self.byte(self.ip + 1)
@@ -386,7 +429,7 @@ class Engine:
         elif s.d3 >= HOP_GROUND[s.internal]:
             s.d3 = (s.d3 - 1) & 255
 
-    BEHAVIOURS = {BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death",
+    BEHAVIOURS = {BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_BIHORUDA: "behaviour_bihoruda", BEH_GAWAINE: "behaviour_gawaine", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death",
                   BEH_HOP: "behaviour_hop", BEH_FALL: "behaviour_fall"}
 
     # -- the dropped coin: SpriteBehavior_BounceAndExpire
@@ -488,7 +531,12 @@ class Engine:
         if s.ent == NONE or s.flags & 0x10:
             return
         kind = self.kinds[s.ent]
-        left, top, width, height = (s.x + kind["bounds"][0]) & 255, (s.y + kind["bounds"][1]) & 255, kind["bounds"][2], kind["bounds"][3]
+        bounds = kind["bounds"]
+        if s.ent in (0x1F, 0x21) and s.phase == 2:                  # Sprite_GetBounds: a wide box (SPRITE_GETBOUNDS_COMMON) in step 2 ...
+            bounds = (0x30, 0x08, 0xF0, 0x00)
+        elif s.ent == 0x20 and s.phase in (0, 4):                   # ... and for the Maskman in steps 0 and 4 (SPRITE_GETBOUNDS_MASKMAN)
+            bounds = (0x20, 0x10, 0xF8, 0x00)
+        left, top, width, height = (s.x + bounds[0]) & 255, (s.y + bounds[1]) & 255, bounds[2], bounds[3]
         if ((h.x + 0x0B - left) & 255) >= ((width + 0x0B) & 255) or ((h.y + 0x1B - top) & 255) >= ((height + 0x1B) & 255):
             return
         cat = kind["category"]
@@ -531,6 +579,7 @@ class Engine:
 
     def update_frame(self) -> None:
         """Sprites_UpdateAll for the sprites the sword and the touch can reach (no magic yet), the hero as `self.hero`."""
+        self.counter = (self.counter + 1) & 255
         for i in range(7, -1, -1):
             self.i = i
             s = self.sprites[i]
@@ -631,6 +680,7 @@ class Engine:
 
     def update_all(self) -> None:
         """Sprites_UpdateAll for slots without a hit in progress."""
+        self.counter = (self.counter + 1) & 255
         for i in range(7, -1, -1):
             self.i = i
             s = self.sprites[i]
@@ -687,6 +737,10 @@ def appearance_offset(ent: int, phase: int, counter: int, d2: int = 0) -> int:
         return (d2 >> 3) & 1
     if ent == 7:                                     # Hornet: a change every 4 updates
         return (counter >> 2) & 1
+    if ent == 0x08:                                  # Bihoruda: picture 0 while d2 & 127 is 48 to 95, else 1
+        return 0 if (d2 & 0x7F) - 0x30 & 255 < 0x30 else 1
+    if ent in (0x1F, 0x21):                          # Sir Gawaine and the Wolfman: the step is the picture
+        return phase
     raise NotImplementedError(f"the pictures of entity {ent}")
 
 

@@ -581,7 +581,7 @@ class ViewerTests(unittest.TestCase):
         import hatari_shot as hs
         import hero_physics as hp
 
-        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=2", "SCREEN=0", "CAMERA=40", "HERO=32,170,0,255,0,0,1"], check=True, capture_output=True)
+        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=2", "SCREEN=0", "CAMERA=40", "HERO=32,170,0,255,0,0,1", "VIEWER_DEFS=--defsym NO_ENEMIES=1"], check=True, capture_output=True)
         nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
         sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
         image = (ROOT / "build" / "viewer.bin").read_bytes()
@@ -816,7 +816,8 @@ class ViewerTests(unittest.TestCase):
     ENEMY_SCENES = ((0, 8, "16,144", 360), (0, 4, "240,144", 260), (0, 5, "240,144", 260), (1, 16, "16,144", 260),
                     (1, 7, "240,144", 280), (1, 31, "240,144", 280), (1, 22, "16,144", 260),
                     (1, 29, "16,144", 280), (1, 45, "64,144", 280), (1, 60, "208,144", 280), (1, 25, "16,144", 378),
-                    (2, 39, "16,144", 284), (2, 23, "16,144", 284), (2, 60, "16,144", 284), (5, 25, "16,144", 279), (5, 2, "16,144", 278), (5, 31, "16,144", 279))    # area, screen, hero, the capture's VBL
+                    (2, 39, "16,144", 284), (2, 23, "16,144", 284), (2, 60, "16,144", 284), (5, 25, "16,144", 279), (5, 2, "16,144", 278), (5, 31, "16,144", 279),
+                    (2, 4, "240,144", 284), (2, 14, "240,144", 284), (2, 19, "240,144", 284), (5, 21, "16,144", 279), (5, 35, "16,144", 279), (5, 36, "16,144", 279))    # area, screen, hero, the capture's VBL
 
     def enemy_engine(self, rom, area_index: int, screen: int, word):
         """The model with the enemies of a screen as they are placed, the hero where the viewer has him."""
@@ -873,7 +874,7 @@ class ViewerTests(unittest.TestCase):
                     for sp in sprites:
                         if sp.ent == em.NONE:
                             continue
-                        app = fs.appearance(rom, ed.entity(rom, sp.ent)["appearance"] + em.appearance_offset(sp.ent, sp.phase, counter), "TILEINFO_ENTITY_ADDRS")
+                        app = fs.appearance(rom, ed.entity(rom, sp.ent)["appearance"] + em.appearance_offset(sp.ent, sp.phase, counter, sp.d2), "TILEINFO_ENTITY_ADDRS")
                         layer = fs.sprite_layer(fs.place(app, sp.x, sp.y, em.flip_mask(sp.flags)), fs.entity_tiles(rom, sp.ent), palettes)
                         for (x, line), c in layer.items():
                             y = line - word("camera")
@@ -882,7 +883,9 @@ class ViewerTests(unittest.TestCase):
                     hx, hy = word("hero_x") + sc.ST_LEFT, word("hero_y") + 32 - word("camera")        # (his own picture is tested elsewhere: not the box round him, nor what of it the NES wraps round to the left edge)
                     bad = [(px, py) for py in range(200) for px in range(320) if rows[py][px] != expected[py][px] and not ((hx - 24 <= px < hx + 40 or hx - 280 <= px < hx - 216) and hy - 8 <= py < hy + 40)]
                     worst.append(bad)
-                self.assertTrue(any(not bad for bad in worst), f"area {area} screen {screen}: {[len(b) for b in worst]} pixels differ, e.g. {worst[0][:5]}")
+                box = lambda b: (min(x for x, _ in b), min(y for _, y in b), max(x for x, _ in b), max(y for _, y in b)) if b else None
+                self.assertTrue(any(not bad for bad in worst), f"area {area} screen {screen}: {[len(b) for b in worst]} pixels differ, in {[box(b) for b in worst]}, sprites "
+                                f"{[(sp.ent, sp.x, sp.y, sp.phase, sp.d2, sp.flags) for sp in states[-1][0] if sp.ent != em.NONE]}, (got, wanted) {[(px, py, rows[py][px], expected[py][px]) for px, py in worst[-1][:6]]}")
 
     def test_the_enemies_move_as_the_model_does(self) -> None:
         """Eolis screens 4 and 5 (two Zozuras each) and 8 (a Monodron): the hero stands still far from them (on 4 and 5 the capture is early, before a Zozura reaches him); after n updates (en_counter) every slot is
@@ -928,6 +931,14 @@ class ViewerTests(unittest.TestCase):
         power = word.raw("hud_state", 1)[0]
         self.assertLess(power, 80)
         self.assertEqual((80 - power) % 4, 0, power)
+
+    def test_sir_gawaine_walks_up_and_hurts_him_from_a_distance(self) -> None:
+        """Area 2 screen 19: Sir Gawaine walks to the hero and, standing in step 2, touches him with the wide box `Sprite_GetBounds` gives him (the game
+        hurt the hero from 31 pixels away in the golden fight): each touch takes its 12 off the power."""
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=2", "SCREEN=19", "HERO=207,144,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], 400, "shots_touch")
+        power = word.raw("hud_state", 1)[0]
+        self.assertLess(power, 80)
+        self.assertEqual((80 - power) % 12, 0, power)
 
     def test_charron_casts_a_fireball(self) -> None:
         """Area 1 screen 25: Charron stands on the upper floor (y 64) and casts a fireball (entity 84) into a free slot; the hero, far below, is not hurt."""

@@ -12,16 +12,16 @@ CATEGORY_ENEMY, CATEGORY_DROPPED, CATEGORY_NPC, CATEGORY_EFFECT, CATEGORY_TRIGGE
 
 # The kinds the ST code runs so far: entity -> (frames of pictures, the picture rule of `enemy_model.appearance_offset`).
 ENEMIES = (0x47, 0x2A, 0x0C, 0x06, 0x26, 0x1B, 0x0B, 0x07, 0x15,
-           0x04, 0x19, 0x28, 0x1E, 0x20, 0x17)      # Zozura, Monodron, Snowman, Zombie, Ikeda, Myconid, Yuinaru, Hornet, Charron, Raiden, Grimlock, Lamprey, Giant Strider, Maskman, Geributa
-KINDS = {0x47: 2, 0x2A: 3, 0x0C: 2, 0x06: 3, 0x26: 3, 0x1B: 2, 0x0B: 2, 0x07: 2, 0x15: 3, 0x54: 4, 0x04: 4, 0x19: 4, 0x28: 2, 0x1E: 3, 0x20: 5, 0x17: 3, 0x13: 8, 1: 1, 2: 2}      # + the death effect (a picture for each of its 8 frames), bread, coin
-RULE = {0x47: 0, 0x2A: 1, 0x0C: 5, 0x06: 6, 0x26: 7, 0x1B: 8, 0x0B: 9, 0x07: 10, 0x15: 11, 0x54: 12, 0x04: 13, 0x19: 14, 0x28: 15, 0x1E: 16, 0x20: 17, 0x17: 18, 0x13: 2, 1: 3, 2: 4}
+           0x04, 0x19, 0x28, 0x1E, 0x20, 0x17, 0x08, 0x1F, 0x21)      # Zozura, Monodron, Snowman, Zombie, Ikeda, Myconid, Yuinaru, Hornet, Charron, Raiden, Grimlock, Lamprey, Giant Strider, Maskman, Geributa, Bihoruda, Sir Gawaine, Wolfman
+KINDS = {0x47: 2, 0x2A: 3, 0x0C: 2, 0x06: 3, 0x26: 3, 0x1B: 2, 0x0B: 2, 0x07: 2, 0x15: 3, 0x54: 4, 0x04: 4, 0x19: 4, 0x28: 2, 0x1E: 3, 0x20: 5, 0x17: 3, 0x08: 2, 0x1F: 3, 0x21: 3, 0x13: 8, 1: 1, 2: 2}      # + the death effect (a picture for each of its 8 frames), bread, coin
+RULE = {0x47: 0, 0x2A: 1, 0x0C: 5, 0x06: 6, 0x26: 7, 0x1B: 8, 0x0B: 9, 0x07: 10, 0x15: 11, 0x54: 12, 0x04: 13, 0x19: 14, 0x28: 15, 0x1E: 16, 0x20: 17, 0x17: 18, 0x08: 19, 0x1F: 20, 0x21: 20, 0x13: 2, 1: 3, 2: 4}
 SPAWNED = {0x15: 0x54}                 # what an enemy makes: Charron's fireball (it is in a package whenever its maker is, but is never placed on a screen)
 EXTRAS = (0x13, 1, 2)                   # what an enemy leaves: they are in every package that has enemies; their tiles are the common sprite tiles
 KIND_BYTES = 32
 PLACE_BYTES = 6
 
 # The bytes of data a behaviour takes from the script when it starts (the number it adds to Sprites_ReadInfoAddr), for the behaviours modelled.
-BEHAVIOUR_DATA = {0: 2, 1: 0, 2: 0, 4: 2, 7: 0, 9: 3, 21: 0, 25: 0, 27: 0, 30: 0, 63: 0}
+BEHAVIOUR_DATA = {0: 2, 1: 0, 2: 0, 4: 2, 7: 0, 9: 3, 21: 0, 23: 0, 25: 0, 27: 0, 30: 0, 40: 0, 63: 0}
 # The length of each op's own bytes; op 0 (switch behaviour) is followed by its behaviour's data.
 OP_BYTES = {0: 3, 1: 3, 2: 2, 3: 7, 4: 1, 5: 3, 7: 2}
 JUMPS = {1: (1,), 5: (1,), 3: (3, 5)}       # the byte offsets of the addresses in an op

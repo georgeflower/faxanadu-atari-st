@@ -177,12 +177,16 @@ en_behaviour:
     bcc.s en_behaviour_end
     cmpi.w #4, %d0
     beq.w beh_walk
+    cmpi.w #23, %d0
+    beq.w beh_bihoruda
     cmpi.w #25, %d0
     beq.w beh_wave
     cmpi.w #27, %d0
     beq.w beh_fireball
     cmpi.w #30, %d0
     beq.w beh_finish
+    cmpi.w #40, %d0
+    beq.w beh_gawaine
     cmpi.w #63, %d0
     beq.w beh_buzz
     tst.w %d0
@@ -612,6 +616,93 @@ beh_buzz:
 3:  addq.b #1, E_D2(%a3)
     bra.w en_behaviour_end
 
+| Bihoruda: it flies, sideways and up and down each on a triangle wave of 64 ticks (E_D2 counts the sideways one, E_D3 the other, started 64 ticks
+| later), turning at a wall.
+beh_bihoruda:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    clr.b E_D2(%a3)
+    move.b #0x40, E_D3(%a3)
+    bsr.w en_ready
+1:  moveq #0, %d0
+    move.b E_D2(%a3), %d0
+    bsr.w en_triangle
+    move.w %d0, %d3
+    bsr.w en_step_x
+    tst.w %d0
+    beq.s 2f
+    eori.b #1, E_FLAGS(%a3)
+2:  addq.b #1, E_D2(%a3)
+    moveq #0, %d0
+    move.b E_D3(%a3), %d0
+    bsr.w en_triangle
+    move.w %d0, %d3
+    bsr.w en_step_y
+    tst.w %d0
+    beq.s 3f
+    eori.b #0x80, E_FLAGS(%a3)
+3:  addq.b #1, E_D3(%a3)
+    bra.w en_behaviour_end
+
+| Sprites_CalcYFromGravity for gravity 2 and the shift of the step: in d0.w = a count, out d0.w = its triangle wave (0 to 63) times 8, which is a step
+| with the whole pixels in the high byte. Clobbers d1.
+en_triangle:
+    move.w %d0, %d1
+    andi.w #0x3F, %d0
+    btst #6, %d1
+    beq.s 1f
+    moveq #0x3F, %d1
+    sub.w %d0, %d1
+    move.w %d1, %d0
+1:  lsl.w #3, %d0
+    rts
+
+| Sir Gawaine and the Wolfman: walks to the hero (a pixel a frame) until it is 24 away, then stands facing him; when he is in the air it rushes at him,
+| two pixels a frame. The step it is in (E_PHASE) is the picture.
+beh_gawaine:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    clr.b E_PHASE(%a3)
+    bsr.w en_ready
+1:  bsr.w en_can_move
+    tst.w %d0
+    beq.s 2f
+    bsr.w en_fall_step
+2:  clr.b E_PHASE(%a3)
+    bsr.w en_distance_x
+    cmpi.b #0x18, %d0
+    beq.w en_behaviour_end
+    bcs.s 4f
+    bsr.w ac_face_x
+    move.w #0x0100, %d3
+    bsr.w en_step_x
+    move.w en_counter(%pc), %d0
+    btst #3, %d0
+    beq.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    bra.w en_behaviour_end
+4:  move.b #1, E_PHASE(%a3)
+    move.w hero_air(%pc), %d0
+    btst #0, %d0
+    bne.s 5f
+    bsr.w ac_face_x
+    moveq #0, %d0
+    move.w en_counter(%pc), %d1
+    btst #4, %d1
+    beq.s 6f
+    moveq #2, %d0
+6:  move.b %d0, E_PHASE(%a3)
+    bra.w en_behaviour_end
+5:  clr.b E_PHASE(%a3)
+    bsr.w ac_face_x
+    move.w #0x0200, %d3
+    bsr.w en_step_x
+    move.w en_counter(%pc), %d0
+    btst #2, %d0
+    bne.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    bra.w en_behaviour_end
+
 beh_fall:
     bsr.w en_ready
     bsr.w en_can_move
@@ -999,26 +1090,46 @@ en_touch:
     cmpi.b #E_DEATH, %d5
     beq.w 9f
     movea.l E_KIND(%a3), %a0
-    moveq #0, %d0
+    lea touch_box(%pc), %a1                 | the box (left, top, width, height): the kind's, but Sprite_GetBounds gives these a wide one in some steps
+    move.l K_BL(%a0), (%a1)
+    move.l K_BW(%a0), 4(%a1)
+    cmpi.b #0x20, %d5
+    beq.s 11f
+    cmpi.b #0x1F, %d5
+    beq.s 10f
+    cmpi.b #0x21, %d5
+    bne.s 12f
+10: cmpi.b #2, E_PHASE(%a3)                 | Sir Gawaine and the Wolfman in step 2
+    bne.s 12f
+    move.l #0x00300008, (%a1)
+    move.l #0x00F00000, 4(%a1)
+    bra.s 12f
+11: move.b E_PHASE(%a3), %d0                | the Maskman in steps 0 and 4
+    beq.s 13f
+    cmpi.b #4, %d0
+    bne.s 12f
+13: move.l #0x00200010, (%a1)
+    move.l #0x00F80000, 4(%a1)
+12: moveq #0, %d0
     move.b E_X(%a3), %d0
-    add.w K_BL(%a0), %d0                    | the box's left
+    add.w (%a1), %d0                    | the box's left
     move.w hero_x(%pc), %d1
     addi.w #0x0B, %d1
     sub.w %d0, %d1
     andi.w #0xFF, %d1
-    move.w K_BW(%a0), %d2
+    move.w 4(%a1), %d2
     addi.w #0x0B, %d2
     andi.w #0xFF, %d2
     cmp.w %d2, %d1
     bcc.w 9f
     moveq #0, %d0
     move.b E_Y(%a3), %d0
-    add.w K_BT(%a0), %d0                    | its top
+    add.w 2(%a1), %d0                    | its top
     move.w hero_y(%pc), %d1
     addi.w #0x1B, %d1
     sub.w %d0, %d1
     andi.w #0xFF, %d1
-    move.w K_BH(%a0), %d2
+    move.w 6(%a1), %d2
     addi.w #0x1B, %d2
     andi.w #0xFF, %d2
     cmp.w %d2, %d1
@@ -1246,6 +1357,10 @@ draw_enemies:
     beq.w 25f
     cmpi.w #18, %d0
     beq.w 26f
+    cmpi.w #19, %d0
+    beq.w 27f
+    cmpi.w #20, %d0
+    beq.w 28f
     moveq #0, %d1
     cmpi.w #2, %d0
     bne.s 5f
@@ -1377,6 +1492,17 @@ draw_enemies:
     lsr.w #2, %d0
     andi.w #1, %d0
     bra.w 7f
+27: moveq #0, %d0                           | rule 19, Bihoruda: picture 0 while its sideways count (modulo 128) is 48 to 95, else 1
+    move.b E_D2(%a3), %d1
+    andi.b #0x7F, %d1
+    subi.b #0x30, %d1
+    cmpi.b #0x30, %d1
+    bcs.w 7f
+    moveq #1, %d0
+    bra.w 7f
+28: moveq #0, %d0                           | rule 20, Sir Gawaine and the Wolfman: the step is the picture
+    move.b E_PHASE(%a3), %d0
+    bra.w 7f
 18: moveq #0, %d2                           | rule 11, Charron: picture 2 in step 5, 1 in step 0 and the odd ones, else a change every 8 updates
     move.b E_PHASE(%a3), %d2
     moveq #2, %d0
@@ -1506,6 +1632,8 @@ enemies:
     .space 8*E_BYTES
 enemy_rects:
     .space 2*8*8                            | two screens, 8 enemies, each x0, x1, y0, y1 (words)
+touch_box:
+    .space 8
 en_counter:
     .word 0
 hero_weapon:

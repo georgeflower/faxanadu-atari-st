@@ -13,8 +13,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 ROM = ROOT.parent / "ext" / "Faxanadu_Europe.nes"
 SCENES = ((0, 4, "left", 400), (0, 5, "left", 400), (0, 8, "right", 400), (1, 16, "right", 400), (1, 6, "right", 400), (1, 19, "right", 400), (1, 22, "right", 400), (1, 23, "right", 400), (1, 29, "right", 400), (1, 45, "right", 400), (1, 25, "right", 400),
-          (2, 23, "right", 400), (2, 39, "right", 400), (2, 60, "right", 400), (5, 25, "right", 400), (5, 2, "right", 400), (5, 31, "right", 400))
-HEROX = {(1, 23): 80, (1, 29): 16, (2, 23): 144, (2, 39): 80, (2, 60): 144, (5, 25): 144, (5, 2): 144, (5, 31): 144}       # where the hero stands when the default (64) has him fall off the screen or walk into a wall
+          (2, 23, "right", 400), (2, 39, "right", 400), (2, 60, "right", 400), (5, 25, "right", 400), (5, 2, "right", 400), (5, 31, "right", 400),
+          (2, 4, "right", 400), (2, 14, "right", 400), (2, 19, "right", 400), (5, 21, "right", 400), (5, 35, "right", 400), (5, 36, "right", 400))
+HEROX = {(1, 23): 80, (1, 29): 16, (2, 23): 144, (2, 39): 80, (2, 60): 144, (5, 25): 144, (5, 2): 144, (5, 31): 144, (5, 21): 144, (5, 35): 144, (5, 36): 144}       # where the hero stands when the default (64) has him fall off the screen or walk into a wall
 FIELDS = (("ent", "Entities"), ("x", "x"), ("xf", "xf"), ("y", "y"), ("yf", "yf"), ("flags", "Flags"), ("phase", "Phases"), ("beh", "Behaviors"), ("arg1", "BehaviorArg1"),
           ("d2", "BehaviorData2"), ("d3", "BehaviorData3"), ("internal", "InternalBehaviorStates"), ("bxf", "BehaviorState_XFrac"), ("bxfull", "BehaviorState_XFull"))
 
@@ -65,7 +66,7 @@ class EnemyTests(unittest.TestCase):
         eng = em.Engine(blob, self.random_table, bytes(rec[0]["blocks"]), self.props_by_area[area])
         # (a screen the hero has just entered may stand still for a few records, the counter already running: start at the first record that has moved)
         start = next((n for n in range(1, 12) if rec[n]["slots"] != rec[0]["slots"]), 0)
-        eng.rnd = rec[start]["rnd"]
+        eng.rnd, eng.counter = rec[start]["rnd"], rec[start]["counter"]
         for ent in ed.EXTRAS + ed.ENEMIES + tuple(ed.SPAWNED.values()):
             eng.kinds[ent] = dict(ed.kind_info(self.rom, ent))
             if packed and ent in where:
@@ -124,9 +125,11 @@ class EnemyTests(unittest.TestCase):
                  "hp_u": "hpU", "hp_l": "hpL", "weapon": "weapon"}
         kills = pickups = 0
         for n, rec in enumerate(frames):
-            if rec["scroll"] != 255 or (n and rec["counter"] == frames[n - 1]["counter"]):
+            if rec["scroll"] != 255:
                 self.assertGreater(n, 300, f"screen {screen}: the fight ended early")
                 break
+            if n and rec["counter"] == frames[n - 1]["counter"]:        # (the game did not run the sprites in this frame)
+                continue
             h = eng.hero
             for mine, theirs in names.items():
                 setattr(h, mine, rec["pre"][theirs])
@@ -135,7 +138,7 @@ class EnemyTests(unittest.TestCase):
             h.events = []
             eng.rnd, eng.mask = rec["rnd"] if False else eng.rnd, rec["mask"]
             if n == 0:
-                eng.rnd = rec["rnd"]
+                eng.rnd, eng.counter = rec["rnd"], (rec["counter"] - 1) & 255
             eng.update_frame()
             for i, s in enumerate(rec["slots"]):
                 sp = eng.sprites[i]
@@ -151,7 +154,7 @@ class EnemyTests(unittest.TestCase):
         return kills, pickups
 
     def test_the_sword_kills_and_the_drops_are_picked_up_as_in_the_rom(self) -> None:
-        for area, screen, weapon, armour in ((0, 4, 1, 0), (0, 8, 2, 1), (0, 5, 3, 2), (1, 16, 2, 1), (1, 7, 2, 1), (1, 31, 2, 1), (1, 22, 2, 1), (1, 25, 2, 1), (1, 28, 2, 1), (2, 39, 2, 1), (5, 31, 2, 1)):
+        for area, screen, weapon, armour in ((0, 4, 1, 0), (0, 8, 2, 1), (0, 5, 3, 2), (1, 16, 2, 1), (1, 7, 2, 1), (1, 31, 2, 1), (1, 22, 2, 1), (1, 25, 2, 1), (1, 28, 2, 1), (2, 39, 2, 1), (5, 31, 2, 1), (2, 19, 2, 1), (5, 35, 2, 1)):
             with self.subTest(area=area, screen=screen):
                 kills, pickups = self.fight(screen, weapon, armour, area)
                 self.assertGreaterEqual(kills, 1)
@@ -186,7 +189,7 @@ class EnemyTests(unittest.TestCase):
         self.check(45, area=1)
 
     def test_the_kinds_of_the_other_areas_move_as_in_the_rom(self) -> None:
-        for area, screen in ((2, 23), (2, 39), (2, 60), (5, 25), (5, 2), (5, 31)):
+        for area, screen in ((2, 23), (2, 39), (2, 60), (5, 25), (5, 2), (5, 31), (2, 4), (2, 14), (2, 19), (5, 21), (5, 35), (5, 36)):
             with self.subTest(area=area, screen=screen):
                 self.check(screen, area=area)
 
