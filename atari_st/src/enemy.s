@@ -42,6 +42,7 @@
     .equ E_COIN, 2
     .equ E_DEATH, 0x13
     .equ E_FIREBALL, 0x54                   | Charron's fireball (cast, never placed)
+    .equ E_MAGIC, 0x51                      | the magic of Nash and the Execution Hood
 
     .text
 | All slots empty, their drawn boxes forgotten (the screens are clean when this is called).
@@ -135,11 +136,10 @@ enemies_update:
     lea en_counter(%pc), %a0
     addq.w #1, (%a0)
     move.w cur_screen(%pc), %d0
-    mulu.w #208, %d0
-    movea.l pkg_ptr+PKG_BLOCKING(%pc), %a0
-    adda.l %d0, %a0
+    bsr.w screen_flags
     lea en_blocks(%pc), %a1
-    move.l %a0, (%a1)+
+    move.l %a2, (%a1)+
+    mulu.w #208, %d0
     movea.l pkg_ptr+PKG_SCREENS(%pc), %a0
     adda.l %d0, %a0
     move.l %a0, (%a1)
@@ -151,7 +151,9 @@ enemies_update:
     beq.s 2f
     tst.b E_HIT(%a3)
     beq.s 3f
-    subq.b #1, E_HIT(%a3)                   | hit: it stands still, and is pushed two pixels the way it faces
+    subq.b #1, E_HIT(%a3)                   | hit: it stands still, and is pushed two pixels the way it faces (Tamazutsu is not)
+    cmpi.b #0x2C, E_ENT(%a3)
+    beq.s 2f
     move.w #0x0200, %d3
     bsr.w en_step_x
     bra.s 2f
@@ -174,7 +176,7 @@ en_behaviour:
     move.b E_BEH(%a3), %d0
     andi.w #0x7F, %d0
     cmpi.w #0x42, %d0
-    bcc.s en_behaviour_end
+    bcc.w en_behaviour_end
     cmpi.w #4, %d0
     beq.w beh_walk
     cmpi.w #23, %d0
@@ -185,6 +187,20 @@ en_behaviour:
     beq.w beh_fireball
     cmpi.w #30, %d0
     beq.w beh_finish
+    cmpi.w #22, %d0
+    beq.w beh_necron
+    cmpi.w #26, %d0
+    beq.w beh_nash
+    cmpi.w #31, %d0
+    beq.w beh_flash
+    cmpi.w #32, %d0
+    beq.w beh_bees
+    cmpi.w #35, %d0
+    beq.w beh_magman
+    cmpi.w #39, %d0
+    beq.w beh_tamazutsu
+    cmpi.w #65, %d0
+    beq.w beh_hood
     cmpi.w #33, %d0
     beq.w beh_naga
     cmpi.w #34, %d0
@@ -372,35 +388,47 @@ ac_random_y:
     rts
 
 | GetRandom: a byte of the ROM's own code, mixed with the buttons held. Out: d0.b. Clobbers a0, d1.
-ac_cast:                                    | BScript_Action_CastMagic: a fireball in the highest free slot, from the caster's x and 8 lines below its top, the way it faces
-    movem.l %d0-%d1/%a0-%a1, -(%sp)
+ac_cast:                                    | BScript_Action_CastMagic: a fireball from the caster's x, 8 lines below its top
+    movem.l %d0-%d2, -(%sp)
+    moveq #E_FIREBALL, %d0
+    moveq #0, %d1
+    moveq #8, %d2
+    bsr.s ac_cast_at
+    movem.l (%sp)+, %d0-%d2
+    rts
+ac_cast_at:                                 | a magic sprite (d0.b = its kind) in the highest free slot, from the caster's x + d1.b and y + d2.b, the way it faces
+    movem.l %d0-%d5/%a0-%a1, -(%sp)
+    move.b %d1, %d4
+    move.b %d2, %d5
     lea enemies(%pc), %a0
     adda.w #7*E_BYTES, %a0
-    moveq #7, %d0
+    moveq #7, %d3
 1:  cmpi.b #0xFF, E_ENT(%a0)
     beq.s 2f
     lea -E_BYTES(%a0), %a0
-    dbra %d0, 1b
+    dbra %d3, 1b
     bra.s 8f
 2:  movea.l %a0, %a1
-    moveq #E_FIREBALL, %d0
+    andi.w #0xFF, %d0
     bsr.w en_find_kind
-    move.l %a0, %d0
+    move.l %a0, %d1
     beq.s 8f
-    move.b #E_FIREBALL, E_ENT(%a1)
-    move.b E_FLAGS(%a3), %d0
-    andi.b #1, %d0
-    move.b %d0, E_FLAGS(%a1)
-    move.b E_X(%a3), E_X(%a1)
-    move.b E_Y(%a3), %d0
-    addq.b #8, %d0
-    move.b %d0, E_Y(%a1)
+    move.b %d0, E_ENT(%a1)
+    move.b E_FLAGS(%a3), %d1
+    andi.b #1, %d1
+    move.b %d1, E_FLAGS(%a1)
+    move.b E_X(%a3), %d1
+    add.b %d4, %d1
+    move.b %d1, E_X(%a1)
+    move.b E_Y(%a3), %d1
+    add.b %d5, %d1
+    move.b %d1, E_Y(%a1)
     clr.b E_PHASE(%a1)
     move.b #0xFF, E_BEH(%a1)
     move.b 3(%a0), E_HBOX(%a1)
     move.w 6(%a0), E_SCRIPT(%a1)
     move.l %a0, E_KIND(%a1)
-8:  movem.l (%sp)+, %d0-%d1/%a0-%a1
+8:  movem.l (%sp)+, %d0-%d5/%a0-%a1
     rts
 en_random:
     lea en_rnd(%pc), %a0
@@ -791,6 +819,371 @@ en_yareeka_wave:                            | one step sideways on the triangle 
     eori.b #1, E_FLAGS(%a3)
 9:  rts
 
+| Sprite_Maybe_TurnAroundIfAtScreenEdgeHoriz: d3.w = the step; forward through everything; at the screen's edge it is put on a block edge and turns round.
+en_edge_x:
+    move.w E_X(%a3), %d0
+    btst #0, E_FLAGS(%a3)
+    beq.s 1f
+    add.w %d3, %d0
+    bra.s 2f
+1:  sub.w %d3, %d0
+2:  move.w %d0, E_X(%a3)
+    cmpi.b #0xF0, E_X(%a3)
+    bcs.s 9f
+    move.b E_X(%a3), %d0
+    andi.b #0xF0, %d0
+    btst #0, E_FLAGS(%a3)
+    bne.s 3f
+    addi.b #0x10, %d0
+3:  move.b %d0, E_X(%a3)
+    eori.b #1, E_FLAGS(%a3)
+9:  rts
+
+| Sprite_Maybe_TurnAroundIfAtScreenEdgeVert: d3.w = the step; up or down through everything; below line 224 it is put on a block edge and turns round.
+en_edge_y:
+    move.w E_Y(%a3), %d0
+    btst #7, E_FLAGS(%a3)
+    beq.s 1f
+    add.w %d3, %d0
+    bra.s 2f
+1:  sub.w %d3, %d0
+2:  move.w %d0, E_Y(%a3)
+    cmpi.b #0xE0, E_Y(%a3)
+    bcs.s 9f
+    move.b E_Y(%a3), %d0
+    andi.b #0xF0, %d0
+    btst #7, E_FLAGS(%a3)
+    bne.s 3f
+    addi.b #0x10, %d0
+3:  move.b %d0, E_Y(%a3)
+    eori.b #0x80, E_FLAGS(%a3)
+9:  rts
+
+| Sprites_CalcYFromGravity: d0.w = a count, d1.w = its peak mask, d2.w = the bit that turns the wave: out d0.w = the count as a triangle wave.
+en_wave:
+    move.w %d0, -(%sp)
+    and.w %d1, %d0
+    and.w (%sp)+, %d2
+    beq.s 1f
+    sub.w %d0, %d1
+    move.w %d1, %d0
+1:  rts
+
+| Giant Bees: phase 0 flies up four lines a frame to line 32; phase 1 dives at the hero (a pixel sideways a frame, the dive slowing by 4 a frame) until it is
+| level with him; phase 2 hovers 128 frames on a wave of 16 ticks, drifting towards him, and starts again.
+beh_bees:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    clr.b E_PHASE(%a3)
+    bsr.w en_ready
+1:  move.b E_PHASE(%a3), %d0
+    beq.s 2f
+    cmpi.b #1, %d0
+    beq.s 4f
+    bra.w 6f
+2:  move.w #0x0400, %d3
+    bsr.w en_edge_y
+    cmpi.b #0x20, E_Y(%a3)
+    bcc.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    move.b #0xFF, E_D2(%a3)
+    move.b #0xFF, E_D3(%a3)
+    bsr.w ac_face_x
+    bsr.w ac_face_y
+    bra.w en_behaviour_end
+3:  addq.b #1, E_PHASE(%a3)
+    move.b #0x40, E_D2(%a3)
+    clr.b E_D3(%a3)
+    bra.w en_behaviour_end
+4:  tst.b E_D3(%a3)
+    beq.s 3b
+    bsr.w en_distance_y
+    cmpi.b #8, %d0
+    bcs.s 3b
+    move.w #0x0100, %d3
+    bsr.w en_edge_x
+    moveq #0, %d3
+    move.b E_D3(%a3), %d3
+    lsl.w #2, %d3
+    bsr.w en_edge_y
+    move.b E_D3(%a3), %d0
+    subq.b #4, %d0
+    bcc.s 5f
+    moveq #0, %d0
+5:  move.b %d0, E_D3(%a3)
+    bra.w en_behaviour_end
+6:  bsr.w ac_face_x
+    move.w #0x00C0, %d3
+    bsr.w en_edge_x
+    moveq #0, %d0
+    move.b E_D3(%a3), %d0
+    moveq #0x0F, %d1
+    moveq #0x10, %d2
+    bsr.w en_wave
+    lsl.w #4, %d0
+    move.w %d0, %d3
+    bsr.w en_edge_y
+    addq.b #1, E_D3(%a3)
+    move.b E_D3(%a3), %d0
+    andi.b #0x0F, %d0
+    bne.s 7f
+    eori.b #0x80, E_FLAGS(%a3)
+7:  move.b E_D3(%a3), %d0
+    andi.b #0x7F, %d0
+    bne.w en_behaviour_end
+    clr.b E_PHASE(%a3)
+    andi.b #0x7F, E_FLAGS(%a3)
+    bra.w en_behaviour_end
+
+| Necron Aides: it climbs a ladder, up and down in steps of a wave of 4 (turning where the ladder ends or at two moments), until it has hit the hero or been
+| hit: then (phase bit 7) it falls if it must and walks a pixel a frame, turning round at three moments.
+beh_necron:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    clr.b E_D2(%a3)
+    clr.b E_D3(%a3)
+    bsr.w en_ready
+1:  tst.b E_PHASE(%a3)
+    bmi.w 6f
+    moveq #0, %d0
+    move.b E_Y(%a3), %d0
+    btst #7, E_FLAGS(%a3)
+    beq.s 2f
+    addi.w #0x20, %d0
+    bra.s 3f
+2:  subq.w #1, %d0
+3:  andi.w #0xF0, %d0                       | the block above its top or below its feet, at its x
+    moveq #0, %d1
+    move.b E_X(%a3), %d1
+    lsr.w #4, %d1
+    or.w %d1, %d0
+    cmpi.w #208, %d0
+    bge.s 4f
+    movea.l en_ids(%pc), %a0
+    moveq #0, %d1
+    move.b (%a0,%d0.w), %d1
+    movea.l pkg_ptr+PKG_BLOCK_FLAGS(%pc), %a0
+    btst #2, (%a0,%d1.w)                    | a ladder: go on
+    bne.s 5f
+4:  eori.b #0x80, E_FLAGS(%a3)
+5:  move.w en_counter(%pc), %d0
+    cmpi.b #0x17, %d0
+    beq.s 7f
+    cmpi.b #0x75, %d0
+    bne.s 8f
+7:  eori.b #0x80, E_FLAGS(%a3)
+8:  lsr.w #2, %d0
+    andi.w #3, %d0
+    lea necron_steps(%pc), %a0
+    moveq #0, %d3
+    move.b (%a0,%d0.w), %d3
+    cmpi.w #3, %d0
+    bne.s 9f
+    move.w #0x0100, %d3
+9:  move.w E_Y(%a3), %d0
+    btst #7, E_FLAGS(%a3)
+    beq.s 10f
+    add.w %d3, %d0
+    bra.s 11f
+10: sub.w %d3, %d0
+11: move.w %d0, E_Y(%a3)
+    bra.w en_behaviour_end
+6:  bsr.w en_can_move
+    tst.w %d0
+    beq.s 12f
+    bsr.w en_fall_step
+    bra.w en_behaviour_end
+12: move.w en_counter(%pc), %d0
+    cmpi.b #0x26, %d0
+    beq.s 13f
+    cmpi.b #0x48, %d0
+    beq.s 13f
+    cmpi.b #0x93, %d0
+    bne.s 14f
+13: eori.b #1, E_FLAGS(%a3)
+14: move.w #0x0100, %d3
+    bsr.w en_step_x
+    bra.w en_behaviour_end
+
+| Sugata's flash (SpriteBehavior_FlashScreenHitPlayer): two frames after it starts he loses 10 power, whatever he wears, and is invincible for 60 frames.
+beh_flash:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    move.b #2, E_D2(%a3)
+    bsr.w en_ready
+1:  subq.b #1, E_D2(%a3)
+    bne.w en_behaviour_end
+    moveq #4, %d0
+    bsr.w sound_play_sfx
+    lea hero_invinc(%pc), %a2
+    move.w #0x3C, (%a2)
+    move.w #1, hero_knock-hero_invinc(%a2)
+    move.w #0x0A00, %d0
+    bsr.w en_reduce_hp
+    bsr.w en_finish
+    bra.w en_behaviour_end
+
+| Nash: phase 0 it is hidden for 120 frames; then it appears 32 pixels in front of or behind the hero (phase 1, 60 frames, facing him); phase 2 (60 frames) it
+| casts magic at the 10th frame left, then it hides again.
+beh_nash:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    move.b #0x78, E_D2(%a3)
+    bsr.w en_ready
+1:  move.b E_PHASE(%a3), %d0
+    beq.s 2f
+    cmpi.b #1, %d0
+    beq.s 5f
+    subq.b #1, E_D2(%a3)
+    beq.s 7f
+    cmpi.b #0x0A, E_D2(%a3)
+    bne.w en_behaviour_end
+    moveq #E_MAGIC, %d0
+    moveq #4, %d1
+    moveq #0x0C, %d2
+    bsr.w ac_cast_at
+    bra.w en_behaviour_end
+7:  clr.b E_PHASE(%a3)
+    move.b #0x78, E_D2(%a3)
+    bra.w en_behaviour_end
+2:  bset #4, E_FLAGS(%a3)
+    subq.b #1, E_D2(%a3)
+    bne.w en_behaviour_end
+    bclr #4, E_FLAGS(%a3)
+    addq.b #1, E_PHASE(%a3)
+    move.b #0x3C, E_D2(%a3)
+    move.w hero_x(%pc), %d1
+    move.w %d1, %d0
+    move.w hero_flip(%pc), %d2
+    tst.w %d2
+    bne.s 3f
+    addi.w #0x20, %d0
+    cmpi.w #0xF0, %d0
+    bcs.s 4f
+    move.w %d1, %d0
+    subi.w #0x20, %d0
+    bra.s 4f
+3:  subi.w #0x20, %d0
+    bpl.s 4f
+    move.w %d1, %d0
+    addi.w #0x20, %d0
+4:  move.b %d0, E_X(%a3)
+    bra.w en_behaviour_end
+5:  bsr.w ac_face_x
+    subq.b #1, E_D2(%a3)
+    bne.w en_behaviour_end
+    move.b #0x3C, E_D2(%a3)
+    addq.b #1, E_PHASE(%a3)
+    bra.w en_behaviour_end
+
+| Magman: out of sight (line 208, x 240) for 60 frames, then 48 pixels from the hero, level with him, facing him, for 120 frames.
+beh_magman:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    move.b #0x3C, E_D2(%a3)
+    clr.b E_PHASE(%a3)
+    move.b #0xD0, E_Y(%a3)
+    move.b #0xF0, E_X(%a3)
+    bsr.w en_ready
+1:  btst #0, E_PHASE(%a3)
+    bne.s 3f
+    subq.b #1, E_D2(%a3)
+    bne.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    move.b #0x78, E_D2(%a3)
+    move.w hero_x(%pc), %d0
+    move.w hero_flip(%pc), %d2
+    tst.w %d2
+    beq.s 2f
+    addi.b #0x30, %d0
+    bra.s 4f
+2:  addi.b #0xD0, %d0
+4:  move.b %d0, E_X(%a3)
+    move.w hero_y(%pc), %d0
+    move.b %d0, E_Y(%a3)
+    bra.w en_behaviour_end
+3:  bsr.w ac_face_x
+    subq.b #1, E_D2(%a3)
+    bne.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    move.b #0x3C, E_D2(%a3)
+    move.b #0xD0, E_Y(%a3)
+    move.b #0xF0, E_X(%a3)
+    bra.w en_behaviour_end
+
+| Tamazutsu: it faces the hero; hidden for 60 frames, hidden 11, in sight for 60, hidden 11, and again (its phase is kept to 0 to 3).
+beh_tamazutsu:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    move.b #0x3C, E_D2(%a3)
+    clr.b E_PHASE(%a3)
+    bsr.w en_ready
+1:  bsr.w ac_face_x
+    moveq #0x3C, %d2
+    move.b E_PHASE(%a3), %d0
+    cmpi.b #2, %d0
+    bne.s 2f
+    bclr #4, E_FLAGS(%a3)
+    moveq #0x0B, %d2
+    bra.s 4f
+2:  bset #4, E_FLAGS(%a3)
+    tst.b %d0
+    bne.s 4f
+    moveq #0x0B, %d2
+4:  subq.b #1, E_D2(%a3)
+    bne.s 5f
+    addq.b #1, E_PHASE(%a3)
+    move.b %d2, E_D2(%a3)
+5:  andi.b #3, E_PHASE(%a3)
+    bra.w en_behaviour_end
+
+| Execution Hood: half a pixel sideways a frame, bobbing on a wave of 16 ticks (turning up or down every 8); after 16 ticks it goes on to the next step, and
+| in the fourth it stands facing him for 15 frames and casts magic.
+beh_hood:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    clr.b E_D3(%a3)
+    clr.b E_PHASE(%a3)
+    bsr.w en_ready
+1:  move.b E_PHASE(%a3), %d0
+    andi.b #3, %d0
+    cmpi.b #3, %d0
+    bne.s 2f
+    bsr.w ac_face_x
+    subq.b #1, E_D2(%a3)
+    bne.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    clr.b E_D3(%a3)
+    moveq #E_MAGIC, %d0
+    moveq #4, %d1
+    moveq #0, %d2
+    bsr.w ac_cast_at
+    bra.w en_behaviour_end
+2:  move.w #0x0080, %d3
+    bsr.w en_step_x
+    tst.w %d0
+    beq.s 3f
+    eori.b #1, E_FLAGS(%a3)
+3:  moveq #0, %d0
+    move.b E_D3(%a3), %d0
+    moveq #7, %d1
+    moveq #8, %d2
+    bsr.w en_wave
+    lsl.w #5, %d0
+    move.w %d0, %d3
+    bsr.w en_edge_y
+    addq.b #1, E_D3(%a3)
+    move.b E_D3(%a3), %d0
+    andi.b #7, %d0
+    bne.s 4f
+    eori.b #0x80, E_FLAGS(%a3)
+4:  move.b E_D3(%a3), %d0
+    andi.b #0x0F, %d0
+    bne.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    move.b #0x0F, E_D2(%a3)
+    bra.w en_behaviour_end
+
 beh_fall:
     bsr.w en_ready
     bsr.w en_can_move
@@ -1087,6 +1480,8 @@ en_weapon:
     beq.w 9f
     cmpi.b #E_DEATH, %d0
     beq.w 9f
+    btst #4, E_FLAGS(%a3)                   | hidden (Tamazutsu, Nash): it cannot be hit
+    bne.w 9f
     btst #7, hero_air+1(%pc)                | Player_Flags bit 7: attacking
     beq.w 9f
     move.w hero_atk_phase(%pc), %d0
@@ -1120,7 +1515,10 @@ en_weapon:
     andi.w #0xFF, %d3
     cmp.w %d3, %d0
     bcc.w 9f
-    moveq #2, %d0                           | a hit
+    cmpi.b #5, E_ENT(%a3)                   | Necron Aides, hit: it comes off the ladder (phase bit 7)
+    bne.s 1f
+    ori.b #0x80, E_PHASE(%a3)
+1:  moveq #2, %d0                           | a hit
     bsr.w sound_play_sfx
     move.w hero_flip(%pc), %d0              | it faces the way he does
     andi.b #1, %d0
@@ -1177,6 +1575,8 @@ en_touch:
     move.b E_ENT(%a3), %d5
     cmpi.b #E_DEATH, %d5
     beq.w 9f
+    btst #4, E_FLAGS(%a3)                   | hidden: it cannot touch him
+    bne.w 9f
     movea.l E_KIND(%a3), %a0
     lea touch_box(%pc), %a1                 | the box (left, top, width, height): the kind's, but Sprite_GetBounds gives these a wide one in some steps
     move.l K_BL(%a0), (%a1)
@@ -1229,6 +1629,10 @@ en_touch:
     beq.w 6f
     move.w hero_invinc(%pc), %d0            | an enemy: nothing happens while he is invincible
     bne.w 9f
+    cmpi.b #5, %d5                          | Necron Aides, touching him: it comes off the ladder
+    bne.s 14f
+    ori.b #0x80, E_PHASE(%a3)
+14:
     moveq #4, %d0
     bsr.w sound_play_sfx
     lea hero_invinc(%pc), %a2
@@ -1255,8 +1659,10 @@ en_touch:
 4:  dbra %d3, 3b
 2:  bsr.w en_reduce_hp
     cmpi.b #E_FIREBALL, E_ENT(%a3)          | (magic is gone when it has hurt him)
+    beq.s 15f
+    cmpi.b #E_MAGIC, E_ENT(%a3)
     bne.s 9f
-    move.b #0xFF, E_ENT(%a3)
+15: move.b #0xFF, E_ENT(%a3)
     bra.s 9f
 5:  move.b #0xFF, E_ENT(%a3)                | bread: Player_AddHP, at most 80
     moveq #0x1B, %d0
@@ -1451,6 +1857,20 @@ draw_enemies:
     beq.w 28f
     cmpi.w #21, %d0
     beq.w 29f
+    cmpi.w #22, %d0
+    beq.w 30f
+    cmpi.w #23, %d0
+    beq.w 31f
+    cmpi.w #24, %d0
+    beq.w 32f
+    cmpi.w #25, %d0
+    beq.w 33f
+    cmpi.w #26, %d0
+    beq.w 34f
+    cmpi.w #27, %d0
+    beq.w 35f
+    cmpi.w #28, %d0
+    beq.w 36f
     moveq #0, %d1
     cmpi.w #2, %d0
     bne.s 5f
@@ -1568,9 +1988,9 @@ draw_enemies:
     lsr.w #2, %d0
     andi.w #1, %d0
     bra.w 7f
-25: moveq #4, %d0                           | rule 17, Maskman: picture 4 in the odd steps, else a change every 8 updates
+25: moveq #4, %d0                           | rule 17, Maskman: picture 4 in the even steps, else a change every 8 updates
     btst #0, E_PHASE(%a3)
-    bne.w 7f
+    beq.w 7f
     move.w en_counter(%pc), %d0
     lsr.w #3, %d0
     andi.w #1, %d0
@@ -1597,6 +2017,91 @@ draw_enemies:
     lsr.w #3, %d0
     andi.w #1, %d0
     bra.w 7f
+30: move.w en_counter(%pc), %d0              | rule 22, Necron Aides: a change every 8 updates, every 4 once it has hit or been hit
+    lsr.w #2, %d0
+    tst.b E_PHASE(%a3)
+    bmi.s 40f
+    lsr.w #1, %d0
+40: andi.w #1, %d0
+    bra.w 7f
+31: moveq #2, %d0                           | rule 23, Fire Giant: picture 2, in step 2 a change every 4 updates
+    cmpi.b #2, E_PHASE(%a3)
+    bne.w 7f
+    move.w en_counter(%pc), %d0
+    lsr.w #2, %d0
+    andi.w #1, %d0
+    bra.w 7f
+32: moveq #0, %d2                           | rule 24, Tamazutsu: by its step (E_PHASE and 3) and its count
+    move.b E_PHASE(%a3), %d2
+    andi.w #3, %d2
+    moveq #0, %d1
+    move.b E_D2(%a3), %d1
+    moveq #0, %d0
+    tst.w %d2
+    bne.s 41f
+    cmpi.b #0x1E, %d1                       | step 0: not drawn until the count is below 30, then picture 0 or 1
+    bcc.w 8f
+    btst #3, %d1
+    beq.w 7f
+    moveq #1, %d0
+    bra.w 7f
+41: cmpi.w #2, %d2
+    bne.s 42f
+    moveq #5, %d0                           | step 2 (the one in sight): picture 5 or 6
+    btst #3, %d1
+    beq.w 7f
+    moveq #6, %d0
+    bra.w 7f
+42: lsr.w #2, %d1                           | steps 1 and 3: the count in fours picks 4, 3, 2 or 2, 3, 4
+    lea tamazutsu_frames(%pc), %a1
+    cmpi.w #1, %d2
+    beq.s 43f
+    addq.w #3, %d1
+43: move.b (%a1,%d1.w), %d0
+    bra.w 7f
+33: moveq #0, %d0                           | rule 25, Nash: not drawn in step 0 (nor in step 1 for 4 updates of 8), picture 0 in step 1, then 0, 1, 2 by the count
+    tst.b E_PHASE(%a3)
+    beq.w 8f
+    cmpi.b #1, E_PHASE(%a3)
+    bne.s 44f
+    btst #2, en_counter+1(%pc)
+    bne.w 8f
+44: cmpi.b #2, E_PHASE(%a3)
+    bne.w 7f
+    moveq #0, %d1
+    move.b E_D2(%a3), %d1
+    subi.b #0x0A, %d1
+    cmpi.b #0x28, %d1
+    bcc.w 7f
+    moveq #1, %d0
+    cmpi.b #0x14, %d1
+    bcc.w 7f
+    moveq #2, %d0
+    bra.w 7f
+34: moveq #0, %d0                           | rule 26, Execution Hood: picture 1 in the fourth step, every other 4 updates
+    moveq #0, %d1
+    move.b E_PHASE(%a3), %d1
+    andi.b #3, %d1
+    cmpi.b #3, %d1
+    bne.w 7f
+    move.w en_counter(%pc), %d1
+    btst #2, %d1
+    beq.w 7f
+    moveq #1, %d0
+    bra.w 7f
+35: moveq #0, %d0                           | rule 27, Magman: a change every 8 updates in the odd steps
+    btst #0, E_PHASE(%a3)
+    beq.w 7f
+    move.w en_counter(%pc), %d0
+    lsr.w #3, %d0
+    andi.w #1, %d0
+    bra.w 7f
+36: move.w en_counter(%pc), %d0              | rule 28, the magic of Nash and the Hood: a change every 4 updates, never mirrored
+    lsr.w #2, %d0
+    andi.w #1, %d0
+    add.w %d0, %d0
+    add.w %d0, %d6
+    bra.w 4f
 18: moveq #0, %d2                           | rule 11, Charron: picture 2 in step 5, 1 in step 0 and the odd ones, else a change every 8 updates
     move.b E_PHASE(%a3), %d2
     moveq #2, %d0
@@ -1679,6 +2184,15 @@ draw_enemies:
     bsr.w blit_tile                         | (clobbers d0-d7, a0-a2)
     bra.s 5b
 7:  move.w (%sp)+, %d7
+    lea enemy_rects(%pc), %a0               | what of it reached into a side margin is cleared again
+    move.w slot_index(%pc), %d0
+    lsl.w #6, %d0
+    adda.w %d0, %a0
+    move.w %d7, %d0
+    lsl.w #3, %d0
+    adda.w %d0, %a0
+    movem.w (%a0), %d0-%d3
+    bsr.w clear_box
 8:  lea E_BYTES(%a3), %a3
     addq.w #1, %d7
     cmpi.w #8, %d7
@@ -1717,6 +2231,10 @@ zombie_frames:                              | SPRITEBEHAVIOR_ENEMY_ZOMBIE_PHASES
     .byte 0, 1, 2, 1
 monodron_frames:                            | SPRITE_MONODRON_APPEARANCE_PHASES
     .byte 0, 2, 0, 1
+tamazutsu_frames:                           | BYTE_ARRAY_PRG14__9905 and ..9908 halved: the pictures of Tamazutsu's steps 1 and 3
+    .byte 4, 3, 2, 2, 3, 4
+necron_steps:                               | BYTE_ARRAY_PRG14__8e3c: the fraction of Necron Aides' step on the ladder, by the counter in fours
+    .byte 0x20, 0x40, 0x80, 0x00
 random_table:                               | the 256 bytes of the ROM's code GetRandom reads (build_assets.py)
     .incbin "random.bin"
     .even

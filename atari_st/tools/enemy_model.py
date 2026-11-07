@@ -18,6 +18,9 @@ F_RIGHT, F_FLY, F_AIR, F_READY, F_DOWN = 0x01, 0x02, 0x04, 0x40, 0x80
 NONE = 0xFF
 
 BEH_MOVE, BEH_WAIT, BEH_BOUNCE, BEH_WALK, BEH_DEATH, BEH_HOP, BEH_FALL, BEH_BIHORUDA, BEH_WAVE, BEH_FIREBALL, BEH_FINISH, BEH_NAGA, BEH_YAREEKA, BEH_GAWAINE, BEH_BUZZ = 0, 1, 2, 4, 7, 9, 21, 23, 25, 27, 30, 33, 34, 40, 63
+BEH_NECRON, BEH_NASH, BEH_FLASH, BEH_BEES, BEH_MAGMAN, BEH_TAMAZUTSU, BEH_HOOD = 22, 26, 31, 32, 35, 39, 65
+E_MAGIC = 0x51                 # the magic of Nash and the Execution Hood (the fireball's script, another picture)
+F_HIDDEN = 0x10                # SPRITE_FLAGS_VISIBLE, which Sprite_SetVisible sets and Sprites_IsSpriteHidden tests: a sprite with it set is not drawn and cannot be touched or hit
 BUZZ_Y = (0x00, 0x00, 0x80, 0x40, 0x00, 0x40, 0x80, 0x00)        # SPRITE_BEHAVIOR_BUZZ_AROUND_Y_FRAC and ..._X_FRAC (the whole pixels of the vertical step)
 BUZZ_Y_FULL = (2, 1, 0, 0, 0, 0, 0, 1)
 E_BREAD, E_COIN, E_DEATH, E_BOSS_DEATH, E_FIREBALL = 1, 2, 0x13, 0x64, 0x54
@@ -402,6 +405,216 @@ class Engine:
                 s.phase += 1
                 s.d2 = 0x40
 
+    def edge_horiz(self, s: Sprite, frac: int, full: int) -> int:
+        """Sprite_Maybe_TurnAroundIfAtScreenEdgeHoriz: a step forward through everything; at the screen's edge it is put on a block edge and turns round."""
+        self.add_x(s, frac, full, 1 if s.flags & F_RIGHT else -1)
+        if s.x < 0xF0:
+            return 0
+        s.x = (s.x & 0xF0) + (0 if s.flags & F_RIGHT else 0x10) & 255
+        s.flags ^= F_RIGHT
+        return 1
+
+    def edge_vert(self, s: Sprite, frac: int, full: int) -> int:
+        """Sprite_Maybe_TurnAroundIfAtScreenEdgeVert: a step up or down through everything; below line 224 it is put on a block edge and turns round."""
+        v = (s.y << 8 | s.yf) + (full << 8 | frac) * (1 if s.flags & F_DOWN else -1)
+        s.y, s.yf = (v >> 8) & 255, v & 255
+        if s.y < 0xE0:
+            return 0
+        s.y = (s.y & 0xF0) if s.flags & F_DOWN else (s.y & 0xF0) + 0x10 & 255
+        s.flags ^= F_DOWN
+        return 1
+
+    def behaviour_bees(self, s: Sprite) -> None:
+        """SpriteBehavior_GiantBees: phase 0 flies up four lines a frame to line 32; phase 1 dives at the hero (a pixel sideways a frame, the dive slowing by 4 a
+        frame) until it is level with him; phase 2 hovers 128 frames on a wave of 16 ticks, drifting towards him, and starts again."""
+        if not s.flags & F_READY:
+            s.phase = 0
+            s.flags |= F_READY
+        if s.phase == 0:
+            self.edge_vert(s, 0, 4)
+            if s.y < 0x20:
+                s.phase += 1
+                s.d2 = s.d3 = 0xFF
+                self.actions(s, 0)
+                self.actions(s, 2)
+        elif s.phase == 1:
+            if s.d3 == 0 or self.distance_y(s) < 8:
+                s.phase += 1
+                s.d2, s.d3 = 0x40, 0
+                return
+            self.edge_horiz(s, 0, 1)
+            self.edge_vert(s, (s.d3 << 2) & 255, s.d3 >> 6)
+            s.d3 = s.d3 - 4 if s.d3 >= 4 else 0
+        else:
+            self.actions(s, 0)
+            self.edge_horiz(s, 0xC0, 0)
+            t = self.triangle(s.d3, 0x0F, 0x10)
+            self.edge_vert(s, (t << 4) & 255, 0)
+            s.d3 = (s.d3 + 1) & 255
+            if not s.d3 & 0x0F:
+                s.flags ^= F_DOWN
+            if not s.d3 & 0x7F:
+                s.phase = 0
+                s.flags &= 0x7F
+
+    def behaviour_necron(self, s: Sprite) -> None:
+        """SpriteBehavior_NecronAides: it climbs a ladder, up and down in steps of a wave of 4 (turning where the ladder ends or at two moments), until it
+        has hit the hero or been hit: then (phase bit 7) it falls if it must and walks a pixel a frame, turning round at three moments."""
+        if not s.flags & F_READY:
+            s.d2 = s.d3 = 0
+            s.flags |= F_READY
+        if not s.phase & 0x80:
+            y = (s.y + (0x20 if s.flags & F_DOWN else 0xFF)) & 255
+            if self.prop((y & 0xF0) | (s.x >> 4)) != LADDER:
+                s.flags ^= F_DOWN
+            if self.counter in (0x17, 0x75):
+                s.flags ^= F_DOWN
+            i = (self.counter >> 2) & 3
+            v = (s.y << 8 | s.yf) + (((0, 0, 0, 1)[i] << 8) | (0x20, 0x40, 0x80, 0x00)[i]) * (1 if s.flags & F_DOWN else -1)
+            s.y, s.yf = (v >> 8) & 255, v & 255
+            return
+        if self.can_move(s):
+            self.handle_fall(s)
+            return
+        if self.counter in (0x26, 0x48, 0x93):
+            s.flags ^= F_RIGHT
+        self.move_horiz(s, 0, 1)
+
+    def hurt_hero(self, damage: int) -> None:
+        """What the flash does to him (and the invincibility, the knock-back and the sound of a touch): the power loses `damage`, no armour counts."""
+        h = self.hero
+        self.sound(4)
+        h.inv = 0x3C
+        h.status |= 2
+        self.reduce_hp(damage << 8)
+
+    def behaviour_flash(self, s: Sprite) -> None:
+        """SpriteBehavior_FlashScreenHitPlayer (Sugata): the screen flashes for two frames, then he loses 10 power."""
+        if not s.flags & F_READY:
+            s.d2 = 2
+            s.flags |= F_READY
+        s.d2 = (s.d2 - 1) & 255
+        if s.d2:
+            return
+        self.hurt_hero(10)
+        self.finish(s)
+
+    def cast_at(self, s: Sprite, ent: int, dx: int, dy: int) -> None:
+        """Sprites_HasMaxOnScreen and the spawn of a magic sprite in the highest free slot, from the caster's place plus (dx, dy), the way it faces."""
+        free = next((i for i in range(7, -1, -1) if self.sprites[i].ent == NONE), None)
+        if free is None:
+            return
+        d = self.sprites[free]
+        d.flags = s.flags & 1
+        d.x, d.y = (s.x + dx) & 255, (s.y + dy) & 255
+        d.ent = ent
+        d.script = self.kinds[ent]["script"]
+        d.beh = 0xFF
+        d.hbox = self.kinds[ent]["hbox"]
+        d.phase = 0
+
+    def behaviour_nash(self, s: Sprite) -> None:
+        """SpriteBehavior_Nash: phase 0 it is hidden for 120 frames; then it appears 32 pixels in front of or behind the hero (phase 1, 60 frames, facing him);
+        phase 2 (60 frames) it casts magic at the 10th frame left, then it hides again."""
+        h = self.hero
+        if not s.flags & F_READY:
+            s.d2 = 0x78
+            s.flags |= F_READY
+        if s.phase == 0:
+            s.flags |= F_HIDDEN
+            s.d2 = (s.d2 - 1) & 255
+            if s.d2:
+                return
+            s.flags &= ~F_HIDDEN & 255
+            s.phase += 1
+            s.d2 = 0x3C
+            if not h.flags & 0x40:
+                x = h.x + 0x20
+                s.x = x & 255
+                if x > 255 or s.x >= 0xF0:
+                    s.x = (h.x - 0x20) & 255
+            else:
+                x = h.x - 0x20
+                s.x = x & 255
+                if x < 0:
+                    s.x = (h.x + 0x20) & 255
+        elif s.phase == 1:
+            self.actions(s, 0)
+            s.d2 = (s.d2 - 1) & 255
+            if not s.d2:
+                s.d2 = 0x3C
+                s.phase += 1
+        else:
+            s.d2 = (s.d2 - 1) & 255
+            if not s.d2:
+                s.phase = 0
+                s.d2 = 0x78
+            elif s.d2 == 0x0A:
+                self.cast_at(s, E_MAGIC, 4, 0x0C)
+
+    def behaviour_magman(self, s: Sprite) -> None:
+        """SpriteBehavior_Magman: out of sight (line 208, x 240) for 60 frames, then 48 pixels from the hero, level with him, facing him, for 120 frames."""
+        h = self.hero
+        if not s.flags & F_READY:
+            s.d2, s.phase, s.y, s.x = 0x3C, 0, 0xD0, 0xF0
+            s.flags |= F_READY
+        if s.phase & 1:
+            self.actions(s, 0)
+            s.d2 = (s.d2 - 1) & 255
+            if not s.d2:
+                s.phase = (s.phase + 1) & 255
+                s.d2, s.y, s.x = 0x3C, 0xD0, 0xF0
+            return
+        s.d2 = (s.d2 - 1) & 255
+        if s.d2:
+            return
+        s.phase = (s.phase + 1) & 255
+        s.d2 = 0x78
+        s.x = (h.x + (0x30 if h.flags & 0x40 else 0xD0)) & 255
+        s.y = h.y
+
+    def behaviour_tamazutsu(self, s: Sprite) -> None:
+        """SpriteBehavior_Tamazutsu: it faces the hero; hidden for 60 frames, hidden 11, in sight for 60, hidden 11, and again (its phase is 0 to 3)."""
+        if not s.flags & F_READY:
+            s.d2, s.phase = 0x3C, 0
+            s.flags |= F_READY
+        self.actions(s, 0)
+        if s.phase == 2:
+            s.flags &= ~F_HIDDEN & 255
+            a = 0x0B
+        else:
+            s.flags |= F_HIDDEN
+            a = 0x0B if s.phase == 0 else 0x3C
+        s.d2 = (s.d2 - 1) & 255
+        if not s.d2:
+            s.phase = (s.phase + 1) & 255
+            s.d2 = a
+        s.phase &= 3                                               # (SpriteUpdateHandler_Enemy_Tamazutsu keeps it to 0 to 3)
+
+    def behaviour_hood(self, s: Sprite) -> None:
+        """SpriteBehavior_ExecutionHood: half a pixel sideways a frame, bobbing on a wave of 16 ticks (turning up or down every 8); after 16 ticks it goes
+        on to the next step, and in the fourth it stands facing him for 15 frames and casts magic."""
+        if not s.flags & F_READY:
+            s.d3 = s.phase = 0
+            s.flags |= F_READY
+        if s.phase & 3 == 3:
+            self.actions(s, 0)
+            s.d2 = (s.d2 - 1) & 255
+            if not s.d2:
+                s.phase = (s.phase + 1) & 255
+                s.d3 = 0
+                self.cast_at(s, E_MAGIC, 4, 0)
+            return
+        self.move_horiz_and_turn(s, 0x80, 0)
+        t = self.triangle(s.d3, 0x07, 0x08)
+        self.edge_vert(s, (t << 5) & 255, 0)
+        s.d3 = (s.d3 + 1) & 255
+        if not s.d3 & 7:
+            s.flags ^= F_DOWN
+        if not s.d3 & 15:
+            s.phase = (s.phase + 1) & 255
+            s.d2 = 0x0F
+
     def behaviour_gawaine(self, s: Sprite) -> None:
         """SpriteBehavior_SirGawaineWolfman: walks to the hero (a pixel a frame) until it is 24 away; then it stands facing him, and when he is in the air
         it rushes at him, two pixels a frame. The step is the picture."""
@@ -475,7 +688,7 @@ class Engine:
         elif s.d3 >= HOP_GROUND[s.internal]:
             s.d3 = (s.d3 - 1) & 255
 
-    BEHAVIOURS = {BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_BIHORUDA: "behaviour_bihoruda", BEH_GAWAINE: "behaviour_gawaine", BEH_NAGA: "behaviour_naga", BEH_YAREEKA: "behaviour_yareeka", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death",
+    BEHAVIOURS = {BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_BIHORUDA: "behaviour_bihoruda", BEH_GAWAINE: "behaviour_gawaine", BEH_NAGA: "behaviour_naga", BEH_NECRON: "behaviour_necron", BEH_NASH: "behaviour_nash", BEH_FLASH: "behaviour_flash", BEH_BEES: "behaviour_bees", BEH_MAGMAN: "behaviour_magman", BEH_TAMAZUTSU: "behaviour_tamazutsu", BEH_HOOD: "behaviour_hood", BEH_YAREEKA: "behaviour_yareeka", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death",
                   BEH_HOP: "behaviour_hop", BEH_FALL: "behaviour_fall"}
 
     # -- the dropped coin: SpriteBehavior_BounceAndExpire
@@ -741,6 +954,16 @@ ZOMBIE_PHASES = (0, 1, 2, 1)           # SPRITEBEHAVIOR_ENEMY_ZOMBIE_PHASES, by 
 MONODRON_PHASES = (0, 2, 0, 1)      # SPRITE_MONODRON_APPEARANCE_PHASES, by (phase - 1) & 3
 
 
+def is_drawn(ent: int, phase: int, counter: int, d2: int = 0) -> bool:
+    """False when the update handler leaves without a picture (the sprite is drawn when the handler picks one): Nash in step 0 and, in step 1, while bit 2 of the
+    counter is set; Tamazutsu in step 0 until its count is below 30. (Bit 4 of the flags, hidden, does not stop the drawing: it stops being hit and touching.)"""
+    if ent == 0x0D:
+        return phase != 0 and not (phase == 1 and counter & 4)
+    if ent == 0x2C:
+        return not (phase & 3 == 0 and d2 >= 0x1E)
+    return True
+
+
 def appearance_offset(ent: int, phase: int, counter: int, d2: int = 0) -> int:
     """The frame (added to SPRITE_APPEARANCE_PHASE_OFFSETS[ent]) the update handler of this kind picks. `counter` is SpriteUpdateCounter."""
     if ent == 0x47:                                  # Zozura: two frames, a change every 16 updates
@@ -775,8 +998,8 @@ def appearance_offset(ent: int, phase: int, counter: int, d2: int = 0) -> int:
         return LAMPREY_FRAMES[(counter >> 3) & 7]
     if ent == 0x1E:                                  # Giant Strider: picture 2 in step 2, else a change every 4 updates
         return 2 if phase == 2 else (counter >> 2) & 1
-    if ent == 0x20:                                  # Maskman: picture 4 in the odd steps, else a change every 8 updates
-        return 4 if phase & 1 else (counter >> 3) & 1
+    if ent == 0x20:                                  # Maskman: a change every 8 updates in the odd steps, else picture 4
+        return (counter >> 3) & 1 if phase & 1 else 4
     if ent == 0x17:                                  # Geributa: picture 2 in step 0, else a change every 4 updates
         return 2 if phase == 0 else (counter >> 2) & 1
     if ent == 0x0B:                                  # Yuinaru: the second frame while bit 3 of the behaviour's count is set
@@ -785,8 +1008,31 @@ def appearance_offset(ent: int, phase: int, counter: int, d2: int = 0) -> int:
         return (counter >> 2) & 1
     if ent == 0x08:                                  # Bihoruda: picture 0 while d2 & 127 is 48 to 95, else 1
         return 0 if (d2 & 0x7F) - 0x30 & 255 < 0x30 else 1
-    if ent in (0x1C, 0x22):                          # Naga and Yareeka: a change every 8 updates
+    if ent in (0x1C, 0x22, 0x1A, 0x18):              # Naga, Yareeka, the Giant Bees and Sugata: a change every 8 updates
         return (counter >> 3) & 1
+    if ent == 0x05:                                  # Necron Aides: a change every 8 updates, every 4 once it has hit or been hit (phase bit 7)
+        return (counter >> 2) & 1 if phase & 0x80 else (counter >> 3) & 1
+    if ent == 0x0E:                                  # Fire Giant: picture 2, but in step 2 a change every 4 updates
+        return (counter >> 2) & 1 if phase == 2 else 2
+    if ent == 0x23:                                  # Magman: a change every 8 updates in the odd steps (out of sight in the even ones, where it keeps the last)
+        return (counter >> 3) & 1 if phase & 1 else 0
+    if ent == 0x2C:                                  # Tamazutsu: by its step (0 to 3) and its count d2; hidden in all but step 2
+        if phase == 0:
+            return 0 if d2 >= 0x1E else (d2 >> 3) & 1
+        if phase == 1:
+            return (8, 6, 4)[min(d2 >> 2, 2)] >> 1
+        if phase == 2:
+            return 6 if d2 & 8 else 5
+        return (4, 6, 8)[min(d2 >> 2, 2)] >> 1
+    if ent == 0x0D:                                  # Nash: picture 0 until step 2, then 0, 1, 2 by the count d2
+        if phase != 2:
+            return 0
+        a = (d2 - 0x0A) & 255
+        return 0 if a >= 0x28 else 1 if a >= 0x14 else 2
+    if ent == 0x10:                                  # Execution Hood: picture 1 in the fourth step, every other 4 updates
+        return 1 if phase & 3 == 3 and counter & 4 else 0
+    if ent == E_MAGIC:                               # the magic of Nash and the Hood: a change every 4 updates
+        return (counter >> 2) & 1
     if ent in (0x1F, 0x21):                          # Sir Gawaine and the Wolfman: the step is the picture
         return phase
     raise NotImplementedError(f"the pictures of entity {ent}")
@@ -801,6 +1047,6 @@ def flip_extra(ent: int, counter: int) -> int:
     return LAMPREY_FLIPS[(counter >> 3) & 7] if ent == 0x28 else 0
 
 
-def flip_mask(flags: int) -> int:
-    """CurrentSprite_UpdateFlipMask: facing right mirrors the picture."""
-    return 0x40 if flags & 1 else 0
+def flip_mask(flags: int, ent: int = 0) -> int:
+    """CurrentSprite_UpdateFlipMask: facing right mirrors the picture (not the magic of Nash and the Hood, which clears the mask)."""
+    return 0x40 if flags & 1 and ent != E_MAGIC else 0

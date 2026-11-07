@@ -33,6 +33,10 @@
     .equ DOOR_BYTES, 8
     .equ SCREEN_LINES, 200
     .equ SCREEN_BYTES, 32000
+    .equ FLAG_SLOTS, 6                      | screens whose block flags are kept at a time (the one he is on, the ones next to it)
+    .if FLAG_SLOTS*416 > PACKAGE_EXPAND
+    .error "build_assets.py: PACKAGE_EXPAND is too small for the flags of FLAG_SLOTS screens"
+    .endif
     .equ REGION_BYTES, 208*160              | a whole 208-line playfield (stride 160: the same layout as the screen)
     .equ BUFFER_BYTES, 2*SCREEN_BYTES+2*REGION_BYTES+256 | two screens and two playfields, the first on a 256-byte boundary
     .equ HERO_X_MIN, 0                      | where he is at the left edge (he has walked off it): scrolls to the screen on the left
@@ -1188,10 +1192,8 @@ spell_move_x:
 | one he cannot walk through, or the one below it (Thunder is two blocks high), or the one under that (its y is not on a block row).
 | Keeps d3-d4, a3. Clobbers d0-d1, a2.
 spell_wall:
-    movea.l pkg_ptr+PKG_BLOCKING(%pc), %a2
     move.w cur_screen(%pc), %d0
-    mulu.w #208, %d0
-    adda.l %d0, %a2
+    bsr.w screen_flags
     move.w 8(%a3), %d0
     move.w %d0, %d1
     andi.w #0xF0, %d0
@@ -1471,11 +1473,8 @@ hero_accelerate:
 | d1 = a pixel x on the screen: is there a block he cannot walk through in that column, at his height (the rows his 32 lines touch)?
 | Result in d0 and the Z flag (Z: free). Clobbers d1-d2, a2.
 column_blocked:
-    lea cur_screen(%pc), %a2
-    move.w (%a2), %d2
-    mulu.w #208, %d2
-    movea.l pkg_ptr+PKG_BLOCKING(%pc), %a2
-    adda.w %d2, %a2                         | this screen's 13 rows of 16 flags
+    move.w cur_screen(%pc), %d0
+    bsr.w screen_flags                      | this screen's 13 rows of 16 flags
     lsr.w #4, %d1                           | the column
 column_rows:                                | a2 = a screen's flags, d1 = a column of it
     move.w hero_y(%pc), %d2
@@ -1511,9 +1510,7 @@ edge_blocked:
     moveq #0, %d0
     rts
 1:  andi.w #0xFF, %d0
-    mulu.w #208, %d0
-    movea.l pkg_ptr+PKG_BLOCKING(%pc), %a2
-    adda.w %d0, %a2
+    bsr.w screen_flags
     moveq #15, %d1
     tst.w %d3
     beq.s 2f
@@ -1533,10 +1530,8 @@ neighbour_of:
 | d1 = a pixel line below $D0 (relative to the screen's top): is there a block under the middle of the hero (x + 4), and under the next column
 | when he stands over two (Area_CanMoveImmediatelyRight)? Out: d0 and Z (Z: free). Clobbers d1-d3, a2.
 body_blocked:
-    move.w cur_screen(%pc), %d2
-    mulu.w #208, %d2
-    movea.l pkg_ptr+PKG_BLOCKING(%pc), %a2
-    adda.l %d2, %a2
+    move.w cur_screen(%pc), %d0
+    bsr.w screen_flags
     lsr.w #4, %d1
     lsl.w #4, %d1                           | the row's first flag
     move.w hero_x(%pc), %d2
@@ -1585,9 +1580,7 @@ blocked_below:
     cmpi.b #0xFF, %d0
     beq.s 1f
     andi.w #0xFF, %d0
-    mulu.w #208, %d0
-    movea.l pkg_ptr+PKG_BLOCKING(%pc), %a2
-    adda.l %d0, %a2
+    bsr.w screen_flags
     bra.w edge_row
 1:  moveq #0, %d0
     rts
@@ -1604,9 +1597,7 @@ blocked_above:
     cmpi.b #0xFF, %d0
     beq.s 1f
     andi.w #0xFF, %d0
-    mulu.w #208, %d0
-    movea.l pkg_ptr+PKG_BLOCKING(%pc), %a2
-    adda.l %d0, %a2
+    bsr.w screen_flags
     adda.w #192, %a2
     bra.w edge_row
 1:  moveq #0, %d0
@@ -1735,10 +1726,9 @@ check_on_ladder:
     addq.w #7, %d3
     andi.w #0xFF, %d3
     lsr.w #4, %d3                           | the column
-    move.w cur_screen(%pc), %d2
-    mulu.w #208, %d2
-    movea.l pkg_ptr+PKG_LADDERS(%pc), %a2
-    adda.l %d2, %a2
+    move.w cur_screen(%pc), %d0
+    bsr.w screen_flags
+    adda.w #208, %a2                        | the ladder flags follow the blocking ones
     move.w 2(%a1), %d1
     bsr.s ladder_at
     tst.b %d0
@@ -1897,6 +1887,7 @@ clear_margins:
     lsl.w #4, %d0
     adda.w %d0, %a0
     movem.w (%a0), %d0-%d3                  | x0, x1, y0, y1
+clear_box:                                  | the same for the box d0-d3 (x0, x1, y0, y1); a4 = the screen drawn into
     cmpi.w #LEFT_BYTES*2, %d0
     blt.s 1f
     cmpi.w #320-LEFT_BYTES*2, %d1
@@ -2809,31 +2800,61 @@ pkg_attach:
     dbra %d1, 1b
     move.l (%a2)+, (%a1)+                   | the numbers of doors and screens
     move.l (%a2), (%a1)                     | of edges, and the music
-    | The flags of every block position, from the block ids of the screens and the flags of the ids (1 impassable, 2 a ladder): behind the package.
-    move.w pkg_ptr+PKG_SCREEN_COUNT(%pc), %d0
-    mulu.w #208, %d0
-    movea.l pkg_buf(%pc), %a1
-    adda.l #PACKAGE_MAX, %a1                 | the impassable flags
-    lea pkg_ptr+PKG_BLOCKING(%pc), %a2
-    move.l %a1, (%a2)
-    lea (%a1,%d0.l), %a2                     | the ladder flags follow
-    lea pkg_ptr+PKG_LADDERS(%pc), %a0
-    move.l %a2, (%a0)
-    movea.l pkg_ptr+PKG_SCREENS(%pc), %a0
-    subq.w #1, %d0
-    movem.l %d3-%d4/%a3, -(%sp)
-    movea.l pkg_ptr+PKG_BLOCK_FLAGS(%pc), %a3
-    moveq #0, %d1
-2:  move.b (%a0)+, %d1
-    move.b (%a3,%d1.w), %d3
-    move.b %d3, %d4
-    andi.b #1, %d4
-    move.b %d4, (%a1)+
-    lsr.b #1, %d3
-    move.b %d3, (%a2)+
-    dbra %d0, 2b
-    movem.l (%sp)+, %d3-%d4/%a3
+    lea flag_screens(%pc), %a1              | the flags of the screens are made as they are asked for (`screen_flags`): none yet
+    moveq #FLAG_SLOTS-1, %d1
+2:  move.w #-1, (%a1)+
+    dbra %d1, 2b
+    clr.w (%a1)
     movem.l (%sp)+, %d0-%d1/%a0-%a2
+    rts
+
+| d0.w = a screen's number in the package. Out: a2 = its flags, 208 bytes of impassable ones (bit 0 of the block's flags) and 208 of ladder ones (the
+| flags shifted right once), made from the block ids of the screen and kept in FLAG_SLOTS places behind the package (the oldest is made anew). Keeps all else.
+screen_flags:
+    movem.l %d0-%d4/%a0-%a1/%a3, -(%sp)
+    lea flag_screens(%pc), %a0
+    moveq #0, %d2
+    moveq #0, %d4
+1:  cmp.w (%a0)+, %d0
+    beq.s 3f
+    addq.w #1, %d2
+    cmpi.w #FLAG_SLOTS, %d2
+    bcs.s 1b
+    moveq #1, %d4                           | not kept: the oldest place is made anew
+    move.w (%a0), %d2
+    move.w %d2, %d1
+    addq.w #1, %d1
+    cmpi.w #FLAG_SLOTS, %d1
+    bcs.s 2f
+    moveq #0, %d1
+2:  move.w %d1, (%a0)
+    lea flag_screens(%pc), %a0
+    move.w %d2, %d1
+    add.w %d1, %d1
+    move.w %d0, (%a0,%d1.w)
+3:  mulu.w #416, %d2
+    movea.l pkg_buf(%pc), %a2
+    adda.l #PACKAGE_MAX, %a2
+    adda.l %d2, %a2
+    tst.w %d4
+    beq.s 9f
+    mulu.w #208, %d0
+    movea.l pkg_ptr+PKG_SCREENS(%pc), %a0
+    adda.l %d0, %a0
+    movea.l pkg_ptr+PKG_BLOCK_FLAGS(%pc), %a1
+    lea 208(%a2), %a3
+    moveq #0, %d1
+    move.w #207, %d3
+4:  move.b (%a0)+, %d1
+    move.b (%a1,%d1.w), %d2
+    move.b %d2, %d4
+    andi.b #1, %d4
+    move.b %d4, (%a2)+
+    lsr.b #1, %d2
+    move.b %d2, (%a3)+
+    dbra %d3, 4b
+    suba.w #208, %a2
+9:  movem.l (%sp)+, %d0-%d4/%a0-%a1/%a3
     rts
 
 hud_load_state:
@@ -2888,6 +2909,8 @@ saved_vbl:
 pkg_name:
     .asciz "A0P00.DAT"
     .even
+flag_screens:
+    .space 2*FLAG_SLOTS+2                   | the screens whose flags are kept (-1 for none), then the place to fill next
 cur_screen:
     .word START_SCREEN                      | the screen shown: its number in the table
 scroll_dir:

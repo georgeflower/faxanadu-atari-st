@@ -814,12 +814,15 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
 
     ENEMY_SCENES = ((0, 8, "16,144", 360), (0, 4, "240,144", 260), (0, 5, "240,144", 260), (1, 16, "16,144", 260),
-                    (1, 7, "240,144", 280), (1, 31, "240,144", 280), (1, 22, "16,144", 260),
+                    (1, 7, "240,144", 280), (1, 31, "240,144", 260), (1, 22, "16,144", 260),
                     (1, 29, "16,144", 280), (1, 45, "64,144", 280), (1, 60, "208,144", 280), (1, 25, "16,144", 378),
-                    (2, 39, "16,144", 284), (2, 23, "16,144", 284), (2, 60, "16,144", 284), (5, 25, "16,144", 279), (5, 2, "16,144", 278), (5, 31, "16,144", 279),
-                    (2, 4, "240,144", 284), (2, 14, "240,144", 284), (2, 19, "240,144", 284), (5, 21, "16,144", 279), (5, 35, "16,144", 279), (5, 36, "16,144", 279),
+                    (2, 39, "16,144", 284), (2, 23, "16,144", 284), (2, 60, "16,144", 284), (5, 25, "16,144", 279), (5, 2, "16,144", 262), (5, 31, "16,144", 279),
+                    (2, 4, "240,144", 284), (2, 14, "240,144", 284), (2, 19, "240,144", 284), (5, 21, "16,144", 279), (5, 35, "16,144", 279), (5, 36, "16,144", 282),
                     (2, 1, "16,144", 284), (2, 3, "144,144", 284), (2, 25, "144,144", 284), (2, 29, "208,144", 340), (2, 32, "16,144", 290), (2, 37, "64,144", 284),
-                    (2, 45, "208,144", 290))    # area, screen, hero, the capture's VBL
+                    (2, 45, "208,144", 290),
+                    (2, 33, "144,144", 290), (2, 38, "16,144", 290), (2, 30, "144,144", 290), (2, 31, "144,144", 290), (2, 42, "144,144", 300), (5, 5, "240,144", 290),
+                    (5, 32, "16,144", 290), (5, 34, "16,144", 290), (5, 3, "144,144", 290), (6, 13, "144,144", 290), (6, 10, "16,160", 290), (6, 11, "144,144", 290),
+                    (7, 15, "208,144", 293), (7, 16, "16,144", 290))    # area, screen, hero, the capture's VBL
 
     def enemy_engine(self, rom, area_index: int, screen: int, word):
         """The model with the enemies of a screen as they are placed, the hero where the viewer has him."""
@@ -832,6 +835,7 @@ class ViewerTests(unittest.TestCase):
         free = next(b for b in range(256) if em.IMPASSABLE[props[b] & 15] == 0 and props[b] & 15 != em.LADDER)
         eng = em.Engine(rom.prg(14), ed.random_table(rom), bytes(fm.decode_screen(rom, area, screen)[:208]) + bytes([free]) * 48, props)
         eng.hero_x, eng.hero_y = word("hero_x"), word("hero_y")
+        eng.hero.flags = 0x40 if word("hero_flip") else 0           # (Player_Flags: bit 6 faces right)
         for ent in ed.EXTRAS + ed.ENEMIES + tuple(ed.SPAWNED.values()):
             eng.kinds[ent] = ed.kind_info(rom, ent)
         for i, (ent, x, y) in enumerate(p for p in ed.placements(rom, area_index, screen) if p[0] in ed.ENEMIES):
@@ -871,13 +875,13 @@ class ViewerTests(unittest.TestCase):
                         states.append((copy.deepcopy(eng.sprites), k))
                 worst = []
                 for sprites, counter in states:
-                    expected = sc.expected_screen(rom, area, screen, word("camera"), state=dict(hp=80, mp=80, experience=0, gold=0, seconds=0),
+                    expected = sc.expected_screen(rom, area, screen, word("camera"), state=dict(hp=word.raw("hud_state", 2)[0], mp=80, experience=0, gold=0, seconds=0),      # (a Sugata or a bee may have hurt him)
                                                   hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 0, word("hero_frame"), bool(word("hero_flip"))))
                     for sp in sprites:
-                        if sp.ent == em.NONE:
+                        if sp.ent == em.NONE or not em.is_drawn(sp.ent, sp.phase, counter, sp.d2):
                             continue
                         app = fs.appearance(rom, ed.entity(rom, sp.ent)["appearance"] + em.appearance_offset(sp.ent, sp.phase, counter, sp.d2), "TILEINFO_ENTITY_ADDRS")
-                        layer = fs.sprite_layer(fs.place(app, sp.x, sp.y, em.flip_mask(sp.flags)), fs.entity_tiles(rom, sp.ent), palettes)
+                        layer = fs.sprite_layer(fs.place(app, sp.x, sp.y, em.flip_mask(sp.flags, sp.ent) ^ em.flip_extra(sp.ent, counter)), fs.entity_tiles(rom, sp.ent), palettes)
                         for (x, line), c in layer.items():
                             y = line - word("camera")
                             if sc.ST_TOP <= y < 200 and sc.ST_LEFT <= x + sc.ST_LEFT < sc.ST_LEFT + 256:

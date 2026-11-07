@@ -16,8 +16,9 @@ SCENES = ((0, 4, "left", 400), (0, 5, "left", 400), (0, 8, "right", 400), (1, 16
           (2, 23, "right", 400), (2, 39, "right", 400), (2, 60, "right", 400), (5, 25, "right", 400), (5, 2, "right", 400), (5, 31, "right", 400),
           (2, 4, "right", 400), (2, 14, "right", 400), (2, 19, "right", 400), (5, 21, "right", 400), (5, 35, "right", 400), (5, 36, "right", 400),
           (2, 1, "right", 400), (2, 3, "right", 400), (2, 25, "right", 400), (2, 29, "right", 400), (2, 32, "right", 400), (2, 37, "right", 400),
-          (2, 45, "right", 400))
-HEROX = {(1, 23): 80, (1, 29): 16, (2, 23): 144, (2, 39): 80, (2, 60): 144, (5, 25): 144, (5, 2): 144, (5, 31): 144, (5, 21): 144, (5, 35): 144, (5, 36): 144, (2, 1): 16, (2, 3): 144, (2, 25): 144}       # where the hero stands when the default (64) has him fall off the screen or walk into a wall
+          (2, 45, "right", 400),
+          (2, 33, "right", 400), (2, 38, "right", 400), (2, 30, "right", 400), (2, 31, "right", 400), (2, 42, "right", 400), (5, 5, "right", 400), (5, 32, "right", 400), (5, 34, "right", 400), (5, 3, "right", 400), (6, 13, "right", 400), (6, 10, "right", 400), (6, 11, "right", 400), (7, 15, "right", 400), (7, 16, "right", 400))
+HEROX = {(1, 23): 80, (1, 29): 16, (2, 23): 144, (2, 39): 80, (2, 60): 144, (5, 25): 144, (5, 2): 144, (5, 31): 144, (5, 21): 144, (5, 35): 144, (5, 36): 144, (2, 1): 16, (2, 3): 144, (2, 25): 144, (2, 33): 144, (2, 38): 16, (2, 30): 144, (2, 31): 144, (2, 42): 144, (5, 5): 240, (5, 32): 16, (5, 34): 16, (5, 3): 144, (6, 13): 144, (6, 10): 144, (6, 11): 144, (7, 15): 208, (7, 16): 112}       # where the hero stands when the default (64) has him fall off the screen or walk into a wall
 FIELDS = (("ent", "Entities"), ("x", "x"), ("xf", "xf"), ("y", "y"), ("yf", "yf"), ("flags", "Flags"), ("phase", "Phases"), ("beh", "Behaviors"), ("arg1", "BehaviorArg1"),
           ("d2", "BehaviorData2"), ("d3", "BehaviorData3"), ("internal", "InternalBehaviorStates"), ("bxf", "BehaviorState_XFrac"), ("bxfull", "BehaviorState_XFull"))
 
@@ -30,7 +31,7 @@ class EnemyTests(unittest.TestCase):
         import faxanadu_rom as fr
 
         cls.rom = fr.Rom(ROM)
-        cls.props_by_area = {a: fm.block_properties(cls.rom, fm.area(cls.rom, a)) for a in (0, 1, 2, 5)}
+        cls.props_by_area = {a: fm.block_properties(cls.rom, fm.area(cls.rom, a)) for a in (0, 1, 2, 5, 6, 7)}
         cls.bank14 = cls.rom.prg(14)
         o = cls.rom.label("Sprites_UpdateAll").offset - fr.HEADER - 14 * fr.BANK
         cls.random_table = cls.bank14[o:o + 256]
@@ -83,16 +84,17 @@ class EnemyTests(unittest.TestCase):
                 sp.script = where[sp.ent][sp.script]
         for n in range(start + 1, len(rec)):
             eng.hero_x, eng.hero_y, eng.mask = rec[n]["px"], rec[n]["py"], rec[n]["mask"]
+            eng.hero.flags = rec[n]["pf"]
             if rec[n]["counter"] != rec[n - 1]["counter"]:         # the game stops the sprites while the screen scrolls
                 eng.update_all()
             yield n, eng
 
     def check(self, screen: int, packed: bool = False, area: int = 0) -> None:
         rec = self.runs[(area, screen)]
-        placed = lambda slots: [s["Entities"] if s["Entities"] != 0x54 else 255 for s in slots]       # (a fireball comes and goes)
+        placed = lambda slots: [s["Entities"] if s["Entities"] not in (0x51, 0x54) else 255 for s in slots]       # (a fireball comes and goes)
         first = placed(rec[0]["slots"])
         for n, eng in self.replay(rec, packed, area):
-            if placed(rec[n]["slots"]) != first:     # the hero went on (the screen scrolled, the sprites were loaded anew)
+            if placed(rec[n]["slots"]) != first or abs(rec[n]["py"] - rec[n - 1]["py"]) > 100:     # the hero went on (the screen scrolled, the sprites were loaded anew)
                 self.assertGreater(n, 100, f"screen {screen}: the run ended early")
                 return
             for i, s in enumerate(rec[n]["slots"]):
@@ -156,10 +158,16 @@ class EnemyTests(unittest.TestCase):
         return kills, pickups
 
     def test_the_sword_kills_and_the_drops_are_picked_up_as_in_the_rom(self) -> None:
-        for area, screen, weapon, armour in ((0, 4, 1, 0), (0, 8, 2, 1), (0, 5, 3, 2), (1, 16, 2, 1), (1, 7, 2, 1), (1, 31, 2, 1), (1, 22, 2, 1), (1, 25, 2, 1), (1, 28, 2, 1), (2, 39, 2, 1), (5, 31, 2, 1), (2, 19, 2, 1), (5, 35, 2, 1), (2, 45, 2, 1)):
+        for area, screen, weapon, armour in ((0, 4, 1, 0), (0, 8, 2, 1), (0, 5, 3, 2), (1, 16, 2, 1), (1, 7, 2, 1), (1, 31, 2, 1), (1, 22, 2, 1), (1, 25, 2, 1), (1, 28, 2, 1), (2, 39, 2, 1), (5, 31, 2, 1), (2, 19, 2, 1), (5, 35, 2, 1), (2, 45, 2, 1),
+                                              (2, 33, 2, 1), (2, 30, 2, 1), (6, 13, 2, 1), (6, 11, 2, 1), (6, 10, 2, 1)):
             with self.subTest(area=area, screen=screen):
                 kills, pickups = self.fight(screen, weapon, armour, area)
                 self.assertGreaterEqual(kills, 1)
+
+    def test_nash_and_tamazutsu_hide_from_the_sword_as_in_the_rom(self) -> None:
+        for area, screen in ((2, 42), (5, 3)):           # (they hide and show; the hero cuts at nothing, the slots and his power are the ROM's)
+            with self.subTest(area=area, screen=screen):
+                self.fight(screen, 2, 1, area)
 
     def test_zozura_walks_as_in_the_rom(self) -> None:
         self.check(4)
@@ -192,7 +200,8 @@ class EnemyTests(unittest.TestCase):
 
     def test_the_kinds_of_the_other_areas_move_as_in_the_rom(self) -> None:
         for area, screen in ((2, 23), (2, 39), (2, 60), (5, 25), (5, 2), (5, 31), (2, 4), (2, 14), (2, 19), (5, 21), (5, 35), (5, 36),
-                             (2, 1), (2, 3), (2, 25), (2, 29), (2, 32), (2, 37), (2, 45)):
+                             (2, 1), (2, 3), (2, 25), (2, 29), (2, 32), (2, 37), (2, 45),
+                             (2, 33), (2, 38), (2, 30), (2, 31), (2, 42), (5, 5), (5, 32), (5, 34), (5, 3), (6, 13), (6, 10), (6, 11), (7, 15), (7, 16)):
             with self.subTest(area=area, screen=screen):
                 self.check(screen, area=area)
 
@@ -210,11 +219,11 @@ class EnemyTests(unittest.TestCase):
                     break
                 want = []
                 for s in rec[n]["slots"]:
-                    if s["Entities"] == 255:
+                    if s["Entities"] == 255 or not em.is_drawn(s["Entities"], s["Phases"], rec[n]["counter"], s["BehaviorData2"]):
                         continue
                     app = fs.appearance(self.rom, ed.entity(self.rom, s["Entities"])["appearance"] + em.appearance_offset(s["Entities"], s["Phases"], rec[n]["counter"], s["BehaviorData2"]),
                                         "TILEINFO_ENTITY_ADDRS")
-                    want += [(sp.y, sp.tile, sp.attr, sp.x) for sp in fs.place(app, s["x"], s["y"], em.flip_mask(s["Flags"]) ^ em.flip_extra(s["Entities"], rec[n]["counter"]), s["PPUOffsets"]) if sp.y < 240]    # (the NES hides a tile from line 240)
+                    want += [(sp.y, sp.tile, sp.attr, sp.x) for sp in fs.place(app, s["x"], s["y"], em.flip_mask(s["Flags"], s["Entities"]) ^ em.flip_extra(s["Entities"], rec[n]["counter"]), s["PPUOffsets"]) if sp.y < 240]    # (the NES hides a tile from line 240)
                 got = [(y, t, a & ~0x20, x) for y, t, a, x in rec[n + 1]["oam"]]       # (a sprite goes behind blocks of some kinds: not modelled yet)
                 self.assertEqual(sorted(want), sorted(got), f"screen {screen} frame {n}")
                 checked += 1

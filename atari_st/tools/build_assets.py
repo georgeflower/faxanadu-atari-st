@@ -85,6 +85,7 @@ def edge_table(rom: fr.Rom, a: fm.Area, ids: list[int], world: dict[int, list[in
 
 # "blocking" and "ladders" hold no data: the program makes them (a flag a block position, in memory behind the package) from the screens and
 # "block_flags" (a byte a block id: 1 a block he cannot walk through, 2 a ladder) when it loads a package, which keeps the disk smaller.
+FLAG_ROOM = 6 * 2 * 208                  # the block flags of 6 screens (src/viewer.s: FLAG_SLOTS), made when asked for, behind the package
 PACKAGE_PARTS = ("palette", "screens", "neighbours", "blocking", "ladders", "doors", "edges", "block_index", "blocks", "hud_tiles", "hud_partial",
                  "hero_list", "hero_images", "hero_anim", "hero_anim_images", "hero_weapon", "magic_anim", "magic_images", "block_flags",
                  "enemy_places", "enemy_kinds", "enemy_anim", "enemy_images", "enemy_scripts")
@@ -202,7 +203,7 @@ def main() -> int:
     initial, targets, n_images = package(*first)
     small = lz.pack(initial)
     names, biggest, packed, over = [package_name(*first)], len(initial), len(small), lz.overrun(small)
-    expand = 2 * 208 * int.from_bytes(initial[4 * len(PACKAGE_PARTS) + 2:4 * len(PACKAGE_PARTS) + 4], "big")
+    expand = FLAG_ROOM
     (args.out / names[0]).write_bytes(small)
     pending, seen = list(targets), {first}
     while pending:                                   # every package the doors and edges lead to, and those they lead to
@@ -215,7 +216,6 @@ def main() -> int:
         small = lz.pack(data)
         (args.out / names[-1]).write_bytes(small)
         biggest, packed, over = max(biggest, len(data)), max(packed, len(small)), max(over, lz.overrun(small))
-        expand = max(expand, 2 * 208 * int.from_bytes(data[4 * len(PACKAGE_PARTS) + 2:4 * len(PACKAGE_PARTS) + 4], "big"))
         pending += more
     # a package is unpacked where it lies: the packed file sits at the end of the span, and the data never overtakes it
     span = max(-(-biggest // 4) * 4 + expand, -(-packed // 4) * 4 + over + 4)
