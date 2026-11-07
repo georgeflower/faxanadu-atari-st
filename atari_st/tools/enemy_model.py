@@ -17,7 +17,7 @@ LADDER = 2                                                         # block prope
 F_RIGHT, F_FLY, F_AIR, F_READY, F_DOWN = 0x01, 0x02, 0x04, 0x40, 0x80
 NONE = 0xFF
 
-BEH_WAIT, BEH_BOUNCE, BEH_WALK, BEH_DEATH, BEH_HOP, BEH_FALL = 1, 2, 4, 7, 9, 21
+BEH_MOVE, BEH_WAIT, BEH_BOUNCE, BEH_WALK, BEH_DEATH, BEH_HOP, BEH_FALL = 0, 1, 2, 4, 7, 9, 21
 E_BREAD, E_COIN, E_DEATH, E_BOSS_DEATH = 1, 2, 0x13, 0x64
 
 # SPRITE_BEHAVIOR_HOP_* (indexed by the hop kind, the third script byte), SPRITE_BEHAVIOR_HOP_PEAK_TICKS and SPRITES_MAYBE_GRAVITY (by gravity)
@@ -263,6 +263,20 @@ class Engine:
         s.flags |= F_READY
         self.countdown(s)
 
+    def behaviour_move_toward(self, s: Sprite) -> None:
+        """SpriteBehavior_MoveTowardPlayer: on the way it faces (the script turns it to the hero with an action), falling when there is no floor, not turning at a wall."""
+        if not s.flags & F_READY:
+            s.d2, s.d3 = self.byte(self.ip), self.byte(self.ip + 1)
+            self.ip += 2
+            s.flags |= F_READY
+            s.flags &= ~F_FLY & 255
+        if self.can_move(s):
+            self.handle_fall(s)
+            if s.flags & F_FLY:
+                return
+        self.move_horiz(s, s.d2, s.d3)
+        self.countdown(s)
+
     def behaviour_walk(self, s: Sprite) -> None:
         if not s.flags & F_READY:
             s.d2, s.d3 = self.byte(self.ip), self.byte(self.ip + 1)
@@ -307,7 +321,7 @@ class Engine:
         elif s.d3 >= HOP_GROUND[s.internal]:
             s.d3 = (s.d3 - 1) & 255
 
-    BEHAVIOURS = {BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death",
+    BEHAVIOURS = {BEH_MOVE: "behaviour_move_toward", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death",
                   BEH_HOP: "behaviour_hop", BEH_FALL: "behaviour_fall"}
 
     # -- the dropped coin: SpriteBehavior_BounceAndExpire
@@ -515,8 +529,8 @@ class Engine:
                 self.actions(s, self.byte(self.ip + 1))
                 self.ip += 2
                 continue
-            if op == 3:                                            # check the distance to the hero
-                if not ready:
+            if op == 3:                                            # check the distance to the hero: while the behaviour runs (a finished one skips it)
+                if ready:
                     self.ip += 7
                     continue
                 d = self.distance_y(s) if self.byte(self.ip + 1) else self.distance_x(s)
@@ -558,6 +572,7 @@ class Engine:
 
 # ---- the pictures ---------------------------------------------------------------------------------------------------------------------
 
+ZOMBIE_PHASES = (0, 1, 2, 1)           # SPRITEBEHAVIOR_ENEMY_ZOMBIE_PHASES, by (counter >> 3) & 3
 MONODRON_PHASES = (0, 2, 0, 1)      # SPRITE_MONODRON_APPEARANCE_PHASES, by (phase - 1) & 3
 
 
@@ -567,6 +582,18 @@ def appearance_offset(ent: int, phase: int, counter: int) -> int:
         return (counter >> 4) & 1
     if ent == 0x2A:                                  # Monodron: by the step of the script
         return MONODRON_PHASES[(phase - 1) & 3]
+    if ent == 0x0C:                                  # Snowman: still while the step is 0, then a change every 4 updates (every 8 in step 1)
+        if phase == 0:
+            return 0
+        return (counter >> (3 if phase == 1 else 2)) & 1
+    if ent == 0x06:                                  # Zombie: frame 0 while the step before is odd, else by the counter
+        return 0 if (phase - 1) & 1 else ZOMBIE_PHASES[(counter >> 3) & 3]
+    if ent == 0x26:                                  # Ikeda: frame 2 while the step before is odd, else a change every 4 updates
+        return 2 if (phase - 1) & 1 else (counter >> 2) & 1
+    if ent == 0x1B:                                  # Myconid: moves in steps 1, 3 and 5 only (step 5 twice as fast)
+        if phase in (1, 3):
+            return (counter >> 4) & 1
+        return (counter >> 3) & 1 if phase == 5 else 0
     raise NotImplementedError(f"the pictures of entity {ent}")
 
 

@@ -813,18 +813,21 @@ class ViewerTests(unittest.TestCase):
         bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
 
-    def enemy_engine(self, rom, screen: int, word):
-        """The model with the enemies of an Eolis screen as they are placed, the hero where the viewer has him."""
+    ENEMY_SCENES = ((0, 8, "16,144", 360), (0, 4, "240,144", 260), (0, 5, "240,144", 260), (1, 16, "16,144", 240),
+                    (1, 7, "240,144", 260), (1, 31, "240,144", 260), (1, 22, "16,144", 240))    # area, screen, hero, the capture's VBL
+
+    def enemy_engine(self, rom, area_index: int, screen: int, word):
+        """The model with the enemies of a screen as they are placed, the hero where the viewer has him."""
         import enemy_data as ed
         import enemy_model as em
         import faxanadu_maps as fm
 
-        area = fm.area(rom, 0)
+        area = fm.area(rom, area_index)
         props = fm.block_properties(rom, area)
         free = next(b for b in range(256) if em.IMPASSABLE[props[b] & 15] == 0 and props[b] & 15 != em.LADDER)
         eng = em.Engine(rom.prg(14), ed.random_table(rom), bytes(fm.decode_screen(rom, area, screen)[:208]) + bytes([free]) * 48, props)
         eng.hero_x, eng.hero_y = word("hero_x"), word("hero_y")
-        for i, (ent, x, y) in enumerate(ed.placements(rom, 0, screen)):
+        for i, (ent, x, y) in enumerate(ed.placements(rom, area_index, screen)):
             s = eng.sprites[7 - i]
             s.ent, s.x, s.y, s.beh, s.hbox = ent, x, y, 0xFF, ed.entity(rom, ent)["hitbox"]
             s.script = rom.word("SPRITE_BSCRIPTS", ent)
@@ -845,15 +848,15 @@ class ViewerTests(unittest.TestCase):
         import st_convert as sc
 
         rom = fr.Rom(ROM)
-        pal = fm.area(rom, 0).palette_index
-        plan = sc.plan_for_set(rom, pal)
-        palettes = sc.sprite_palettes(rom, pal)
-        for screen, hero in ((8, "16,144"), (4, "240,144"), (5, "240,144")):
-            with self.subTest(screen=screen):
-                ram, word, log = self.run_scenario(["ALL=1", "AREA=0", f"SCREEN={screen}", f"HERO={hero},0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], 260, "shots_enemy")
+        for area, screen, hero, vbl in self.ENEMY_SCENES:
+            with self.subTest(area=area, screen=screen):
+                pal = fm.area(rom, area).palette_index
+                plan = sc.plan_for_set(rom, pal)
+                palettes = sc.sprite_palettes(rom, pal)
+                ram, word, log = self.run_scenario(["ALL=1", f"AREA={area}", f"SCREEN={screen}", f"HERO={hero},0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], vbl, "shots_enemy")
                 n = word("en_counter")
                 rows = hs.decode_screen(ram, hs.video_base(log))
-                eng = self.enemy_engine(rom, screen, word)
+                eng = self.enemy_engine(rom, area, screen, word)
                 states = []
                 for k in range(1, n + 1):
                     eng.update_all()
@@ -861,7 +864,7 @@ class ViewerTests(unittest.TestCase):
                         states.append((copy.deepcopy(eng.sprites), k))
                 worst = []
                 for sprites, counter in states:
-                    expected = sc.expected_screen(rom, 0, screen, word("camera"), state=dict(hp=80, mp=80, experience=0, gold=0, seconds=0),
+                    expected = sc.expected_screen(rom, area, screen, word("camera"), state=dict(hp=80, mp=80, experience=0, gold=0, seconds=0),
                                                   hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 0, word("hero_frame"), bool(word("hero_flip"))))
                     for sp in sprites:
                         if sp.ent == em.NONE:
@@ -875,7 +878,7 @@ class ViewerTests(unittest.TestCase):
                     hx, hy = word("hero_x") + sc.ST_LEFT, word("hero_y") + 32 - word("camera")        # (his own picture is tested elsewhere: not the box round him, nor what of it the NES wraps round to the left edge)
                     bad = [(px, py) for py in range(200) for px in range(320) if rows[py][px] != expected[py][px] and not ((hx - 24 <= px < hx + 40 or hx - 280 <= px < hx - 216) and hy - 8 <= py < hy + 40)]
                     worst.append(bad)
-                self.assertTrue(any(not bad for bad in worst), f"screen {screen}: {[len(b) for b in worst]} pixels differ, e.g. {worst[0][:5]}")
+                self.assertTrue(any(not bad for bad in worst), f"area {area} screen {screen}: {[len(b) for b in worst]} pixels differ, e.g. {worst[0][:5]}")
 
     def test_the_enemies_move_as_the_model_does(self) -> None:
         """Eolis screens 4 and 5 (two Zozuras each) and 8 (a Monodron): the hero stands still far from them (on 4 and 5 the capture is early, before a Zozura reaches him); after n updates (en_counter) every slot is
@@ -886,16 +889,12 @@ class ViewerTests(unittest.TestCase):
         import faxanadu_rom as fr
 
         rom = fr.Rom(ROM)
-        area = fm.area(rom, 0)
-        props = fm.block_properties(rom, area)
-        for screen, hero in ((8, "16,144"), (4, "240,144"), (5, "240,144")):
-            with self.subTest(screen=screen):
-                ids = fm.decode_screen(rom, area, screen)[:208]
-                free = next(b for b in range(256) if em.IMPASSABLE[props[b] & 15] == 0 and props[b] & 15 != em.LADDER)
-                ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", f"SCREEN={screen}", f"HERO={hero},0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], 360 if screen == 8 else 260, "shots_enemy")
+        for area, screen, hero, vbl in self.ENEMY_SCENES:
+            with self.subTest(area=area, screen=screen):
+                ram, word, _ = self.run_scenario(["ALL=1", f"AREA={area}", f"SCREEN={screen}", f"HERO={hero},0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], vbl, "shots_enemy")
                 n = word("en_counter")
                 self.assertGreater(n, 60)
-                eng = self.enemy_engine(rom, screen, word)
+                eng = self.enemy_engine(rom, area, screen, word)
                 for _ in range(n):
                     eng.update_all()
                 raw = word.raw("enemies", 8 * 28)
@@ -918,6 +917,13 @@ class ViewerTests(unittest.TestCase):
         self.assertGreater(exp, 0)
         self.assertEqual(exp % 30, 0, exp)
         self.assertEqual((80 - power) % 7, 0, power)
+
+    def test_a_snowman_that_hops_into_him_takes_four_power_a_touch(self) -> None:
+        """Area 1 screen 16 (a wall cuts off its left half, so the hero stands at 208): the Snowman leaps at him, and each touch takes its 4 off the power."""
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=1", "SCREEN=16", "HERO=208,144,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], 600, "shots_touch")
+        power = word.raw("hud_state", 1)[0]
+        self.assertLess(power, 80)
+        self.assertEqual((80 - power) % 4, 0, power)
 
     def test_a_zozura_that_walks_into_him_takes_seven_power_and_he_is_invincible_for_a_while(self) -> None:
         ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=4", "HERO=200,144,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], 700, "shots_touch")

@@ -110,3 +110,26 @@ Faxanadu.prototype.call = function (target, regs = {}, frames = 3) {
   cpu.REG_PC = addr - 1;
   this.run(frames);
 };
+
+// Start a new life in a temple of any area (Player_Spawn with row 0 of the temple tables changed): area (Area_CurrentArea), region (Area_Region), the
+// screen outside and the hero's x and y there. The hero is inside the temple; `leaveBuilding()` walks him out.
+Faxanadu.prototype.warp = function (area, region, screen, x = 64, y = 144) {
+  const rows = {START_SCREEN_FOR_TEMPLE_SPAWN: screen, START_MAYBE_NEXT_AREA_FOR_TEMPLE_SPAWN: region, START_PLAYERPOSX_FULL_FOR_TEMPLE_SPAWN: x,
+    MAYBE_START_PLAYERPOSY_FOR_TEMPLE_SPAWN: y, DEST_SCREEN_FOR_TEMPLE_SPAWN: 0, CURRENT_REGION_FOR_TEMPLE_SPAWN: area};
+  for (const [label, v] of Object.entries(rows)) this.nes.cpu.mem[this.romLabels[label][0]] = v;
+  this.wr("TempleSpawnPoint", 0);
+  this.nes.cpu.REG_PC = this.romLabels["Player_Spawn"][0] - 1;
+  this.run(150);
+};
+
+// A game in play outside, on a screen of any area (through a temple, see `warp`): the hero stands at x, y on `screen` and the sprites of the screen are loaded.
+export function newOutside(area, region, screen, x = 64, y = 144) {
+  const g = newGame();
+  g.warp(area, region, screen, x, y);
+  g.nes.buttonDown(1, BTN.RIGHT);
+  const ok = g.runUntil(() => g.rd("Area_CurrentArea") === area && g.rd("Area_CurrentScreen") === screen && g.inPlay(), 600);
+  g.nes.buttonUp(1, BTN.RIGHT);
+  if (!ok) throw new Error("did not get out of the temple: " + g.state());
+  g.run(20);
+  return g;
+}

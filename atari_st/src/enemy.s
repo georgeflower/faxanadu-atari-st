@@ -176,6 +176,8 @@ en_behaviour:
     bcc.s en_behaviour_end
     cmpi.w #4, %d0
     beq.w beh_walk
+    tst.w %d0
+    beq.w beh_move_toward
     cmpi.w #2, %d0
     beq.w beh_bounce
     cmpi.w #7, %d0
@@ -274,8 +276,8 @@ op_action:                                  | 2: an action
 
 op_distance:                                | 3: the distance to the hero, sideways or up and down, below a value or not: two addresses
     tst.b E_BEH(%a3)
-    bmi.s 4f
-    addq.w #7, %d6                          | not finished: skipped
+    bpl.s 4f
+    addq.w #7, %d6                          | finished: skipped (the check is made while the behaviour runs)
     bra.w 1b
 4:  tst.b 1(%a5,%d6.w)
     bne.s 5f
@@ -413,6 +415,26 @@ beh_walk:
     beq.s 3f
     eori.b #1, E_FLAGS(%a3)
 3:  bsr.w en_countdown
+    bra.w en_behaviour_end
+
+| MoveTowardPlayer: forward at a steady pace (the script turns it to the hero by an action), falling when there is no floor, not turning at a wall.
+beh_move_toward:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    move.b (%a5,%d6.w), E_D2(%a3)
+    move.b 1(%a5,%d6.w), E_D3(%a3)
+    addq.w #2, %d6
+    bsr.w en_ready
+    bclr #1, E_FLAGS(%a3)
+1:  bsr.w en_can_move
+    tst.w %d0
+    beq.s 2f
+    bsr.w en_fall_step
+    btst #1, E_FLAGS(%a3)
+    bne.w en_behaviour_end
+2:  move.w E_D3(%a3), %d3
+    bsr.w en_step_x
+    bsr.w en_countdown
     bra.w en_behaviour_end
 
 beh_fall:
@@ -1001,7 +1023,7 @@ beh_bounce:
 
 | ---------------------------------------------------------------------------------------------------------------------- the pictures
 | The enemies' pictures drawn into screen a4, their boxes noted for erasing. The pose: the kind's first, then 2 a frame (the kind's rule picks the
-| frame: 0 two by the counter, 1 by the script's step) and 1 more when it faces right (mirrored).
+| frame: 0 two by the counter, 1 by the script's step, 5 the Snowman's) and 1 more when it faces right (mirrored).
 draw_enemies:
     movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
     lea enemies(%pc), %a3
@@ -1017,7 +1039,15 @@ draw_enemies:
     move.w K_RULE(%a0), %d0
     beq.s 2f
     cmpi.w #1, %d0
-    beq.s 3f
+    beq.w 3f
+    cmpi.w #5, %d0
+    beq.w 9f
+    cmpi.w #6, %d0
+    beq.w 11f
+    cmpi.w #7, %d0
+    beq.w 12f
+    cmpi.w #8, %d0
+    beq.w 13f
     moveq #0, %d1
     cmpi.w #2, %d0
     bne.s 5f
@@ -1032,9 +1062,58 @@ draw_enemies:
     beq.s 6f
     moveq #1, %d1
 6:  add.w %d1, %d6                          | (these have one picture, whichever way they face)
-    bra.s 4f
+    bra.w 4f
 2:  move.w en_counter(%pc), %d0             | rule 0: two pictures by the counter
     lsr.w #4, %d0
+    andi.w #1, %d0
+    bra.w 7f
+9:  moveq #0, %d0                           | rule 5, the Snowman: picture 0 while its step is 0, then by the counter (half as fast in step 1)
+    moveq #0, %d2
+    move.b E_PHASE(%a3), %d2
+    beq.w 7f
+    move.w en_counter(%pc), %d0
+    lsr.w #2, %d0
+    subq.b #1, %d2
+    bne.s 10f
+    lsr.w #1, %d0
+10: andi.w #1, %d0
+    bra.w 7f
+11: moveq #0, %d0                           | rule 6, the Zombie: picture 0 while the step before is odd, else by the counter (0, 1, 2, 1)
+    moveq #0, %d2
+    move.b E_PHASE(%a3), %d2
+    subq.b #1, %d2
+    btst #0, %d2
+    bne.s 7f
+    move.w en_counter(%pc), %d0
+    lsr.w #3, %d0
+    andi.w #3, %d0
+    lea zombie_frames(%pc), %a1
+    move.b (%a1,%d0.w), %d0
+    bra.s 7f
+12: moveq #0, %d2                           | rule 7, Ikeda: picture 2 while the step before is odd, else a change every 4 updates
+    move.b E_PHASE(%a3), %d2
+    subq.b #1, %d2
+    moveq #2, %d0
+    btst #0, %d2
+    bne.s 7f
+    move.w en_counter(%pc), %d0
+    lsr.w #2, %d0
+    andi.w #1, %d0
+    bra.s 7f
+13: moveq #0, %d0                           | rule 8, the Myconid: moves in steps 1, 3 (a change every 16 updates) and 5 (every 8)
+    moveq #0, %d2
+    move.b E_PHASE(%a3), %d2
+    moveq #4, %d1
+    cmpi.b #5, %d2
+    bne.s 14f
+    moveq #3, %d1
+    bra.s 15f
+14: cmpi.b #1, %d2
+    beq.s 15f
+    cmpi.b #3, %d2
+    bne.s 7f
+15: move.w en_counter(%pc), %d0
+    lsr.w %d1, %d0
     andi.w #1, %d0
     bra.s 7f
 3:  moveq #0, %d0                           | rule 1: by the script's step
@@ -1120,6 +1199,8 @@ armour_multiplier:                          | ARMOR_DEFENSE_MULTIPLIERS
     .byte 0, 1, 2, 4
 hop_maybe:
     .byte 0x00, 0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02
+zombie_frames:                              | SPRITEBEHAVIOR_ENEMY_ZOMBIE_PHASES
+    .byte 0, 1, 2, 1
 monodron_frames:                            | SPRITE_MONODRON_APPEARANCE_PHASES
     .byte 0, 2, 0, 1
 random_table:                               | the 256 bytes of the ROM's code GetRandom reads (build_assets.py)

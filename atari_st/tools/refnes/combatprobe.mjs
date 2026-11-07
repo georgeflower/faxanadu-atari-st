@@ -2,15 +2,21 @@
 // slots, the experience, the gold, the power, and the hero as `Sprites_UpdateAll` sees him (his state is read when the routine is entered, so what the
 // sprites do to him in the same frame is not in it) are recorded.
 //   node combatprobe.mjs SCREEN FRAMES OUT.json [WEAPON] [ARMOUR]
-import {newTown, BTN} from "./faxanadu.mjs";
+import {newTown, newOutside, BTN} from "./faxanadu.mjs";
 import fs from "fs";
 
 const screen = +(process.argv[2] ?? 4), frames = +(process.argv[3] ?? 600), out = process.argv[4], weapon = +(process.argv[5] ?? 1), armour = +(process.argv[6] ?? 0);
-const g = newTown();
-const walk = screen === 8 ? BTN.RIGHT : BTN.LEFT;
-g.nes.buttonDown(1, walk);
-if (!g.runUntil(() => g.rd("Area_CurrentScreen") === screen && g.inPlay(), 3000)) throw new Error("not there: " + g.state());
-g.nes.buttonUp(1, walk);
+// AREA=n (and REGION, HEROX) puts the hero on the screen of another area through a temple; without it he walks there from the first screen of Eolis.
+const area = +(process.env.AREA ?? 0);
+let g;
+if (area) g = newOutside(area, +(process.env.REGION ?? 0), screen, +(process.env.HEROX ?? 64));
+else {
+  g = newTown();
+  const walk = screen === 8 ? BTN.RIGHT : BTN.LEFT;
+  g.nes.buttonDown(1, walk);
+  if (!g.runUntil(() => g.rd("Area_CurrentScreen") === screen && g.inPlay(), 3000)) throw new Error("not there: " + g.state());
+  g.nes.buttonUp(1, walk);
+}
 g.wr("Player_CurWeapon", weapon); g.wr("SelectedWeapon", weapon); g.wr("SelectedArmor", armour); g.wr("Player_ArmorLookupIndex", armour);
 g.wr("Player_HP_U", 80); g.wr("Player_HP_L", 0);
 
@@ -29,6 +35,7 @@ const slotsNow = () => {
   return slots;
 };
 // the hero as the sprites see him: read when Sprites_UpdateAll is entered
+const ENEMIES = [0x47, 0x2A, 0x0C, 0x06, 0x26, 0x1B];        // Zozura, Monodron, Snowman, Zombie, Ikeda, Myconid: what the hero fights
 let pre = null, preSlots = null, preState = null;
 const entry = g.romLabels["Sprites_UpdateAll"][0] - 1, cpu = g.nes.cpu, emulate = cpu.emulate.bind(cpu);
 cpu.emulate = function () {
@@ -42,7 +49,7 @@ const rec = [];
 let blocks = null;
 for (let f = 0; f < frames; f++) {
   // the pad: walk to the nearest enemy, attack when near (B pressed for two frames out of 24)
-  const h = hero(), live = slotsNow().filter((s) => s.Entities === 0x47 || s.Entities === 0x2A);
+  const h = hero(), live = slotsNow().filter((s) => ENEMIES.includes(s.Entities));
   g.nes.buttonUp(1, BTN.LEFT); g.nes.buttonUp(1, BTN.RIGHT); g.nes.buttonUp(1, BTN.B);
   const items = slotsNow().filter((s) => s.Entities === 1 || s.Entities === 2);
   if (!live.length && items.length) {                       // nothing to fight: pick up what was dropped
