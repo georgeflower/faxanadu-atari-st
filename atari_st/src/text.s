@@ -278,51 +278,58 @@ mantra_show:
     movem.l (%sp)+, %d0-%d2/%a0-%a2
     rts
 
-| a1 = a state block: what the game has, as the ROM's password holds it. (There is no inventory yet: the equipment is the one the build gave
-| the hero, the spell is the one chosen.)
+| a1 = a state block: what the game has, as the ROM's password holds it: the rank, the spawn point, the special items and quests, what he wears
+| and the spell and item chosen, and the lists of what he carries (items.s: inv).
 pw_build:
-    movem.l %d0-%d1/%a0-%a1, -(%sp)
+    movem.l %d0-%d2/%a0-%a3, -(%sp)
     moveq #PW_STATE_BYTES-1, %d0
     movea.l %a1, %a0
 1:  clr.b (%a0)+
     dbra %d0, 1b
+    lea inv(%pc), %a2
     move.w hero_spawn(%pc), %d0
     move.b %d0, PW_SPAWN(%a1)
     move.w hero_title(%pc), %d0
     move.b %d0, PW_RANK(%a1)
-    move.b #HERO_WEAPON, %d0
+    move.b INV_SPECIAL(%a2), PW_SPECIAL(%a1)
+    move.b INV_QUESTS(%a2), PW_QUESTS(%a1)
+    move.w hero_weapon(%pc), %d0
     move.b %d0, PW_WEAPON(%a1)
-    cmpi.b #0xFF, %d0
-    beq.s 2f
-    move.b #1, PW_WEAPONS(%a1)
-    move.b %d0, PW_WEAPONS+1(%a1)
-2:  move.b #HERO_ARMOUR, %d0
-    move.b %d0, PW_ARMOUR(%a1)
-    cmpi.b #0xFF, %d0
-    beq.s 3f
-    move.b #1, PW_ARMOURS(%a1)
-    move.b %d0, PW_ARMOURS+1(%a1)
-3:  move.b #HERO_SHIELD, %d0
-    move.b %d0, PW_SHIELD(%a1)
-    cmpi.b #0xFF, %d0
-    beq.s 4f
-    move.b #1, PW_SHIELDS(%a1)
-    move.b %d0, PW_SHIELDS+1(%a1)
-4:  move.w hero_magic(%pc), %d0
-    bmi.s 5f
+    move.b INV_ARMOUR(%a2), PW_ARMOUR(%a1)
+    move.b INV_SHIELD(%a2), PW_SHIELD(%a1)
+    move.b INV_ITEM(%a2), PW_ITEM(%a1)
+    move.w hero_magic(%pc), %d0
+    bmi.s 2f
     move.b %d0, PW_SPELL(%a1)
-    move.b #1, PW_SPELLS(%a1)
-    move.b %d0, PW_SPELLS+1(%a1)
-    bra.s 6f
-5:  move.b #0xFF, PW_SPELL(%a1)
-6:  move.b #0xFF, PW_ITEM(%a1)
-    movem.l (%sp)+, %d0-%d1/%a0-%a1
+    bra.s 3f
+2:  move.b #0xFF, PW_SPELL(%a1)
+3:  moveq #0, %d2                           | the lists: weapons, armours, shields, spells, items
+4:  moveq #0, %d1
+    move.b INV_NWEAPONS(%a2,%d2.w), %d1
+    move.w %d2, %d0
+    mulu.w #5, %d0
+    lea PW_WEAPONS(%a1,%d0.w), %a0
+    move.b %d1, (%a0)+
+    move.w %d2, %d0
+    lsl.w #2, %d0
+    lea (%a2,%d0.w), %a3
+    subq.w #1, %d1
+    bmi.s 6f
+5:  move.b (%a3)+, %d0
+    andi.b #31, %d0                         | (the category is in the item's byte, not in the mantra)
+    move.b %d0, (%a0)+
+    dbra %d1, 5b
+6:  addq.w #1, %d2
+    cmpi.w #5, %d2
+    bcs.s 4b
+    movem.l (%sp)+, %d0-%d2/%a0-%a3
     rts
 
-| a1 = a state block that was read from a mantra: the game takes the rank, the spawn point and the spell, and starts again as after a death
-| (full power and magic, the gold and experience of the rank, the start screen). The equipment is the build's.
+| a1 = a state block that was read from a mantra: the game takes what the ROM does from a password (the rank, the spawn point, the special items
+| and quests, what he wears, the spell and item chosen, the lists), and starts again as after a death (full power and magic, the gold and
+| experience of the rank, the start screen).
 mantra_apply:
-    movem.l %d0/%a0, -(%sp)
+    movem.l %d0-%d3/%a0-%a3, -(%sp)
     moveq #0, %d0
     move.b PW_RANK(%a1), %d0
     lea hero_title(%pc), %a0
@@ -338,8 +345,39 @@ mantra_apply:
     move.b PW_SPELL(%a1), %d0
 1:  lea hero_magic(%pc), %a0
     move.w %d0, (%a0)
+    moveq #0, %d0
+    move.b PW_WEAPON(%a1), %d0
+    lea hero_weapon(%pc), %a0
+    move.w %d0, (%a0)
+    lea inv(%pc), %a2
+    move.b PW_SPECIAL(%a1), INV_SPECIAL(%a2)
+    move.b PW_QUESTS(%a1), INV_QUESTS(%a2)
+    move.b PW_ARMOUR(%a1), INV_ARMOUR(%a2)
+    move.b PW_SHIELD(%a1), INV_SHIELD(%a2)
+    move.b PW_ITEM(%a1), INV_ITEM(%a2)
+    moveq #0, %d2
+2:  moveq #0, %d1
+    move.w %d2, %d0
+    mulu.w #5, %d0
+    lea PW_WEAPONS(%a1,%d0.w), %a0
+    move.b (%a0)+, %d1
+    move.b %d1, INV_NWEAPONS(%a2,%d2.w)
+    move.w %d2, %d0
+    lsl.w #2, %d0
+    lea (%a2,%d0.w), %a3
+    move.w %d2, %d3
+    lsl.w #5, %d3                           | the category * 32 is the high part of an item's byte
+    subq.w #1, %d1
+    bmi.s 4f
+3:  move.b (%a0)+, %d0
+    or.b %d3, %d0
+    move.b %d0, (%a3)+
+    dbra %d1, 3b
+4:  addq.w #1, %d2
+    cmpi.w #5, %d2
+    bcs.s 2b
     bsr.w hero_respawn
-    movem.l (%sp)+, %d0/%a0
+    movem.l (%sp)+, %d0-%d3/%a0-%a3
     rts
 
 | The P key shows the mantra (the ROM shows it when a Guru of a temple meditates with him; there are no Gurus yet).

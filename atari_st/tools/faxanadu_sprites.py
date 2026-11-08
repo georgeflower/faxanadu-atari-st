@@ -107,16 +107,29 @@ def armor_lookup(armor: int, shield: int) -> int:
     return armor * 2 + (1 if shield < 3 else 0)
 
 
-def pattern_tiles(rom: Rom, armor: int, shield: int, weapon: int) -> dict[int, bytes]:
-    """The sprite pattern table the game builds for this equipment: tile number -> 16 bytes (two bit planes of 8 lines)."""
+def armor_tiles(rom: Rom, armor: int, shield: int) -> dict[int, bytes]:
+    """The tiles the body needs (pattern table 0 up): they depend on the armour and on whether there is a shield."""
     lookup = armor_lookup(armor, shield)
     count = rom.byte("PLAYER_ARMOR_TILE_COUNTS", lookup) + 1       # the game's loop runs count+1 times
-    tiles = _tiles(rom, 0, _tile_list(rom, "TILES_PLAYER_ARMOR_ADDRS_INDEX", lookup, count), "TILES_ARMOR_START")
+    return _tiles(rom, 0, _tile_list(rom, "TILES_PLAYER_ARMOR_ADDRS_INDEX", lookup, count), "TILES_ARMOR_START")
+
+
+def weapon_tiles(rom: Rom, weapon: int) -> dict[int, bytes]:
+    n = rom.byte("PLAYER_WEAPON_TILE_COUNTS", weapon) + 1
+    return _tiles(rom, WEAPON_FIRST_TILE[weapon], _tile_list(rom, "TILES_PLAYER_WEAPON_ADDRS_INDEX", weapon, n), "TILES_WEAPONS_START")
+
+
+def shield_tiles(rom: Rom, shield: int) -> dict[int, bytes]:
+    return _tiles(rom, SHIELD_FIRST_TILE, _tile_list(rom, "TILES_SHIELDS_ADDRS_INDEX", shield, 6), "TILES_SHIELDS_START")
+
+
+def pattern_tiles(rom: Rom, armor: int, shield: int, weapon: int) -> dict[int, bytes]:
+    """The sprite pattern table the game builds for this equipment: tile number -> 16 bytes (two bit planes of 8 lines)."""
+    tiles = armor_tiles(rom, armor, shield)
     if weapon != NO_ITEM:
-        n = rom.byte("PLAYER_WEAPON_TILE_COUNTS", weapon) + 1
-        tiles.update(_tiles(rom, WEAPON_FIRST_TILE[weapon], _tile_list(rom, "TILES_PLAYER_WEAPON_ADDRS_INDEX", weapon, n), "TILES_WEAPONS_START"))
+        tiles.update(weapon_tiles(rom, weapon))
     if shield < 3:
-        tiles.update(_tiles(rom, SHIELD_FIRST_TILE, _tile_list(rom, "TILES_SHIELDS_ADDRS_INDEX", shield, 6), "TILES_SHIELDS_START"))
+        tiles.update(shield_tiles(rom, shield))
     return tiles
 
 
@@ -151,21 +164,25 @@ def body_frame(flags: int, tick: int, attack_frame: int, status: int = 0, joy: i
     return 0, 0
 
 
-def hero_sprites(rom: Rom, x: int, y: int, armor: int, shield: int, weapon: int, frame: int, facing_left: bool, flip_extra: int = 0,
-                 scroll_x: int = 0, attacking_frame: int = -1) -> list[Sprite]:
-    """Body, then the weapon, then the shield, as the game draws them (`Player_DrawBody`, `Player_DrawWeapon`, `Player_DrawShield`)."""
+def hero_parts(rom: Rom, x: int, y: int, armor: int, shield: int, weapon: int, frame: int, facing_left: bool, flip_extra: int = 0,
+               scroll_x: int = 0, attacking_frame: int = -1) -> tuple[list[Sprite], list[Sprite], list[Sprite], list[Sprite]]:
+    """The body, the extra piece of the arm (the third frame of an attack), the weapon and the shield, each as its sprites."""
     flip = (0x40 if facing_left else 0) | flip_extra
     # the body: armour * 16 + shield * 8 for the combination, plus the frame (Battle Suit uses the same frames with or without a shield)
     offs = [rom.byte("PLAYER_BODY_TILEINFO_START_OFFSETS", i) for i in range(8)]
     combo = armor * 2 + (1 if shield < 3 else 0)
-    sprites = place(appearance(rom, offs[combo] + frame), x, y, flip, 0, scroll_x)
-    if attacking_frame == 2:
-        sprites += _attack_arm_sprites(rom, x, y, armor, shield, facing_left, scroll_x)
-    if weapon != NO_ITEM:
-        sprites += _weapon_sprites(rom, x, y, armor, shield, weapon, frame, facing_left, scroll_x)
-    if shield < 3:
-        sprites += _shield_sprites(rom, x, y, frame, facing_left, scroll_x)
-    return sprites
+    body = place(appearance(rom, offs[combo] + frame), x, y, flip, 0, scroll_x)
+    arm = _attack_arm_sprites(rom, x, y, armor, shield, facing_left, scroll_x) if attacking_frame == 2 else []
+    held = _weapon_sprites(rom, x, y, armor, shield, weapon, frame, facing_left, scroll_x) if weapon != NO_ITEM else []
+    shielded = _shield_sprites(rom, x, y, frame, facing_left, scroll_x) if shield < 3 else []
+    return body, arm, held, shielded
+
+
+def hero_sprites(rom: Rom, x: int, y: int, armor: int, shield: int, weapon: int, frame: int, facing_left: bool, flip_extra: int = 0,
+                 scroll_x: int = 0, attacking_frame: int = -1) -> list[Sprite]:
+    """Body, then the weapon, then the shield, as the game draws them (`Player_DrawBody`, `Player_DrawWeapon`, `Player_DrawShield`)."""
+    body, arm, held, shielded = hero_parts(rom, x, y, armor, shield, weapon, frame, facing_left, flip_extra, scroll_x, attacking_frame)
+    return body + arm + held + shielded
 
 
 def weapon_offset(rom, armor, shield, weapon, frame, facing_left) -> tuple[int, int]:

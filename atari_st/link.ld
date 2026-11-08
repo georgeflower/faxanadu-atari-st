@@ -19,6 +19,7 @@ SECTIONS
     *(.text)
     *(.text.late)
     *(.rodata*)
+    *(.herodata)
     sound_start = ABSOLUTE(.);
     *(.sounddata)
     *(.stack*)

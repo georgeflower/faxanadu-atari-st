@@ -308,47 +308,90 @@ ANIM_BASE = 128             # the pose lists are made with the hero here, so tha
 POSE_FRAMES = tuple(range(8))      # the ROM's body frames: 0-2 walking, 3 in the air, 4-6 attacking, 7 climbing
 
 
-def hero_anim_assets(rom: fr.Rom, hero: Hero, palette_index: int, plan: PalettePlan) -> tuple[bytes, bytes]:
-    """(poses, images) for the hero: sixteen poses, pose = the ROM's body frame (0-7) + 8 * flip bit, with the equipment of `hero`.
-
-    poses is a table of sixteen words (the offset of each pose record from the start of the table), then the records: the box the pose
-    covers as four signed words (x0, x1 exclusive, y0, y1 exclusive) and the sprites as (x, line, image) words, ended by -1. All
-    x is relative to the hero's NES x (the ST screen's left margin is in it), y to his NES y (the one-line shift of the sprites is in
-    it); the line on the screen is that y minus the camera. images are shared by the poses."""
-    tiles = fs.pattern_tiles(rom, hero.armor, hero.shield, hero.weapon)
+def hero_colours(rom: fr.Rom, palette_index: int, plan: PalettePlan) -> bytes:
+    """The ST colour (palette slot) of each colour of the two sprite palettes the hero uses: four bytes a palette, colour 0 (see-through) as 0."""
     palettes = sprite_palettes(rom, palette_index)
-    images: list[bytes] = []
-    index: dict[tuple, int] = {}
-    records = []
-    for left in (False, True):
-        for frame in POSE_FRAMES:
-            pose = Hero(ANIM_BASE, ANIM_BASE, hero.armor, hero.shield, hero.weapon, frame, left)
-            entries = []
-            for sp in pose.sprites(rom):
-                key = (sp.tile, sp.attr & 3, bool(sp.attr & 0x40))
-                if key not in index:
-                    index[key] = len(images)
-                    images.append(sprite_image(tiles.get(sp.tile, bytes(16)), key[2], palettes[key[1]], plan))
-                entries.append((sp.x - ANIM_BASE + ST_LEFT, sp.y + 1 - ANIM_BASE, index[key]))
-            x0 = min(e[0] for e in entries)
-            y0 = min(e[1] for e in entries)
-            box = (x0, max(e[0] for e in entries) + 8, y0, max(e[1] for e in entries) + 8)
-            record = b"".join(v.to_bytes(2, "big", signed=True) for v in box)
-            for e in entries:
-                record += b"".join(v.to_bytes(2, "big", signed=True) for v in e)
-            records.append(record + b"\xff\xff")
+    return bytes(b for pal in (0, 1) for b in [0] + [plan.slot[palettes[pal][v] & 0x3F] for v in (1, 2, 3)])
+
+
+def _pose_table(poses: list[list[tuple[int, int, int]]]) -> bytes:
+    """A table of sixteen words (the offset of each pose from the table's start), then the poses: (x, line, image) words ended by -1."""
+    records = [b"".join(v.to_bytes(2, "big", signed=True) for e in pose for v in e) + b"\xff\xff" for pose in poses]
     offsets, at = [], 2 * len(records)
     for record in records:
         offsets.append(at)
         at += len(record)
-    return b"".join(o.to_bytes(2, "big") for o in offsets) + b"".join(records), b"".join(images)
+    return b"".join(o.to_bytes(2, "big") for o in offsets) + b"".join(records)
+
+
+HERO_DIRECTORY = (8, 4, 3, 8, 8, 8, 3, 9, 1)       # entries: armour tile records, weapon tile records, shield tile records, body poses, arm poses, weapon poses,
+                                                   # shield poses, weapon places and reaches (the last for none), the table that reverses the bits of a byte
+
+
+def hero_equip_assets(rom: fr.Rom) -> bytes:
+    """What the hero looks like in every equipment, independent of the palette (the program makes the images from the tiles in the colours of
+    the package in use, when the equipment or the colours change). The blob is a directory of long offsets from its start (HERO_DIRECTORY gives the
+    order: the tile records of the 8 body combinations (armour * 2 + 1 with a shield), the 4 weapons and the 3 shields; the pose tables of the body
+    and of its arm piece for the 8 combinations, of the weapon for (weapon * 2 + 1 with a shield), of the 3 shields; the weapon's place and reach for
+    the 8 (weapon, shield) and for none; a table that reverses the bits of a byte), then the things they point at. A tile record is the first tile
+    number and the count (words) and the 16 bytes of each tile; a pose table is made by `_pose_table` for the sixteen poses (the ROM's body frame
+    0-7 + 8 * the flip bit), the images numbered tile * 4 + palette * 2 + mirrored."""
+    blobs: list[bytes] = []
+
+    def tile_record(tiles: dict[int, bytes]) -> bytes:
+        first = min(tiles)
+        assert sorted(tiles) == list(range(first, first + len(tiles)))
+        return first.to_bytes(2, "big") + len(tiles).to_bytes(2, "big") + b"".join(tiles[first + n] for n in range(len(tiles)))
+
+    def poses(part: int, armor: int, shield: int, weapon: int) -> bytes:
+        table = []
+        for left in (False, True):
+            for frame in POSE_FRAMES:
+                sprites = fs.hero_parts(rom, ANIM_BASE, ANIM_BASE, armor, shield, weapon, frame, left, attacking_frame=2 if frame == 6 else -1)[part]
+                entries = []
+                for sp in sprites:
+                    assert sp.attr & 3 < 2 and not sp.attr & 0xBC and sp.tile < 64, sp
+                    entries.append((sp.x - ANIM_BASE + ST_LEFT, sp.y + 1 - ANIM_BASE, sp.tile * 4 + (sp.attr & 3) * 2 + (1 if sp.attr & 0x40 else 0)))
+                table.append(entries)
+        return _pose_table(table)
+
+    def shield_of(with_shield: int) -> int:
+        return 0 if with_shield else 255
+
+    for lookup in range(8):
+        blobs.append(tile_record(fs.armor_tiles(rom, lookup >> 1, shield_of(lookup & 1))))
+    for weapon in range(4):
+        blobs.append(tile_record(fs.weapon_tiles(rom, weapon)))
+    for shield in range(3):
+        blobs.append(tile_record(fs.shield_tiles(rom, shield)))
+    for lookup in range(8):
+        blobs.append(poses(0, lookup >> 1, shield_of(lookup & 1), fs.NO_ITEM))
+    for lookup in range(8):
+        blobs.append(poses(1, lookup >> 1, shield_of(lookup & 1), fs.NO_ITEM))
+    for weapon in range(4):
+        for with_shield in (0, 1):
+            blobs.append(poses(2, 0, shield_of(with_shield), weapon))
+    for shield in range(3):
+        blobs.append(poses(3, 0, shield, fs.NO_ITEM))
+    for weapon in range(4):
+        for with_shield in (0, 1):
+            blobs.append(hero_weapon_assets(rom, Hero(0, 0, 0, shield_of(with_shield), weapon)))
+    blobs.append(bytes(128))
+    blobs.append(bytes(int(f"{b:08b}"[::-1], 2) for b in range(256)))
+    assert len(blobs) == sum(HERO_DIRECTORY)
+    head = 4 * len(blobs)
+    offsets, at = [], head
+    for blob in blobs:
+        offsets.append(at)
+        at += len(blob)
+    return b"".join(o.to_bytes(4, "big") for o in offsets) + b"".join(blobs)
 
 
 MAGIC_FIRST_APPEARANCE, MAGIC_APPEARANCES = 0x95, 16      # the spells' pictures: Deluge 4, Thunder 2, Fire 2, Death 4, Tilte 4 (tools/magic_model.FIRST_APPEARANCE)
 
 
 def magic_anim_assets(rom: fr.Rom, palette_index: int, plan: PalettePlan) -> tuple[bytes, bytes]:
-    """(poses, images) for the spells, made like `hero_anim_assets`: 32 poses, pose = the appearance number - 0x95 + 16 * the flip bit (set when the
+    """(poses, images) for the spells, made like the hero's poses (`hero_equip_assets`): 32 poses, pose = the appearance number - 0x95 + 16 * the flip bit (set when the
     spell flies right and its tiles are mirrored), all x relative to the spell's x and y to its y (`Arg_DrawSprite_PosX/Y`, the HUD and the one-line
     shift of the sprites in it), the tiles from the common sprite tiles, the colours from the sprite palettes of the palette set."""
     tiles = fs.common_tiles(rom)

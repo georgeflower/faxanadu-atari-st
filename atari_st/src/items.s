@@ -19,7 +19,8 @@
     .equ INV_VISITS, 33                     | Screen_TrackedVisitCount: the items that come every fourth time count in it
     .equ INV_ARMOUR, 34                     | SelectedArmor and SelectedShield: what he wears ($FF: none)
     .equ INV_SHIELD, 35
-    .equ INV_BYTES, 36
+    .equ INV_ITEM, 36                       | what he holds of the items ($FF: nothing); the worn weapon and spell are the words hero_weapon and hero_magic
+    .equ INV_BYTES, 38
 
     .text
 | The behaviours 41 to 56 and 61 of the ROM's table (d0): Ointment, Glove, what the bosses leave, the items that are there every fourth time, the Magical Rod.
@@ -386,6 +387,6 @@ item_ticks:
     .byte 0
 inv:                                        | the inventory (a new game: nothing, no glove and no ointment in force, the equipment the build gave him)
     .space INV_GLOVE
-    .byte 0xFF, 0xFF, 0, HERO_ARMOUR, HERO_SHIELD & 0xFF
+    .byte 0xFF, 0xFF, 0, HERO_ARMOUR, HERO_SHIELD & 0xFF, 0xFF, 0
     .even
     .text

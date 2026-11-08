@@ -101,6 +101,9 @@ class Hero:
     armours: list = None
     shields: list = None
     items: list = None            # ItemInventory
+    magics: list = None           # MagicInventory
+    magic: int = 0xFF             # SelectedMagic
+    item: int = 0xFF              # SelectedItem
     glove: int = 0xFF
     ointment: int = 0xFF
     exp: int = 0
@@ -125,7 +128,7 @@ class Engine:
         self.ip = 0                   # Sprites_ReadInfoAddr
         self.kinds: dict = {}         # enemy_data.kind_info by entity
         self.combat: dict = {}        # enemy_data.tables
-        self.hero = Hero(events=[], weapons=[], armours=[], shields=[], items=[])
+        self.hero = Hero(events=[], weapons=[], armours=[], shields=[], items=[], magics=[])
         self.visits = 0               # Screen_TrackedVisitCount
 
     @property
@@ -1046,6 +1049,85 @@ class Engine:
         index = count if count < 4 else 3
         del lst[index:]
         lst[:] = lst + [0] * (index - len(lst)) + [value]
+
+    # -- the player menu (Select): PlayerMenu_HandleInventoryMenuInput, Player_Equip, Player_RemoveItem, Player_AddToInventory. A list holds what he owns but does
+    # not wear; wearing an item takes it out of its list and puts what he wore in. An item is category * 32 + number (0 weapon, 1 armour, 2 shield, 3 magic, 4 item).
+    def lists(self) -> list:
+        h = self.hero
+        return [h.weapons, h.armours, h.shields, h.magics, h.items]
+
+    SPECIAL_ITEM_BITS = {0x80: 0x80, 0x81: 0x40, 0x82: 0x20, 0x83: 0x10, 0x92: 0x08, 0x8A: 0x04, 0x93: 0x02, 0x94: 0x01}      # these live in SpecialItems, not in a list
+
+    def selected(self, category: int) -> int:
+        h = self.hero
+        return (h.weapon, h.armour, h.shield, h.magic, h.item)[category]
+
+    def lacks(self, item: int) -> bool:
+        """Player_LacksItem: neither worn nor in its list."""
+        if item in self.SPECIAL_ITEM_BITS:
+            return not self.hero.special & self.SPECIAL_ITEM_BITS[item]
+        number = item & 0x1F
+        return self.selected(item >> 5) != number and number not in self.lists()[item >> 5]
+
+    def remove_item(self, item: int) -> None:
+        if item in self.SPECIAL_ITEM_BITS:
+            self.hero.special &= ~self.SPECIAL_ITEM_BITS[item] & 255
+            return
+        lst = self.lists()[item >> 5]
+        if (item & 0x1F) in lst:
+            lst.remove(item & 0x1F)
+
+    def add_to_inventory(self, item: int) -> None:
+        if item in self.SPECIAL_ITEM_BITS:
+            self.hero.special |= self.SPECIAL_ITEM_BITS[item]
+            return
+        lst = self.lists()[item >> 5]
+        if len(lst) == (8 if item >> 5 == 4 else 4):                   # the last place goes when the list is full
+            lst.pop()
+        lst.append(item & 0x1F)
+
+    def equip(self, item: int, inside: bool = False) -> None:
+        """Player_Equip: the item is worn, what was worn goes into the list."""
+        h = self.hero
+        category, number = item >> 5, item & 0x1F
+        previous = self.selected(category)
+        self.remove_item(item)
+        if previous < 0x80:
+            self.add_to_inventory((item & 0xE0) | previous)
+        if category == 0:
+            h.weapon = number                                          # (inside a building the weapon in the hand stays: `Player_CurWeapon`, not modelled)
+        elif category == 1:
+            h.armour = number
+        elif category == 2:
+            h.shield = number
+        elif category == 3:
+            h.magic = number
+        else:
+            h.item = number
+
+    def menu_choose(self, category: int, index: int, inside: bool = False) -> bool:
+        """The cursor is on `index` of the list of `category` (the list as it was when the menu opened) and A is pressed: True when something was equipped
+        (sound 8), False for the invalid choice (sound 13)."""
+        h = self.hero
+        number = list(self.lists()[category])[index]
+        if inside:                                                     # (nothing can be changed inside a building)
+            self.sound(13)
+            return False
+        if category < 3:
+            if h.weapon == 3:
+                self.sound(13)
+                return False
+            if number == 3:                                            # the Dragon Slayer, Battle Suit or Battle Helmet: only all three together
+                if self.lacks(0x03) or self.lacks(0x23) or self.lacks(0x43):
+                    self.sound(13)
+                    return False
+                self.sound(8)
+                for item in (0x03, 0x23, 0x43):
+                    self.equip(item, inside)
+                return True
+        self.sound(8)
+        self.equip((category << 5) | number, inside)
+        return True
 
     def pickup(self, ent: int) -> None:
         h = self.hero

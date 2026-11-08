@@ -21,6 +21,7 @@ def ft_message(rom, number):
 
     return ft.message(rom, number)
 TOS = Path(os.environ.get("TOS") or os.environ.get("TOS_PAL") or "")
+START_DELAY = 7            # the VBLs the program takes to make the hero's images before its frame counter starts (hero.s): the scenes' times are from the start of the game
 
 
 @unittest.skipUnless(ROM.is_file() and shutil.which("hatari") and shutil.which("m68k-linux-gnu-as") and shutil.which("ca65") and TOS.is_file(),
@@ -777,6 +778,8 @@ class ViewerTests(unittest.TestCase):
         base = (work / "ram0.bin").read_bytes().find(image[sym["start"]:sym["start"] + 48]) - sym["start"]
         self.assertGreater(base, 0)
         script = ""
+        pokes = [(vbl + START_DELAY, what, value) for vbl, what, value in pokes]
+        capture += START_DELAY
         for i, (vbl, what, value) in enumerate(pokes):
             if what == "joy":
                 text = f"memwrite ${base + sym['input_state'] + 259:x} 0x{value:02x}\ncont\n"
@@ -794,8 +797,12 @@ class ViewerTests(unittest.TestCase):
                 text = f"memwrite ${base + sym['input_state'] + 264 + (0x23 if what == 'h' else 0x22):x} 0x{value:02x}\ncont\n"
             elif what == "hp":                                         # the hit points (a byte) of the sprite in slot 7 (E_HP is 15, a slot has 28 bytes)
                 text = f"memwrite ${base + sym['enemies'] + 7 * 30 + 15:x} 0x{value:02x}\ncont\n"
+            elif what == "key":                                        # any key by scan code: value = scan code << 8 | 1 (down) or 0 (up)
+                text = f"memwrite ${base + sym['input_state'] + 264 + (value >> 8):x} 0x{value & 255:02x}\ncont\n"
             elif what == "inv":                                        # a byte of the inventory block: value = offset << 8 | byte
                 text = f"memwrite ${base + sym['inv'] + (value >> 8):x} 0x{value & 255:02x}\ncont\n"
+            elif what == "weapon":                                     # the worn weapon (the word hero_weapon)
+                text = f"memwrite ${base + sym['hero_weapon']:x} 0x{value >> 8:02x} 0x{value & 255:02x}\ncont\n"
             elif what == "y":                                          # the hero's y (a word)
                 text = f"memwrite ${base + sym['hero_y']:x} 0x{value >> 8:02x} 0x{value & 255:02x}\ncont\n"
             else:
@@ -824,10 +831,10 @@ class ViewerTests(unittest.TestCase):
                     (2, 4, "240,144", 284), (2, 14, "240,144", 284), (2, 19, "240,144", 284), (5, 21, "16,144", 279), (5, 35, "16,144", 279), (5, 36, "16,144", 282),
                     (2, 1, "16,144", 284), (2, 3, "144,144", 284), (2, 25, "144,144", 284), (2, 29, "208,144", 340), (2, 32, "16,144", 290), (2, 37, "64,144", 284),
                     (2, 45, "208,144", 290),
-                    (2, 33, "144,144", 290), (2, 38, "16,144", 291), (2, 30, "144,144", 290), (2, 31, "144,144", 290), (2, 42, "144,144", 300), (5, 5, "240,144", 290),
+                    (2, 33, "144,144", 290), (2, 38, "16,144", 294), (2, 30, "144,144", 290), (2, 31, "144,144", 290), (2, 42, "144,144", 300), (5, 5, "240,144", 290),
                     (5, 32, "16,144", 290), (5, 34, "16,144", 290), (5, 3, "144,144", 290), (6, 13, "144,144", 290), (6, 10, "16,160", 293), (6, 11, "144,144", 290),
                     (7, 15, "208,144", 293), (7, 16, "16,144", 290), (2, 80, "16,160", 290), (2, 81, "16,160", 290), (2, 82, "16,160", 290),
-                    (6, 30, "240,144", 290), (2, 59, "240,144", 302), (6, 23, "16,144", 293), (6, 25, "240,144", 290),
+                    (6, 30, "240,144", 290), (2, 59, "240,144", 305), (6, 23, "16,144", 293), (6, 25, "240,144", 293),
                     (1, 58, "16,144", 293), (6, 26, "16,144", 290), (7, 17, "208,144", 293),
                     (2, 51, "16,144", 290), (2, 63, "16,144", 290), (7, 4, "16,144", 290), (6, 22, "16,144", 302),
                     (2, 65, "208,144", 290), (6, 18, "16,144", 290), (7, 1, "16,144", 291),
@@ -1048,6 +1055,59 @@ class ViewerTests(unittest.TestCase):
         ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1", "HERO=144,144,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], pokes, 600, "shots_glove")
         self.assertGreater(word("en_counter"), held + 40)
 
+    MENU_LISTS = [(0, 1), (1, 2), (24, 2), (8, 1), (26, 1), (16, 9), (17, 4), (28, 2)]      # weapons [1, 2], shields [1], items [9, 4] (offsets in inv)
+
+    def menu_run(self, keys: list[str], capture: int = 640):
+        """Eolis-style build with a Hand Dagger, no armour change, the lists above; the keys (Tab, A, Up, Down, B) are pressed in turn."""
+        scan = {"TAB": 0x0F, "A": 0x39, "B": 0x38, "UP": 0x48, "DOWN": 0x50}
+        pokes = [(380 + i, "inv", o << 8 | v) for i, (o, v) in enumerate(self.MENU_LISTS)]
+        vbl = 420
+        for k in keys:
+            pokes += [(vbl, "key", scan[k] << 8 | 1), (vbl + 4, "key", scan[k] << 8)]
+            vbl += 16
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1", "HERO=144,144,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], pokes, capture, "shots_menu")
+        return word, word.raw("inv", 38)
+
+    def test_the_menu_puts_on_a_weapon_and_the_old_one_goes_into_the_list(self) -> None:
+        """Tab, A (the weapons), Down, A: the Giant Blade (the second of the list) is worn, the Hand Dagger takes its place (tools/enemy_model.py `menu_choose`
+        is the reference, tests/test_menu.py checks it against the game)."""
+        import enemy_model as em
+
+        word, inv = self.menu_run(["TAB", "A", "DOWN", "A"])
+        eng = em.Engine(b"", b"", bytes(256), b"")
+        h = eng.hero
+        h.weapons, h.shields, h.items, h.weapon, h.armour, h.shield = [1, 2], [1], [9, 4], 0, 0, 255
+        self.assertTrue(eng.menu_choose(0, 1))
+        self.assertEqual(word("hero_weapon"), h.weapon)
+        self.assertEqual((list(inv[0:inv[24]]), inv[24]), (h.weapons, len(h.weapons)))
+        self.assertEqual(h.weapon, 2)
+
+    def test_the_menu_wears_an_item_and_B_leaves_it_alone(self) -> None:
+        """Tab, A, A on a shield (inv INV_SHIELD), and Tab, B: the first changes the shield from none to the Small Shield... the second changes nothing."""
+        word, inv = self.menu_run(["TAB", "DOWN", "DOWN", "A", "A"])
+        self.assertEqual(inv[35], 1)
+        self.assertEqual(inv[26], 0)
+        word, inv = self.menu_run(["TAB", "DOWN", "A", "B"])
+        self.assertEqual((inv[34], inv[35], inv[25]), (0, 255, 0))
+
+    def test_the_hero_is_drawn_in_the_armour_shield_and_weapon_he_wears(self) -> None:
+        """The images are made from the ROM's tiles when the worn equipment changes (hero.s): poked into the inventory and the weapon word, the picture
+        is the converter's for that equipment, and the weapon's reach follows."""
+        import faxanadu_rom as fr
+        import faxanadu_sprites as fs
+        import hatari_shot as hs
+        import st_convert as sc
+
+        rom = fr.Rom(ROM)
+        for armour, shield, weapon in ((2, 1, 2), (3, 3, 3), (1, 0, 1), (0, 255, 255)):
+            with self.subTest(armour=armour, shield=shield, weapon=weapon):
+                pokes = [(599, "inv", 34 << 8 | armour), (599, "inv", 35 << 8 | shield), (599, "weapon", weapon)]
+                ram, word, log = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1", "HERO=144,144,0,255,0,0,1"], pokes, 760, "shots_equipment")
+                rows = hs.decode_screen(ram, hs.video_base(log))
+                self.assert_picture(rows, sc.expected_screen(rom, 0, 1, word("camera"), hero=sc.Hero(word("hero_x"), word("hero_y"), armour, shield, weapon, 0, True)))
+                want = (0, 0) if weapon == 255 else fs.weapon_range(rom, weapon)
+                self.assertEqual(tuple(word(f"weapon_x+{2 * i}") for i in (2, 3)), want)
+
     def test_a_poison_potion_takes_16_power(self) -> None:
         """Area 1 screen 53: the potion on the floor (the Snowmen may hurt him too, in steps of 4, so no more than 16 and 4 off)."""
         word, slots, hud, inv = self.item_scene(1, 53, "32,144", True, 560)
@@ -1169,7 +1229,7 @@ class ViewerTests(unittest.TestCase):
         import st_convert as sc
 
         rom = fr.Rom(ROM)
-        mantra = pm.password(pm.State(0, 0, 0, 0, 0, 0, pm.UNSET, pm.UNSET, pm.UNSET, weapons=[0], armors=[0]))
+        mantra = pm.password(pm.State(0, 0, 0, 0, 0, 0, pm.UNSET, pm.UNSET, pm.UNSET))
         self.assertEqual(len(mantra), 11)
         ram, word, log = self.run_scenario([], [(599, "p", 1), (602, "p", 0)], 699, "shots_mantra")
         import hatari_shot as hs
@@ -1190,7 +1250,7 @@ class ViewerTests(unittest.TestCase):
         import st_convert as sc
 
         rom = fr.Rom(ROM)
-        mantra = pm.password(pm.State(0, 12, 0, 0, 0, 0, pm.UNSET, 2, pm.UNSET, weapons=[0], armors=[0], spells=[2]))
+        mantra = pm.password(pm.State(0, 12, 0, 0, 0, 0, pm.UNSET, 2, pm.UNSET))
         ram, word, log = self.run_scenario(["VIEWER_DEFS=--defsym TITLE=12 --defsym MAGIC=2"], [(599, "p", 1), (602, "p", 0)], 699, "shots_mantra_2")
         rows = hs.decode_screen(ram, hs.video_base(log))
         expected = sc.expected_screen(rom, 0, 1, word("camera"), hero=sc.Hero(144, 144, 0, 255, 0, 0, True), state=dict(hp=16, mp=0, experience=0, gold=0, seconds=0))
@@ -1317,6 +1377,8 @@ class ViewerTests(unittest.TestCase):
         pokes, end = self.typing(mantra, 620)
         ram, word, log = self.run_scenario(args, start + pokes, end + 200, "shots_entry_ok")
         self.assertEqual((word("hero_title"), word("hero_magic"), word("hero_dead")), (5, 1, 0))
+        inv = word.raw("inv", 38)
+        self.assertEqual((inv[24], inv[0], inv[25], inv[4], inv[27], inv[12]), (1, 0, 1, 32, 1, 3 * 32 + 1), "the lists the mantra held, items with their category")
         self.assertEqual((word("hud_state"), word("hud_state+2"), word("hud_state+4"), word("hud_state+6")),
                          (0x5050, rom.word("PLAYER_TITLE_EXP_NEEDED", 4), 0, rom.word("PLAYER_TITLE_GOLD", 4)), "full power and magic, the rank's experience and gold")
         expected = sc.expected_screen(rom, 0, 1, word("camera"), hero=sc.Hero(144, 144, 0, 255, 0, 0, True),

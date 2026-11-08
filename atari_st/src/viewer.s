@@ -38,7 +38,9 @@
     .error "build_assets.py: PACKAGE_EXPAND is too small for the flags of FLAG_SLOTS screens"
     .endif
     .equ REGION_BYTES, 208*160              | a whole 208-line playfield (stride 160: the same layout as the screen)
-    .equ BUFFER_BYTES, 2*SCREEN_BYTES+2*REGION_BYTES+256 | two screens and two playfields, the first on a 256-byte boundary
+    .equ HERO_IMAGES_AT, 64*16              | hero.s: the hero's 64 tiles, then his 256 images
+    .equ HERO_RAM_BYTES, HERO_IMAGES_AT+256*SPRITE_IMAGE_BYTES
+    .equ BUFFER_BYTES, 2*SCREEN_BYTES+2*REGION_BYTES+HERO_RAM_BYTES+256 | two screens and two playfields, the first on a 256-byte boundary
     .equ HERO_X_MIN, 0                      | where he is at the left edge (he has walked off it): scrolls to the screen on the left
     .equ HERO_X_MAX, 241                    | and at the right edge
     .equ HERO_Y_MIN, 0                      | at the top of the playfield (the game's Player_PosY): scrolls to the screen above
@@ -125,6 +127,13 @@ start:
     addi.l #REGION_BYTES, %d0
     move.l %d0, (%a0)                       | next_ptr: the playfield of the screen scrolled to
     addi.l #REGION_BYTES, %d0
+    lea hero_ram(%pc), %a0
+    move.l %d0, (%a0)                       | the hero's tiles and images (hero.s)
+    addi.l #HERO_RAM_BYTES, %d0
+    lea game_start(%pc), %a0
+    adda.l #hero_equip, %a0
+    lea hero_blob(%pc), %a1
+    move.l %a0, (%a1)
     lea pkg_buf(%pc), %a0
     move.l %d0, (%a0)                       | where a package from disk is loaded
     movea.l buf_a(%pc), %a4
@@ -224,6 +233,7 @@ start:
     bsr.w sound_play_music
     lea cur_music(%pc), %a0
     move.w %d0, (%a0)
+    bsr.w hero_sync                         | the hero's images are made before the frame counter starts
     bsr.w frame_init
     bsr.w enemies_load
     .ifdef MENU
@@ -232,6 +242,7 @@ start:
 12: bsr.w input_poll
     bsr.w sound_keys
     bsr.w mantra_key                        | P: shows the mantra
+    bsr.w menu_key                          | Tab (Select): the player menu
     bsr.w hero_step
     bsr.w scroll_check                      | at the edge of the screen: scrolls to the next one (and comes back when it is done)
     .ifndef NO_PHYSICS
@@ -972,7 +983,8 @@ wings_update:
 | reaches (weapon_rx, weapon_ry; 0 without a weapon). The enemies will be hit by them as Sprites_IsSpriteOutOfWeaponRange does. a1 = hero_x.
 | Clobbers d0, a0.
 weapon_update:
-    movea.l pkg_ptr+PKG_HERO_WEAPON(%pc), %a0
+    bsr.w hero_sync
+    movea.l hero_wtab(%pc), %a0
     move.w 4(%a1), %d0                      | the pose: the body frame + 8 for the flip bit
     lsl.w #3, %d0
     add.w 6(%a1), %d0
@@ -1830,9 +1842,9 @@ climb_down:
 | Draws the hero in the pose his state says, into screen a4, and notes the rectangle in this screen's slot.
 draw_hero:
     movem.l %d0-%d7/%a0-%a3/%a5, -(%sp)
+    bsr.w hero_sync
     lea death_state(%pc), %a0
     clr.w 10(%a0)                           | (dissolving: the first tile again)
-    movea.l pkg_ptr+PKG_HERO_ANIM(%pc), %a5
     move.w hero_flip(%pc), %d0
     move.w hero_frame(%pc), %d1
     cmpi.w #7, %d1
@@ -1844,41 +1856,51 @@ draw_hero:
 1:  lsl.w #3, %d0                           | * 8: a pose for each of the ROM's body frames, both ways round
     add.w hero_frame(%pc), %d0              | the pose
     add.w %d0, %d0
-    move.w (%a5,%d0.w), %d0
-    adda.w %d0, %a5                         | the pose's record
+    lea hero_pose_off(%pc), %a0
+    move.w %d0, (%a0)                       | (an offset in a pose table)
+    move.w %d0, %d6
+    move.w #0x7FFF, %d0                     | the box of all the parts: x0, x1, y0, y1
+    move.w #-0x7FFF, %d1
+    move.w #0x7FFF, %d2
+    move.w #-0x7FFF, %d3
+    lea hero_poses(%pc), %a2
+    movea.l (%a2)+, %a5
+    bsr.w hero_box_part
+    movea.l (%a2)+, %a5
+    bsr.w hero_box_part
+    movea.l (%a2)+, %a5
+    bsr.w hero_box_part
+    movea.l (%a2)+, %a5
+    bsr.w hero_box_part
+    addq.w #8, %d1
+    addq.w #8, %d3
     lea rect_slots(%pc), %a0
-    move.w slot_index(%pc), %d0
-    lsl.w #4, %d0
-    adda.w %d0, %a0
+    move.w slot_index(%pc), %d4
+    lsl.w #4, %d4
+    adda.w %d4, %a0
     move.w hero_x(%pc), %d4                 | where he is: ST x and the line
     move.w hero_y(%pc), %d5
     sub.w camera(%pc), %d5
-    move.w (%a5)+, %d0
     add.w %d4, %d0
-    move.w %d0, (%a0)+                      | the box
-    move.w (%a5)+, %d0
-    add.w %d4, %d0
-    move.w %d0, (%a0)+
-    move.w (%a5)+, %d0
-    add.w %d5, %d0
-    move.w %d0, (%a0)+
-    move.w (%a5)+, %d0
-    add.w %d5, %d0
-    move.w %d0, (%a0)+
-    movea.l pkg_ptr+PKG_HERO_ANIM_IMAGES(%pc), %a3
-1:  move.w (%a5)+, %d0
-    bmi.s 2f
-    add.w hero_x(%pc), %d0
-    move.w hero_y(%pc), %d1                 | blit_tile clobbers d0-d7: the position comes from memory each time
-    sub.w camera(%pc), %d1
-    add.w (%a5)+, %d1
-    move.w (%a5)+, %d2
-    mulu.w #SPRITE_IMAGE_BYTES, %d2
-    lea (%a3,%d2.l), %a1
-    bsr.w dissolve_image
-    bsr.w blit_tile
-    bra.s 1b
-2:  bsr.s clear_margins
+    add.w %d4, %d1
+    add.w %d5, %d2
+    add.w %d5, %d3
+    movem.w %d0-%d3, (%a0)                  | the box
+    movea.l hero_ram(%pc), %a3
+    lea HERO_IMAGES_AT(%a3), %a3
+    lea hero_poses(%pc), %a2
+    movea.l (%a2), %a5
+    bsr.w hero_draw_part
+    lea hero_poses+4(%pc), %a2
+    movea.l (%a2), %a5
+    bsr.w hero_draw_part
+    lea hero_poses+8(%pc), %a2
+    movea.l (%a2), %a5
+    bsr.w hero_draw_part
+    lea hero_poses+12(%pc), %a2
+    movea.l (%a2), %a5
+    bsr.w hero_draw_part
+    bsr.s clear_margins
     movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5
     rts
 
@@ -2828,6 +2850,8 @@ hud_load_state:
     .include "text.s"
     .include "enemy.s"
     .include "items.s"
+    .include "menu.s"
+    .include "hero.s"
 
     .section .rodata
 hud_layout:

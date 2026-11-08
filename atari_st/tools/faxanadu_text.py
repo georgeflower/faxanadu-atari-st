@@ -45,3 +45,16 @@ def password_lines(rom: fr.Rom) -> tuple[str, str]:
     text = bytes(_bank(rom, 12)[PASSWORD_LINE:PASSWORD_LINE + 70]).split(b"\0")[0].decode("ascii")
     wrong, ask = (part.strip() for part in re.split(r" {2,}", text.strip())[:2])
     return wrong, ask
+
+
+def _records(rom: fr.Rom, first: bytes, count: int) -> list[str]:
+    """`count` strings of the 16-byte records (a length byte, then the text padded with blanks) from the one that starts with `first` (its length byte
+    comes just before it): what the player menu and the item lists show."""
+    at = rom.data.index(first) - 1
+    return [rom.data[at + 16 * i + 1:at + 16 * i + 16].decode("ascii").strip() for i in range(count)]
+
+
+def menu_strings(rom: fr.Rom) -> dict[str, list[str]]:
+    """The player menu's texts: the six entries of the top menu, the names of every weapon, armour, shield, spell and item in one list (`ITEM_NAMES_*`: the
+    weapons from 0, the armours from 4, the shields from 8, the spells from 12, the items from 17), and the five 'NO ...' lines."""
+    return {"top": _records(rom, b"WEAPON ", 6), "names": _records(rom, b"HAND DAGGER", 39), "none": _records(rom, b"NO WEAPON", 5)}

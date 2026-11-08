@@ -87,7 +87,7 @@ def edge_table(rom: fr.Rom, a: fm.Area, ids: list[int], world: dict[int, list[in
 # "block_flags" (a byte a block id: 1 a block he cannot walk through, 2 a ladder) when it loads a package, which keeps the disk smaller.
 FLAG_ROOM = 6 * 2 * 208                  # the block flags of 6 screens (src/viewer.s: FLAG_SLOTS), made when asked for, behind the package
 PACKAGE_PARTS = ("palette", "screens", "neighbours", "blocking", "ladders", "doors", "edges", "block_index", "blocks", "hud_tiles", "hud_partial",
-                 "hero_list", "hero_images", "hero_anim", "hero_anim_images", "hero_weapon", "magic_anim", "magic_images", "block_flags",
+                 "hero_list", "hero_images", "hero_colours", "magic_anim", "magic_images", "block_flags",
                  "enemy_places", "enemy_kinds", "enemy_anim", "enemy_images", "enemy_scripts")
 HEADER_WORDS = ("door_count", "screen_count", "edge_count", "music")
 
@@ -159,10 +159,15 @@ def main() -> int:
     texts = {"DEATH": ft.message(rom, ft.MESSAGE_DEATH), "MEDITATE": ft.message(rom, ft.MESSAGE_MEDITATE), "WRONG": wrong, "ASK": ask}
     import enemy_model as em
 
+    menu = ft.menu_strings(rom)
+    for key, label in (("top", "TOP"), ("names", "NAME"), ("none", "NONE")):
+        for i, text in enumerate(menu[key]):
+            texts[f"{label}_{i}"] = text
     texts["GLOVE_GONE"], texts["OINTMENT_GONE"] = ft.message(rom, 0xBD), ft.message(rom, 0xBF)       # (IScripts $93 and $95)
     for message in sorted(set(em.Engine.ITEM_MESSAGES.values())):         # what the game says when an item is picked up (the ROM's messages)
         texts[f"MSG_{message:02X}"] = ft.message(rom, message)
     text_blob, text_equ = bytearray(ft.font(rom)), []
+    text_blob[8 * (ord('>') - 32):8 * (ord('>') - 32) + 8] = bytes([0x00, 0x10, 0x18, 0xFC, 0xFC, 0x18, 0x10, 0x00])      # the ROM's font has no arrow (its menu cursor is a sprite): '>' is one
     for name, text in texts.items():
         text_equ.append(f"    .equ TEXT_{name}, {len(text_blob)}\n")
         text_blob += text.encode("ascii") + b"\0"
@@ -170,6 +175,7 @@ def main() -> int:
         text_equ.append(f"    .equ ITEMTXT_{ent:02X}, " + (f"TEXT_MSG_{em.Engine.ITEM_MESSAGES[ent]:02X}" if ent in em.Engine.ITEM_MESSAGES else "0") + "\n")
     (args.out / "text.bin").write_bytes(bytes(text_blob))
     (args.out / "random.bin").write_bytes(ed.random_table(rom))
+    (args.out / "hero_equip.bin").write_bytes(sc.hero_equip_assets(rom))
     hero = sc.Hero(*[bool(v) if i == 6 else v for i, v in enumerate(int(t) for t in args.hero.split(","))])
 
     def package(area: int, pal_index: int, building: int | None = None) -> tuple[bytes, list[tuple], int]:
@@ -191,7 +197,6 @@ def main() -> int:
         props = fm.block_properties(rom, ar)
         plan, table, images = sc.build_area_blocks(rom, area, palette_index=pal_index, screens=screens, tiles_index=tiles_index)
         hero_list, hero_images = sc.hero_assets(rom, who, pal_index, plan, args.camera)
-        anim, anim_images = sc.hero_anim_assets(rom, who, pal_index, plan)
         magic, magic_images = sc.magic_anim_assets(rom, pal_index, plan)
         parts = {
             "palette": plan.words(), "screens": bytes(blocks), "neighbours": bytes(around),
@@ -199,8 +204,8 @@ def main() -> int:
             "block_flags": bytes(hp.IMPASSABLE[props[b] & 15] | hp.CLIMBABLE[props[b] & 15] << 1 | (props[b] & 15 == 2) << 2 for b in range(256)),
             "doors": doors, "edges": edges, "block_index": b"".join(v.to_bytes(2, "big") for v in table), "blocks": b"".join(images),
             "hud_tiles": sc.hud_tile_images(rom, pal_index, plan, start["hp"], start["mp"]), "hud_partial": sc.hud_partial_images(rom, pal_index, plan),
-            "hero_list": hero_list, "hero_images": hero_images, "hero_anim": anim, "hero_anim_images": anim_images,
-            "hero_weapon": sc.hero_weapon_assets(rom, who), "magic_anim": magic, "magic_images": magic_images,
+            "hero_list": hero_list, "hero_images": hero_images, "hero_colours": sc.hero_colours(rom, pal_index, plan),
+            "magic_anim": magic, "magic_images": magic_images,
             **(ed.package_parts(rom, area, screens, pal_index, plan) if building is None else ed.package_parts(rom, area, [None], pal_index, plan)),
         }
         counts = dict(door_count=len(doors) // DOOR_BYTES, screen_count=len(screens), edge_count=len(edges) // EDGE_BYTES, music=music)
