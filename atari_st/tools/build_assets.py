@@ -6,7 +6,7 @@
 Writes hero_list.bin and hero_images.bin (the hero's sprites for the ST), hud_tiles.bin (the 60 HUD tiles, 32 bytes each) and hud_layout.bin (its 4 rows of 32 tile ids, as at the start of a game),
 palette.bin (16 ST colour words), blocks.bin (the 128-byte block images the screen uses), block_index.bin (1024 words:
 image number of (block id * 4 + corner), $FFFF for none), screen.bin (the screen's 13 rows of 16 block ids) and assets.inc
-(the numbers the assembly needs). Nothing here is committed: it all comes from the ROM and is rebuilt on each build.
+(the numbers the assembly needs), and the interaction scripts' files iscript.bin, portraits.bin, npc.bin with iscript.inc (tools/iscripts.py). Nothing here is committed: it all comes from the ROM and is rebuilt on each build.
 """
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ import hero_physics as hp  # noqa: E402
 import lz
 import faxanadu_rom as fr  # noqa: E402
 import faxanadu_text as ft  # noqa: E402
+import iscripts as isc  # noqa: E402
+import splash  # noqa: E402
 import st_convert as sc  # noqa: E402
 
 
@@ -164,6 +166,10 @@ def main() -> int:
         for i, text in enumerate(menu[key]):
             texts[f"{label}_{i}"] = text
     texts["GLOVE_GONE"], texts["OINTMENT_GONE"] = ft.message(rom, 0xBD), ft.message(rom, 0xBF)       # (IScripts $93 and $95)
+    for name, message in (("USED_POTION", 0xAA), ("USED_MATTOCK", 0xAB), ("USED_HOURGLASS", 0xAC), ("USED_WINGS", 0xAD), ("USED_KEY", 0xAE), ("USED_ELIXIR", 0xAF),
+                          ("WINGS_GONE", 0xC0), ("HOURGLASS_GONE", 0xC1), ("KEY_A", 0xA7), ("KEY_K", 0xA6), ("KEY_Q", 0xA5), ("KEY_J", 0x29), ("KEY_JO", 0xA8),
+                          ("RING", 0xA9)):                          # the messages of using an item, of its end, of a door's key hole and of a ring door
+        texts[name] = ft.message(rom, message)
     for message in sorted(set(em.Engine.ITEM_MESSAGES.values())):         # what the game says when an item is picked up (the ROM's messages)
         texts[f"MSG_{message:02X}"] = ft.message(rom, message)
     text_blob, text_equ = bytearray(ft.font(rom)), []
@@ -175,6 +181,11 @@ def main() -> int:
         text_equ.append(f"    .equ ITEMTXT_{ent:02X}, " + (f"TEXT_MSG_{em.Engine.ITEM_MESSAGES[ent]:02X}" if ent in em.Engine.ITEM_MESSAGES else "0") + "\n")
     (args.out / "text.bin").write_bytes(bytes(text_blob))
     (args.out / "random.bin").write_bytes(ed.random_table(rom))
+    scripts = isc.build(rom)                       # the interaction scripts, messages, portraits and town people (tools/iscripts.py describes the files)
+    for name, data in scripts.items():
+        (args.out / name).write_bytes(data)
+    (args.out / "iscript.inc").write_text(isc.equates(scripts), encoding="ascii")
+    splash.emit(args.out)                          # the title, the intro and the ending (TITLE.DAT, INTRO.DAT, OUTRO.DAT, splash.inc)
     (args.out / "hero_equip.bin").write_bytes(sc.hero_equip_assets(rom))
     hero = sc.Hero(*[bool(v) if i == 6 else v for i, v in enumerate(int(t) for t in args.hero.split(","))])
 

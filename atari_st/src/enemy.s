@@ -39,7 +39,8 @@
     .equ K_BW, 24
     .equ K_BH, 26
     .equ K_DMG, 28
-    .equ K_CAT, 30                          | the ROM's category: 0 enemy, 1 dropped, 5 item, 7 boss (when it dies, the boss death effect takes its place)
+    .equ K_CAT, 30                          | the high byte: SPRITE_ENTITY_MAGIC_DEFENSE (two bits a spell: Thunder 7-6, Fire 5-4, Death 3-2, Tilte 1-0; 0 full, 1 half, 2-3 none);
+                                            | the low byte (K_CAT+1): the ROM's category: 0 enemy, 1 dropped, 5 item, 7 boss (when it dies, the boss death effect takes its place)
     .equ KIND_BYTES, 32
     .equ E_BREAD, 1                         | the entities that are not enemies: bread and a coin (drops), the death effect
     .equ E_COIN, 2
@@ -56,6 +57,7 @@ enemies_clear:
     lea enemies(%pc), %a0
     moveq #8-1, %d0
 1:  move.b #0xFF, E_ENT(%a0)
+    clr.b E_VAL(%a0)
     lea E_BYTES(%a0), %a0
     dbra %d0, 1b
     lea enemy_rects(%pc), %a0
@@ -142,9 +144,11 @@ enemies_erase:
 | Sprites_UpdateAll: one frame of every enemy, the highest slot first. en_counter is SpriteUpdateCounter.
 enemies_update:
     movem.l %d0-%d7/%a0-%a5, -(%sp)
+    move.w hourglass(%pc), %d0              | (SpriteUpdateCounter stands still while the Hour Glass is in force)
+    bpl.s 11f
     lea en_counter(%pc), %a0
     addq.w #1, (%a0)
-    move.w cur_screen(%pc), %d0
+11: move.w cur_screen(%pc), %d0
     bsr.w screen_flags
     lea en_blocks(%pc), %a1
     move.l %a2, (%a1)+
@@ -166,10 +170,20 @@ enemies_update:
     move.w #0x0200, %d3
     bsr.w en_step_x
     bra.s 2f
-3:  bsr.s en_behaviour
+3:  move.b E_VAL(%a3), %d0                 | stunned by a spell (an enemy or a boss; E_VAL is a coin's worth otherwise): it is pushed, nothing else runs
+    beq.s 4f
+    movea.l E_KIND(%a3), %a0
+    move.b K_CAT+1(%a0), %d1
+    beq.s 5f
+    cmpi.b #7, %d1
+    bne.s 4f
+5:  bsr.w en_stunned
+    bra.s 2f
+4:  bsr.s en_behaviour
     cmpi.b #0xFF, E_ENT(%a3)                | (it expired, or left its drop)
     beq.s 2f
     bsr.w en_weapon
+    bsr.w en_magic
     bsr.w en_touch
 2:  lea -E_BYTES(%a3), %a3
     dbra %d7, 1b
@@ -178,7 +192,13 @@ enemies_update:
 
 | Sprites_UpdateBehavior for the slot a3: the next op when the behaviour has finished, then the behaviour. a5 = the scripts, d6 = the script's offset.
 en_behaviour:
-    moveq #0, %d6
+    move.w hourglass(%pc), %d0              | the Hour Glass: an enemy (category 0) does nothing at all
+    bmi.s 0f
+    movea.l E_KIND(%a3), %a0
+    tst.b K_CAT+1(%a0)
+    bne.s 0f
+    rts
+0:  moveq #0, %d6
     move.w E_SCRIPT(%a3), %d6
     bsr.w en_ops
     moveq #0, %d0
@@ -2192,6 +2212,169 @@ en_fall_step:
     andi.b #0xF0, E_Y(%a3)
 9:  rts
 
+| Sprites_Maybe_UpdateHitByMagic for the slot a3: E_VAL holds the stun a spell gave it (bits 7-6: 1 Deluge, 2 Thunder, 3 Fire; the low bits: the updates left).
+| It is pushed the way it faces: Deluge 3 pixels for 4 updates, Thunder 2 for 8, Fire 4 until a wall.
+en_stunned:
+    movem.l %d0-%d5/%a0-%a2, -(%sp)
+    moveq #0, %d0
+    move.b E_VAL(%a3), %d0
+    move.w %d0, %d2
+    andi.w #0xC0, %d2
+    lsr.w #6, %d2
+    lea stun_step(%pc), %a0
+    moveq #0, %d3
+    move.b -1(%a0,%d2.w), %d3
+    lsl.w #8, %d3                           | the step, 8.8
+    bsr.w en_step_x
+    cmpi.w #3, %d2
+    bne.s 1f
+    tst.w %d0                               | Fire: until it is stopped by a wall
+    beq.s 9f
+    clr.b E_VAL(%a3)
+    bra.s 9f
+1:  subq.b #1, E_VAL(%a3)
+    move.b E_VAL(%a3), %d0
+    andi.b #0x3F, %d0
+    bne.s 9f
+    clr.b E_VAL(%a3)
+9:  movem.l (%sp)+, %d0-%d5/%a0-%a2
+    rts
+
+| Sprite_CheckHitByCastMagic for the slot a3, with the spell on the screen (spell_state type 0 to 4, not hit before): an enemy or a boss that is not hidden and
+| whose box the spell's box overlaps (as bytes) takes the spell: it faces the way the spell flew, the Deluge, Thunder and Fire stun it, and
+| Player_HitEnemyWithMagic: the spell's damage (the Magical Rod adds half), less by the enemy's defence, off its hit points; at none left it dies (experience, the
+| death effect). One enemy takes a spell once: Deluge, Death and Tilte are gone, Thunder and Fire fly on without hitting.
+en_magic:
+    movem.l %d0-%d7/%a0-%a2, -(%sp)
+    lea spell_state(%pc), %a1
+    move.w (%a1), %d5                       | the type
+    bmi.w 9f
+    cmpi.w #5, %d5
+    bcc.w 9f
+    tst.w spell_hit-spell_state(%a1)
+    bne.w 9f
+    movea.l E_KIND(%a3), %a0
+    moveq #0, %d0
+    move.b K_CAT+1(%a0), %d0
+    beq.s 1f
+    cmpi.b #7, %d0
+    bne.w 9f
+1:  btst #4, E_FLAGS(%a3)                   | hidden
+    bne.w 9f
+    moveq #0, %d1
+    move.b E_HBOX(%a3), %d1
+    lea magic_hit_w(%pc), %a2
+    moveq #0, %d2
+    move.b (%a2,%d5.w), %d2
+    lea hbox_width(%pc), %a2
+    moveq #0, %d3
+    move.b (%a2,%d1.w), %d3
+    move.w 4(%a1), %d4                      | the spell's x plus its width less the sprite's x, as a byte, below the sprite's width plus the spell's
+    add.w %d2, %d4
+    moveq #0, %d6
+    move.b E_X(%a3), %d6
+    sub.w %d6, %d4
+    andi.w #0xFF, %d4
+    add.w %d3, %d2
+    cmp.w %d2, %d4
+    bcc.w 9f
+    lea magic_hit_h(%pc), %a2
+    moveq #0, %d2
+    move.b (%a2,%d5.w), %d2
+    lea hbox_height(%pc), %a2
+    moveq #0, %d3
+    move.b (%a2,%d1.w), %d3
+    move.w 8(%a1), %d4
+    add.w %d2, %d4
+    moveq #0, %d6
+    move.b E_Y(%a3), %d6
+    sub.w %d6, %d4
+    andi.w #0xFF, %d4
+    add.w %d3, %d2
+    cmp.w %d2, %d4
+    bcc.w 9f
+    | a hit
+    cmpi.w #3, %d5                          | the stun of the Deluge, Thunder and Fire
+    bcc.s 3f
+    lea magic_stun(%pc), %a2
+    move.b (%a2,%d5.w), E_VAL(%a3)
+3:  moveq #0, %d0                           | it faces the way the spell flew
+    btst #6, 3(%a1)
+    beq.s 4f
+    moveq #1, %d0
+4:  andi.b #0xFE, E_FLAGS(%a3)
+    or.b %d0, E_FLAGS(%a3)
+    cmpi.b #5, E_ENT(%a3)                   | Necron Aides: it comes off the ladder
+    bne.s 5f
+    ori.b #0x80, E_PHASE(%a3)
+5:  moveq #2, %d0
+    bsr.w sound_play_sfx
+    lea magic_damage(%pc), %a2
+    moveq #0, %d0
+    move.b (%a2,%d5.w), %d0
+    btst #2, inv+INV_SPECIAL(%pc)           | the Magical Rod: half as much again
+    beq.s 6f
+    move.w %d0, %d1
+    lsr.w #1, %d1
+    add.w %d1, %d0
+6:  tst.w %d5                               | the Deluge ignores the defence
+    beq.s 8f
+    moveq #0, %d1
+    move.b K_CAT(%a0), %d1                  | the defence: two bits a spell
+    move.w %d5, %d2
+    subq.w #1, %d2
+    add.w %d2, %d2
+    moveq #6, %d3
+    sub.w %d2, %d3
+    lsr.b %d3, %d1
+    andi.w #3, %d1
+    beq.s 8f
+    cmpi.w #1, %d1
+    bne.s 7f
+    lsr.w #1, %d0                           | half
+    bra.s 8f
+7:  moveq #0, %d0                           | none
+8:  moveq #0, %d2
+    move.b E_HP(%a3), %d2
+    move.b %d2, %d4
+    sub.b %d0, %d4
+    move.b %d4, E_HP(%a3)
+    cmp.b %d0, %d2
+    bcc.s 20f                               | it had as much as the blow or more: alive
+    moveq #3, %d0
+    bsr.w sound_play_sfx
+    clr.b E_HIT(%a3)
+    clr.b E_VAL(%a3)
+    move.w K_EXP(%a0), %d0
+    bsr.w exp_add
+    move.l %a0, E_PREV(%a3)
+    cmpi.b #7, K_CAT+1(%a0)
+    beq.s 21f
+    moveq #E_DEATH, %d0
+    bra.s 22f
+21: moveq #E_BOSS_DEATH, %d0
+22: move.b %d0, %d5
+    bsr.w en_find_kind
+    move.l %a0, E_KIND(%a3)
+    move.w K_SCRIPT(%a0), E_SCRIPT(%a3)
+    move.b %d5, E_ENT(%a3)
+    move.b #0xFF, E_BEH(%a3)
+    clr.b E_D2(%a3)
+    bclr #6, E_FLAGS(%a3)
+20: lea spell_state(%pc), %a1
+    move.w (%a1), %d5
+    cmpi.w #1, %d5                          | Thunder and Fire go on, harmless; the others are gone
+    beq.s 23f
+    cmpi.w #2, %d5
+    beq.s 24f
+    move.w #-1, (%a1)
+    bra.s 9f
+23: move.w #24, spell_hit-spell_state(%a1)
+    bra.s 9f
+24: move.w #255, spell_hit-spell_state(%a1)
+9:  movem.l (%sp)+, %d0-%d7/%a0-%a2
+    rts
+
 | ---------------------------------------------------------------------------------------------------------------------- combat
 | Player_HitSpriteWithWeapon for the slot a3: the sword is out (attack phase 1 or 2), the enemy is inside its reach (Sprites_IsSpriteOutOfWeaponRange: the
 | weapon's place plus its reach, minus the enemy's place, below the enemy's extent plus the reach, in x and in y, as bytes), and it is not the drop or the
@@ -2209,8 +2392,12 @@ en_weapon:
     cmpi.b #E_BOSS_DEATH, %d0
     beq.w 9f
     movea.l E_KIND(%a3), %a0
-    cmpi.w #5, K_CAT(%a0)                   | an item is not hit
-    beq.w 9f
+    moveq #0, %d0                           | only an enemy (0) or a boss (7) is hit: not an item, a drop, an effect or an enemy's magic
+    move.b K_CAT+1(%a0), %d0
+    beq.s 12f
+    cmpi.b #7, %d0
+    bne.w 9f
+12:
     btst #4, E_FLAGS(%a3)                   | hidden (Tamazutsu, Nash): it cannot be hit
     bne.w 9f
     btst #7, hero_air+1(%pc)                | Player_Flags bit 7: attacking
@@ -2275,15 +2462,10 @@ en_weapon:
     moveq #3, %d0
     bsr.w sound_play_sfx
     clr.b E_HIT(%a3)
-    move.w K_EXP(%a0), %d0                  | Player_AddExperienceFromSprite (the rank does not rise yet)
-    lea hud_state(%pc), %a1
-    add.w %d0, 2(%a1)
-    bcc.s 1f
-    move.w #0xFFFF, 2(%a1)
-1:  lea hud_dirty(%pc), %a1
-    st (%a1)
+    move.w K_EXP(%a0), %d0                  | Player_AddExperienceFromSprite
+    bsr.w exp_add
     move.l %a0, E_PREV(%a3)                 | Sprite_SetDeathEntity: what it was, the death effect's script (a boss has its own)
-    cmpi.w #7, K_CAT(%a0)
+    cmpi.b #7, K_CAT+1(%a0)
     beq.s 2f
     moveq #E_DEATH, %d0
     bra.s 3f
@@ -2368,7 +2550,7 @@ en_touch:
     andi.w #0xFF, %d2
     cmp.w %d2, %d1
     bcc.w 9f
-    cmpi.w #5, K_CAT(%a0)                   | an item: the message and what it does
+    cmpi.b #5, K_CAT+1(%a0)                   | an item: the message and what it does
     bne.s 15f
     bsr.w item_pickup
     bra.w 9f
@@ -2447,7 +2629,7 @@ en_touch:
 9:  movem.l (%sp)+, %d0-%d5/%a0-%a2
     rts
 
-| Player_ReduceHP: d0.w = the damage, 8.8. The power is the HUD's byte and a fraction (hero_hpl); below nothing he is dead (no Elixir yet).
+| Player_ReduceHP: d0.w = the damage, 8.8. The power is the HUD's byte and a fraction (hero_hpl); below nothing he is dead (the Elixir lets him live).
 en_reduce_hp:
     movem.l %d0-%d1/%a0-%a1, -(%sp)
     lea hud_state(%pc), %a0
@@ -2468,7 +2650,11 @@ en_reduce_hp:
     clr.b (%a0)
     lea hud_dirty(%pc), %a0
     st (%a0)
-    lea hero_x(%pc), %a1
+    btst #3, inv+INV_SPECIAL(%pc)           | the Elixir: used at once, no death
+    beq.s 2f
+    bsr.w use_elixir
+    bra.s 9f
+2:  lea hero_x(%pc), %a1
     bsr.w death_start
 9:  movem.l (%sp)+, %d0-%d1/%a0-%a1
     rts
@@ -2658,7 +2844,7 @@ draw_enemies:
     andi.b #2, %d0
     bne.w 8f                                | hit: it blinks (CurrentSprite_UpdateState draws when the counter's bit 1 is clear)
     movea.l E_KIND(%a3), %a0
-    cmpi.w #5, K_CAT(%a0)
+    cmpi.b #5, K_CAT+1(%a0)
     bne.s 14f
     btst #4, E_FLAGS(%a3)                   | an item that is hidden is not drawn
     bne.w 8f
@@ -3182,6 +3368,17 @@ grieve_frames:
     rts
 
     .section .rodata
+magic_hit_w:                                | CAST_MAGIC_HIT_WIDTHS and ...HEIGHTS, MAGIC_DAMAGE, CAST_MAGIC_HIT_BEHAVIORS (as E_VAL: the kind in bits 7-6, the updates in the low bits)
+    .byte 11, 11, 27, 11, 11
+magic_hit_h:
+    .byte 11, 27, 11, 11, 11
+magic_damage:
+    .byte 6, 9, 24, 34, 38
+magic_stun:
+    .byte 0x44, 0x88, 0xC0
+stun_step:                                  | the pushes: Deluge 3 pixels, Thunder 2, Fire 4
+    .byte 3, 2, 4
+    .even
 hbox_width:                                 | SPRITE_HITBOX_WIDTHS and ...HEIGHTS (the hit box types)
     .byte 0x0F, 0x0F, 0x1F, 0x1F, 0x1F, 0x3F, 0x2F
 hbox_height:

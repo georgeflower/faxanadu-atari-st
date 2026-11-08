@@ -86,7 +86,7 @@ en_any_enemy:
 1:  cmpi.b #0xFF, E_ENT(%a0)
     beq.s 2f
     movea.l E_KIND(%a0), %a1
-    tst.w K_CAT(%a1)
+    tst.b K_CAT+1(%a1)
     beq.s 8f
 2:  lea E_BYTES(%a0), %a0
     dbra %d1, 1b
@@ -218,11 +218,32 @@ item_pickup:
 items_tick:
     movem.l %d0-%d1/%a0-%a2, -(%sp)
     lea item_ticks(%pc), %a0
-    addq.b #1, (%a0)
-    move.b (%a0), %d0
-    andi.b #0x3F, %d0
-    bne.s 9f
-    lea inv(%pc), %a2
+    addq.w #1, (%a0)
+    move.w (%a0), %d0
+    andi.w #0x3F, %d0
+    bne.w 9f
+    lea hourglass(%pc), %a1                 | the hour glass first, then the wing boots
+    tst.w (%a1)
+    bmi.s 1f
+    subq.w #1, (%a1)
+    bpl.s 1f
+    lea text_data+TEXT_HOURGLASS_GONE(%pc), %a0
+    bsr.w message_box
+    move.w pkg_ptr+PKG_MUSIC(%pc), %d0      | Areas_DefaultMusic comes back
+    bsr.w sound_play_music
+    lea cur_music(%pc), %a0
+    move.w %d0, (%a0)
+1:  lea hero_wings(%pc), %a1
+    tst.w (%a1)
+    bmi.s 2f
+    subq.w #1, (%a1)
+    bmi.s 3f
+    move.b 1(%a1), %d0                      | the time on the HUD
+    bsr.w hud_set_time
+    bra.s 2f
+3:  lea text_data+TEXT_WINGS_GONE(%pc), %a0
+    bsr.w message_box
+2:  lea inv(%pc), %a2
     lea INV_GLOVE(%a2), %a1
     lea text_data+TEXT_GLOVE_GONE(%pc), %a0
     bsr.s item_count
@@ -230,6 +251,16 @@ items_tick:
     lea text_data+TEXT_OINTMENT_GONE(%pc), %a0
     bsr.s item_count
 9:  movem.l (%sp)+, %d0-%d1/%a0-%a2
+    rts
+
+| UI_DrawTimeValue: d0.b = the seconds on the HUD (the ROM draws it only when the boots are put on and at each tick; it stays after they are gone).
+hud_set_time:
+    movem.l %a0, -(%sp)
+    lea hud_state(%pc), %a0
+    move.b %d0, 8(%a0)
+    lea hud_dirty(%pc), %a0
+    st (%a0)
+    movem.l (%sp)+, %a0
     rts
 
 item_count:                                 | a1 = the time left, a0 = the message for its end
@@ -273,12 +304,32 @@ item_glove:                                 | 20 seconds of more strength, and 1
 item_ointment:                              | 30 seconds in which nothing hurts, and 100 experience
     move.b #30, INV_OINTMENT(%a2)
 item_100:
+    move.w #100, %d0
+    bra.w exp_add
+
+| Player_UpdateExperience: d0.w = the experience gained (the most is 65535). Player_CheckReachedNextTitle: when the experience has reached what the next rank
+| needs (PLAYER_TITLE_EXP_NEEDED[NextPlayerTitle]) the rank earned goes up one (silently: a guru gives it, hero_title stays). Clobbers nothing.
+exp_add:
+    movem.l %d0-%d2/%a0-%a1, -(%sp)
     lea hud_state(%pc), %a0
-    addi.w #100, 2(%a0)
+    add.w %d0, 2(%a0)
     bcc.s 1f
     move.w #0xFFFF, 2(%a0)
-1:  lea hud_dirty(%pc), %a0
-    st (%a0)
+1:  lea hud_dirty(%pc), %a1
+    st (%a1)
+    lea hero_next(%pc), %a1
+    move.w (%a1), %d0
+    cmpi.w #15, %d0
+    bcc.s 9f
+    add.w %d0, %d0
+    lea title_table(%pc), %a0
+    move.w (%a0,%d0.w), %d1                 | what the next rank needs
+    lea hud_state+2(%pc), %a0
+    move.w (%a0), %d2
+    cmp.w %d1, %d2
+    bcs.s 9f
+    addq.w #1, (%a1)
+9:  movem.l (%sp)+, %d0-%d2/%a0-%a1
     rts
 
 item_special:                               | Black Onyx, Pendant, Elixir, Magical Rod
@@ -382,11 +433,195 @@ item_actions:                               | by entity from $48: 0 nothing, 1 a
     .byte 4, 0, 0                      | 0x60
     .even
 
+    .text
+| ---------------------------------------------------------------------------------------------------------------------------- using items
+| GameLoop_CheckUseCurrentItem: Down held and B pressed just now, not jumping or falling: the item he holds (INV_ITEM, a number of the ROM's list) is used.
+| Keys and rings do nothing here (a key is used at its door); the Mattock is not done. Clobbers nothing.
+use_item:
+    movem.l %d0-%d2/%a0-%a2, -(%sp)
+    move.w hero_dead(%pc), %d0
+    bne.w 9f
+    lea input_state(%pc), %a0
+    btst #6, IN_PAD_NEW(%a0)
+    beq.w 9f
+    btst #2, IN_PAD(%a0)
+    beq.w 9f
+    move.b hero_x+19(%pc), %d0              | not jumping (bit 0), not falling (bit 2)
+    andi.b #5, %d0
+    bne.w 9f
+    moveq #0, %d0
+    move.b inv+INV_ITEM(%pc), %d0
+    cmpi.b #13, %d0
+    beq.s 1f
+    cmpi.b #15, %d0
+    beq.s 2f
+    cmpi.b #16, %d0
+    bne.w 9f
+    lea text_data+TEXT_USED_POTION(%pc), %a0    | the Red Potion: full power, a step at a time
+    bsr.s use_spent
+    moveq #2, %d1
+    bsr.w fill_power
+    bra.w 9f
+1:  lea text_data+TEXT_USED_HOURGLASS(%pc), %a0 | the Hour Glass: half the power, 15 seconds in which the enemies stand still, its song
+    bsr.s use_spent
+    lea hud_state(%pc), %a0
+    lea hero_hpl(%pc), %a1
+    moveq #0, %d0
+    move.b (%a0), %d0
+    lsl.w #8, %d0
+    move.b (%a1), %d0
+    lsr.w #1, %d0
+    move.b %d0, (%a1)
+    lsr.w #8, %d0
+    move.b %d0, (%a0)
+    lea hud_dirty(%pc), %a0
+    st (%a0)
+    lea hourglass(%pc), %a0
+    move.w #15, (%a0)
+    moveq #0x0B, %d0
+    bsr.w sound_play_music
+    lea cur_music(%pc), %a0
+    move.w %d0, (%a0)
+    bra.w 9f
+2:  lea text_data+TEXT_USED_WINGS(%pc), %a0     | the Wing Boots: seconds by his rank
+    bsr.s use_spent
+    move.w hero_title(%pc), %d0
+    lsr.w #2, %d0
+    andi.w #3, %d0
+    lea wings_time(%pc), %a0
+    moveq #0, %d1
+    move.b (%a0,%d0.w), %d1
+    lea hero_wings(%pc), %a0
+    move.w %d1, (%a0)
+    move.w %d1, %d0
+    bsr.w hud_set_time
+9:  movem.l (%sp)+, %d0-%d2/%a0-%a2
+    rts
+
+| The message of an item used up (a0), then nothing is held, and sound $1A.
+use_spent:
+    bsr.w message_box
+    lea inv+INV_ITEM(%pc), %a0
+    move.b #0xFF, (%a0)
+    moveq #0x1A, %d0
+    bra.w sound_play_sfx
+
+| One frame in which the game stands still: the VBL, and the HUD if it changed.
+frozen_wait:
+    movem.l %d0/%a0, -(%sp)
+    bsr.w wait_vbl
+    lea hud_dirty(%pc), %a0
+    tst.b (%a0)
+    beq.s 1f
+    clr.b (%a0)
+    bsr.w hud_update_all
+1:  movem.l (%sp)+, %d0/%a0
+    rts
+
+| Player_FillHPAndMP's loops: d1 = the step (Red Potion 2, Elixir 4) added to the power every four frames, with sound $13, until it is 80 (at least once);
+| fill_magic does the same for the magic.
+fill_power:
+    movem.l %d0-%d2/%a0-%a1, -(%sp)
+    lea hud_state(%pc), %a1
+    bra.s fill_loop
+fill_magic:
+    movem.l %d0-%d2/%a0-%a1, -(%sp)
+    lea hud_state+1(%pc), %a1
+fill_loop:
+1:  moveq #0x13, %d0
+    bsr.w sound_play_sfx
+    move.b (%a1), %d0
+    add.b %d1, %d0
+    cmpi.b #80, %d0
+    bcs.s 2f
+    moveq #80, %d0
+2:  move.b %d0, (%a1)
+    lea hud_dirty(%pc), %a0
+    st (%a0)
+    moveq #3, %d2
+3:  bsr.s frozen_wait
+    dbra %d2, 3b
+    cmpi.b #80, (%a1)
+    bcs.s 1b
+    movem.l (%sp)+, %d0-%d2/%a0-%a1
+    rts
+
+| Game_ClearTimedItems (Game_Start, Player_Spawn): wing boots, hour glass, glove and ointment are not in force; the Mattock quest bit goes (Player_Spawn).
+timers_clear:
+    movem.l %a0, -(%sp)
+    lea hero_wings(%pc), %a0
+    move.w #-1, (%a0)
+    lea hourglass(%pc), %a0
+    move.w #-1, (%a0)
+    lea inv(%pc), %a0
+    move.b #0xFF, INV_GLOVE(%a0)
+    move.b #0xFF, INV_OINTMENT(%a0)
+    andi.b #0xEF, INV_QUESTS(%a0)
+    movem.l (%sp)+, %a0
+    rts
+
+| Player_UseElixir (the damage left no power): the Elixir is used up, its message, power and magic filled to 80 a step of 4 at a time.
+use_elixir:
+    movem.l %d1/%a0, -(%sp)
+    lea inv+INV_SPECIAL(%pc), %a0
+    andi.b #0xF7, (%a0)
+    lea text_data+TEXT_USED_ELIXIR(%pc), %a0
+    bsr.w message_box
+    moveq #4, %d1
+    bsr.w fill_power
+    bsr.w fill_magic
+    movem.l (%sp)+, %d1/%a0
+    rts
+
+| Game_OpenDoorWithAKey and the rings' tests (Game_RunDoorRequirementHandler): d2 = the door's requirement (1 Ace, 2 King, 3 Queen, 4 Jack, 5 Joker keys, 6 Ring of
+| Elf, 7 Ring of Dworf, 8 Demon's Ring). d0.w = 1 when the door opens: the key he holds is the one (it is used up: its message), or he has the ring (it stays);
+| else the mark by the key hole (or the ring's question) is said and the door stays shut.
+door_unlock:
+    movem.l %d1-%d2/%a0, -(%sp)
+    move.w %d2, %d1
+    cmpi.w #6, %d2
+    bcc.s 5f
+    addq.w #3, %d2                          | the key's number in the ROM's item list: A 4 ... Joker 8
+    cmp.b inv+INV_ITEM(%pc), %d2
+    bne.s 6f
+    lea text_data+TEXT_USED_KEY(%pc), %a0
+    bsr.w message_box
+    lea inv+INV_ITEM(%pc), %a0
+    move.b #0xFF, (%a0)
+    bra.s 8f
+5:  lea ring_masks-6(%pc), %a0
+    move.b (%a0,%d1.w), %d0
+    and.b inv+INV_SPECIAL(%pc), %d0
+    bne.s 8f
+    lea text_data+TEXT_RING(%pc), %a0
+    bsr.w message_box
+    bra.s 7f
+6:  add.w %d1, %d1
+    lea key_hints-2(%pc), %a0
+    move.w (%a0,%d1.w), %d1
+    lea text_data(%pc), %a0
+    adda.w %d1, %a0
+    bsr.w message_box
+7:  moveq #0, %d0
+    bra.s 9f
+8:  moveq #6, %d0
+    bsr.w sound_play_sfx
+    moveq #1, %d0
+9:  movem.l (%sp)+, %d1-%d2/%a0
+    rts
+
+    .section .rodata
+ring_masks:
+    .byte 0x80, 0x20, 0x10
+key_hints:
+    .word TEXT_KEY_A, TEXT_KEY_K, TEXT_KEY_Q, TEXT_KEY_J, TEXT_KEY_JO
+    .even
+
     .section .data
 item_ticks:
-    .byte 0
+    .word 0
 inv:                                        | the inventory (a new game: nothing, no glove and no ointment in force, the equipment the build gave him)
     .space INV_GLOVE
-    .byte 0xFF, 0xFF, 0, HERO_ARMOUR, HERO_SHIELD & 0xFF, 0xFF, 0
+    .byte 0xFF, 0xFF, 0, HERO_ARMOUR, HERO_SHIELD & 0xFF, ITEM & 0xFF, 0
     .even
     .text

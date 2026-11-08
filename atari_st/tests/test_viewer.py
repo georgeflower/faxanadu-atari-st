@@ -156,14 +156,14 @@ class ViewerTests(unittest.TestCase):
     def test_wing_boots_fly_up_and_down_glide_and_steer_in_the_air(self) -> None:
         """With the boots on (WINGS=40 seconds) and A held (`tools/hero_physics.py` against the ROM in jsnes): up flies a pixel a frame, down a pixel
         and a half, with A alone he glides down a pixel a frame (8 without A) and steers left and right in the air; he is in the pose of the jump.
-        Frames are counted with `wings_clock`, which counts the hero's steps."""
+        Frames are counted with `step_clock`, which counts the hero's steps."""
         args = ["ALL=1", "AREA=0", "SCREEN=1", "HERO=16,144,0,255,0,0,1", "VIEWER_DEFS=--defsym WINGS=40"]
 
         def span(pokes, stick):
             """(frames, dy, dx) from 1 VBL after the pokes to 40 VBLs after, the hero put at x 16 by the pokes."""
             first = self.run_scenario(args, pokes, 600, "shots_wings")
             last = self.run_scenario(args, pokes, 640, "shots_wings")
-            return (last[1]("wings_clock") - first[1]("wings_clock"), last[1]("hero_y") - first[1]("hero_y"), last[1]("hero_x") - first[1]("hero_x"), last[1])
+            return (last[1]("step_clock") - first[1]("step_clock"), last[1]("hero_y") - first[1]("hero_y"), last[1]("hero_x") - first[1]("hero_x"), last[1])
 
         frames, dy, _, word = span([(599, "joy", 1), (599, "space", 1)], 1)
         self.assertGreater(frames, 20)
@@ -182,16 +182,51 @@ class ViewerTests(unittest.TestCase):
         _, dy, _, _ = span([(599, "y", 16)], 0)
         self.assertGreater(dy, 60, "without A he falls 8 pixels a frame")
 
-    def test_the_w_key_puts_the_wing_boots_on_for_the_ranks_time_and_they_run_out(self) -> None:
-        """No boots at the start; W gives the rank's time (title 0: 40 seconds, title 12: 10) and a second is 64 frames."""
-        _, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1"], [], 650, "shots_wings_key")
+    @staticmethod
+    def use_pokes(at: int, dismiss: int = 16) -> list:
+        """Down and B at `at` (the item is used; its message opens), B again `dismiss` frames later takes the message away, then everything is let go."""
+        return [(at, "joy", 2), (at + 1, "b", 1), (at + 4, "b", 0), (at + dismiss, "b", 1), (at + dismiss + 3, "b", 0), (at + dismiss + 4, "joy", 0)]
+
+    def test_the_wing_boots_are_used_with_down_and_b_for_the_ranks_time_and_they_run_out(self) -> None:
+        """The boots as the held item (number 15): Down and B uses them up (the message comes first), the rank's time starts (title 0: 40 seconds,
+        title 12: 10; a second is 64 frames) and the HUD shows it; without the item nothing happens."""
+        item = [(390, "inv", 36 << 8 | 15)]
+        _, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1"], self.use_pokes(599), 650, "shots_wings_key")
         self.assertEqual(word("hero_wings"), -1)
-        _, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1"], [(599, "w", 1)], 650, "shots_wings_key")
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1"], item + self.use_pokes(599), 650, "shots_wings_key")
         self.assertIn(word("hero_wings"), (40, 39), "(the ROM too counts the second from the global frame counter)")
-        _, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1", "VIEWER_DEFS=--defsym TITLE=12"], [(599, "w", 1)], 650, "shots_wings_key")
+        self.assertEqual((word.raw("inv", 37)[36], word.raw("hud_state", 9)[8]), (255, word("hero_wings")), "used up; the HUD's time")
+        args = ["ALL=1", "AREA=0", "SCREEN=1", "VIEWER_DEFS=--defsym TITLE=12"]
+        _, word, _ = self.run_scenario(args, item + self.use_pokes(599), 650, "shots_wings_key")
         self.assertIn(word("hero_wings"), (10, 9))
-        _, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1", "VIEWER_DEFS=--defsym TITLE=12"], [(599, "w", 1)], 800, "shots_wings_key")
+        _, word, _ = self.run_scenario(args, item + self.use_pokes(599), 800, "shots_wings_key")
         self.assertIn(word("hero_wings"), (7, 6), "a second every 64 frames: 200 frames are 3 or 4 of them")
+
+    def test_the_red_potion_fills_the_power_two_at_a_time_and_is_used_up(self) -> None:
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1", "HUD=20,40,0,0,0"], [(390, "inv", 36 << 8 | 16)] + self.use_pokes(599), 800, "shots_potion")
+        self.assertEqual((word.raw("hud_state", 2), word.raw("inv", 37)[36]), (bytes([80, 40]), 255), "power full, magic as it was, the item gone")
+
+    def test_the_hour_glass_halves_the_power_and_stops_the_enemies(self) -> None:
+        """Eolis screen 4: the glass is used at VBL 400 (power 80 becomes 40, 15 seconds, its song); a Zozura stays where it was meanwhile and goes on without it."""
+        item = [(390, "inv", 36 << 8 | 13)]
+        args = ["ALL=1", "AREA=0", "SCREEN=4", "HERO=40,144,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"]
+        _, word, _ = self.run_scenario(args, item + self.use_pokes(400), 440, "shots_glass")
+        early = word.raw("enemies", 8 * 30)[7 * 30:7 * 30 + 30]
+        hp = word.raw("hud_state", 1)[0]
+        self.assertTrue(0 < hp <= 40, "half of 80, less what the Zozura took")
+        self.assertEqual((word("cur_music"), word.raw("inv", 37)[36]), (0x0B, 255))
+        self.assertIn(word("hourglass"), (15, 14))
+        _, word, _ = self.run_scenario(args, item + self.use_pokes(400), 540, "shots_glass")
+        late = word.raw("enemies", 8 * 30)[7 * 30:7 * 30 + 30]
+        self.assertEqual(early[3], late[3], "the Zozura did not move")
+        _, word, _ = self.run_scenario(args, self.use_pokes(400), 540, "shots_glass")
+        self.assertNotEqual(early[3], word.raw("enemies", 8 * 30)[7 * 30 + 3], "it moves without the glass")
+
+    def test_the_elixir_is_used_when_the_hit_would_kill_and_fills_power_and_magic(self) -> None:
+        """One power left, the Elixir (INV_SPECIAL bit 3) and a hit: no death; the message, then power and magic 80 and the Elixir is gone."""
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1", "HERO=128,144,0,255,0,0,1", "HUD=1,30,0,0,0"],
+                                         [(390, "inv", 29 << 8 | 8), (599, "h", 1), (602, "h", 0), (620, "b", 1), (623, "b", 0)], 900, "shots_elixir")
+        self.assertEqual((word.raw("hud_state", 2), word.raw("inv", 37)[29] & 8, word("hero_dead")), (bytes([80, 80]), 0, 0))
 
     def test_a_hit_knocks_him_back_and_takes_power_and_he_is_invincible_for_60_frames(self) -> None:
         """The H key (debug: something hits him from the right) as `tools/hero_physics.hit` does it, checked there against the ROM in jsnes: he
@@ -797,6 +832,10 @@ class ViewerTests(unittest.TestCase):
                 text = f"memwrite ${base + sym['input_state'] + 264 + (0x23 if what == 'h' else 0x22):x} 0x{value:02x}\ncont\n"
             elif what == "hp":                                         # the hit points (a byte) of the sprite in slot 7 (E_HP is 15, a slot has 28 bytes)
                 text = f"memwrite ${base + sym['enemies'] + 7 * 30 + 15:x} 0x{value:02x}\ncont\n"
+            elif what.startswith("w:"):                                # a word of the program's own data by its label: "w:hourglass"
+                text = f"memwrite ${base + sym[what[2:]]:x} 0x{(value >> 8) & 255:02x} 0x{value & 255:02x}\ncont\n"
+            elif what == "hp6":                                        # the same for the sprite in slot 6
+                text = f"memwrite ${base + sym['enemies'] + 6 * 30 + 15:x} 0x{value:02x}\ncont\n"
             elif what == "key":                                        # any key by scan code: value = scan code << 8 | 1 (down) or 0 (up)
                 text = f"memwrite ${base + sym['input_state'] + 264 + (value >> 8):x} 0x{value & 255:02x}\ncont\n"
             elif what == "inv":                                        # a byte of the inventory block: value = offset << 8 | byte
@@ -940,14 +979,18 @@ class ViewerTests(unittest.TestCase):
                 n = word("en_counter")
                 self.assertGreater(n, 60)
                 eng = self.enemy_engine(rom, area, screen, word)
-                for _ in range(n):
+                import copy
+                for _ in range(n - 1):
                     eng.update_all()
+                before = copy.deepcopy(eng.sprites)
+                eng.update_all()
                 raw = word.raw("enemies", 8 * 30)
                 for i, s in enumerate(eng.sprites):
                     r = raw[i * 30:(i + 1) * 30]
                     got = (r[0], r[2], r[3], r[4], r[5], r[1], r[6], r[7], r[8], r[10], r[11], r[9], r[13], r[12], r[29], r[28])
-                    want = (s.ent, s.x, s.xf, s.y, s.yf, s.flags, s.phase, s.beh, s.arg1, s.d3, s.d2, s.internal, s.bxf, s.bxfull, s.byf, s.byfull)
-                    self.assertEqual(got, want, f"slot {i} after {n} updates")
+                    key = lambda s: (s.ent, s.x, s.xf, s.y, s.yf, s.flags, s.phase, s.beh, s.arg1, s.d3, s.d2, s.internal, s.bxf, s.bxfull, s.byf, s.byfull)
+                    # (a frame that takes longer than a VBL can be captured in the middle of the update, highest slot first: a slot not reached yet is as it was after n - 1)
+                    self.assertIn(got, (key(s), key(before[i])), f"slot {i} after {n} updates")
 
     def test_the_enemies_move_as_the_model_does_1(self) -> None:
         self.enemies_move(self.ENEMY_SCENES[0::2])
@@ -1001,7 +1044,7 @@ class ViewerTests(unittest.TestCase):
 
     def test_charron_casts_a_fireball(self) -> None:
         """Area 1 screen 25: Charron stands on the upper floor (y 64) and casts a fireball (entity 84) into a free slot; the hero, far below, is not hurt."""
-        ram, word, _ = self.run_scenario(["ALL=1", "AREA=1", "SCREEN=25", "HERO=16,144,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], 360, "shots_touch")
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=1", "SCREEN=25", "HERO=85,144,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], 360, "shots_touch")
         slots = [word.raw("enemies", 8 * 30)[i * 30] for i in range(8)]
         self.assertIn(0x15, slots)
         self.assertIn(0x54, slots, "a fireball in flight")
@@ -1026,6 +1069,37 @@ class ViewerTests(unittest.TestCase):
             pokes += [(v, "b", 1), (v + 4, "b", 0)]
         ram, word, _ = self.run_scenario(["ALL=1", f"AREA={area}", f"SCREEN={screen}", f"HERO={hero},0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], pokes, capture, "shots_item")
         return word, [word.raw("enemies", 8 * 30)[i * 30] for i in range(8)], word.raw("hud_state", 10), word.raw("inv", 36)
+
+    def magic_fight(self, spell: int, inv=(), capture: int = 440, extra=(), hp: int = 200) -> tuple[int, object]:
+        """Eolis screen 4, the hero at x 85 facing right, invincible, the Zozura in slot 6 (x 101, 11 pixels in front of the other one in slot 7) given 200 hit points; the hour glass (15 seconds) holds the enemies still given 200 hit points, the spell cast at VBL 398 (Up and fire): what the Zozura
+        lost, and the word reader."""
+        pokes = [(395, "hp6", hp), (285, "w:hourglass", 60), (285, "w:hero_invinc", 30000)] + [(390 + i, "inv", o << 8 | v) for i, (o, v) in enumerate(inv)] + [(398, "joy", 0x81), (400, "joy", 0)] + list(extra)
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=4", "HERO=85,144,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0", f"VIEWER_DEFS=--defsym MAGIC={spell}"],
+                                         pokes, capture, "shots_spell")
+        return hp - word.raw("enemies", 8 * 30)[6 * 30 + 15], word
+
+    def test_a_spell_hits_the_first_enemy_for_its_damage_once(self) -> None:
+        """Deluge 6, Thunder 9 (it flies on and hits nothing more), Death 34, Tilte 38 (Fire is 24 but its box misses a Zozura on the hero's floor); the Magical Rod
+        (INV_SPECIAL bit 2) adds half; the cost comes off the magic. (Verified in jsnes on the ROM for the Zozura: tools/refnes, the agent's probe.)"""
+        for spell, want in ((0, 6), (1, 9), (3, 34), (4, 38), (2, 0)):
+            lost, word = self.magic_fight(spell)
+            self.assertEqual(lost, want, f"spell {spell}")
+        lost, _ = self.magic_fight(3, [(29, 4)])
+        self.assertEqual(lost, 51, "Death with the Rod")
+        lost, word = self.magic_fight(1, hp=9)
+        self.assertEqual(word.raw("enemies", 8 * 30)[6 * 30], 71, "hit points equal to the damage: it lives (with none left)")
+        lost, word = self.magic_fight(1, hp=8)
+        self.assertEqual((word.raw("enemies", 8 * 30)[6 * 30] != 71, int.from_bytes(word.raw("hud_state", 4)[2:4], "big") > 0), (True, True), "one less: dead (the death effect is over by the capture), experience")
+
+    def test_the_experience_earns_the_next_rank_silently(self) -> None:
+        """Area 1 screen 24, the Power Glove (100 experience): with 950 the experience is 1050, which is what rank 1 costs (1000): hero_next is 1 and
+        hero_title stays 0 (a guru gives the rank); with 800 it stays at 0."""
+        for exp, want in ((950, 1), (800, 0)):
+            pokes = []
+            for v in range(400, 520, 20):
+                pokes += [(v, "b", 1), (v + 4, "b", 0)]
+            ram, word, _ = self.run_scenario(["ALL=1", "AREA=1", "SCREEN=24", "HERO=16,32,0,255,0,0,1", "WORLD=1", f"HUD=80,80,{exp},0,0"], pokes, 560, "shots_rank")
+            self.assertEqual((word("hero_title"), word("hero_next")), (0, want), exp)
 
     def test_the_glove_waits_for_a_key_and_then_gives_20_seconds_and_100_experience(self) -> None:
         """Area 1 screen 24: the hero lands on the Power Glove. The message (ROM text) comes first and holds everything: the glove is still there, nothing
@@ -1159,16 +1233,17 @@ class ViewerTests(unittest.TestCase):
         self.assert_picture(rows, sc.expected_screen(rom, 0, 1, word("camera"), hero=sc.Hero(48, 144, 0, 255, 0, 0, True)))
 
     def test_up_at_the_gate_of_eolis_leads_to_trunk(self) -> None:
-        """Eolis screen 8, the door at block 156 (a J key is needed: the viewer has all keys): the ROM (jsnes) puts him in Trunk screen 0 at
+        """Eolis screen 8, the door at block 156 (the J key is needed and is used up): the ROM (jsnes) puts him in Trunk screen 0 at
         16,160 in Trunk's own palette."""
         import faxanadu_rom as fr
         import hatari_shot as hs
         import st_convert as sc
 
         rom = fr.Rom(ROM)
-        ram, word, log = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=8", "HERO=192,144,0,255,0,0,1", "WORLD=1", "VIEWER_DEFS=--defsym NO_ENEMIES=1"],
-                                           [(599, "joy", 1), (602, "joy", 0)], 799, "shots_outside")
+        ram, word, log = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=8", "HERO=192,144,0,255,0,0,1", "WORLD=1", "VIEWER_DEFS=--defsym NO_ENEMIES=1 --defsym ITEM=7"],
+                                           [(599, "joy", 1), (602, "joy", 0), (620, "b", 1), (623, "b", 0)], 799, "shots_outside")
         self.assertEqual((word("cur_area"), word("cur_pal"), word("cur_screen")), (1, 6, 0))
+        self.assertEqual(word.raw("inv", 37)[36], 255, "the key is used up")
         self.assertEqual((word("hero_x"), word("hero_y")), (16, 160))
         self.assertEqual(word("cur_music"), 3)                 # AREA_TO_MUSIC_TABLE: Trunk's song
         rows = hs.decode_screen(ram, hs.video_base(log))
@@ -1191,9 +1266,12 @@ class ViewerTests(unittest.TestCase):
 
     def test_a_door_that_needs_a_key_stays_shut_without_it(self) -> None:
         """The gate of Eolis needs the J key (door requirement 4): with no keys (KEYS=0) Up does nothing."""
-        ram, word, log = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=8", "HERO=192,144,0,255,0,0,1", "WORLD=1", "VIEWER_DEFS=--defsym KEYS=0"],
+        ram, word, log = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=8", "HERO=192,144,0,255,0,0,1", "WORLD=1"],
                                            [(599, "joy", 1), (602, "joy", 0)], 799, "shots_locked")
         self.assertEqual((word("cur_area"), word("cur_screen")), (0, 8))
+        ram, word, log = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=8", "HERO=192,144,0,255,0,0,1", "WORLD=1", "VIEWER_DEFS=--defsym ITEM=5"],
+                                           [(599, "joy", 1), (602, "joy", 0)], 799, "shots_locked")
+        self.assertEqual((word("cur_area"), word("cur_screen"), word.raw("inv", 37)[36]), (0, 8, 5), "another key opens nothing and is not used up")
 
 
     # ------------------------------------------------------------------------------------------------------------------ text and the mantra

@@ -334,6 +334,8 @@ mantra_apply:
     move.b PW_RANK(%a1), %d0
     lea hero_title(%pc), %a0
     move.w %d0, (%a0)
+    lea hero_next(%pc), %a0
+    move.w %d0, (%a0)
     moveq #0, %d0
     move.b PW_SPAWN(%a1), %d0
     lea hero_spawn(%pc), %a0

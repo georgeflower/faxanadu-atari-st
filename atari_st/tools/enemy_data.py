@@ -134,7 +134,7 @@ def package_parts(rom: fr.Rom, area: int, screens: list[int], palette_index: int
     enemy_places: a word a screen (the offset of its list from the start of the part), then the lists, each place being the entity, x and y (words), ended by -1;
     enemy_kinds: a record of KIND_BYTES for each kind in the area (and the death effect, bread and coin): entity, hit box type, hit points, the script's offset in
       enemy_scripts, its first pose (frame f facing left is pose first + 2f, facing right + 1), the rule, experience, what it drops (kind << 8 | value), the weapon's
-      extents x and y, the touch box left, top, width, height, the damage it does, its category (the ROM's: 0 enemy, 1 dropped, 5 item, 7 boss) (words);
+      extents x and y, the touch box left, top, width, height, the damage it does, its category (the ROM's: 0 enemy, 1 dropped, 5 item, 7 boss) and, in the word's high byte, its magic defence (`SPRITE_ENTITY_MAGIC_DEFENSE`) (words);
     enemy_anim, enemy_images: the poses and the 8x8 images, as for the spells; enemy_scripts: the scripts, jumps as offsets within them."""
     import st_convert as sc
 
@@ -190,7 +190,7 @@ def package_parts(rom: fr.Rom, area: int, screens: list[int], palette_index: int
     for ent in used:
         info, kind = entity(rom, ent), kind_info(rom, ent)
         drop = 0 if kind["drop"] is None else kind["drop"][0] << 8 | kind["drop"][1]
-        row = [ent, info["hitbox"], info["hp"], entries[ent], firsts[ent], RULE[ent], kind["exp"], drop, *kind["extent"], *kind["bounds"], kind["damage"], kind["category"]]
+        row = [ent, info["hitbox"], info["hp"], entries[ent], firsts[ent], RULE[ent], kind["exp"], drop, *kind["extent"], *kind["bounds"], kind["damage"], kind["category"] | rom.byte("SPRITE_ENTITY_MAGIC_DEFENSE", ent) << 8]
         kinds += b"".join(v.to_bytes(2, "big") for v in row)
     head = 2 * len(lists)
     body, places = bytearray(), []

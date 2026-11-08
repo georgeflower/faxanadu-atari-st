@@ -12,7 +12,7 @@
     .equ DAMAGE, 8                          | the power an enemy's touch takes (debug keys H and G)
     .endif
     .ifndef WINGS
-    .equ WINGS, -1                          | seconds of wing boots left at the start (-1: none); the W key puts them on
+    .equ WINGS, -1                          | seconds of wing boots left at the start (-1: none)
     .endif
     .ifndef MAGIC
     .equ MAGIC, -1                          | the spell chosen at the start (0 Deluge, 1 Thunder, 2 Fire, 3 Death, 4 Tilte; -1 none); the M key chooses the next
@@ -20,8 +20,8 @@
     .ifndef TITLE
     .equ TITLE, 0
     .endif
-    .ifndef KEYS
-    .equ KEYS, 0x1FE                        | the keys and rings he has: bit n for door requirement n (there is no inventory yet; none is used up)
+    .ifndef ITEM
+    .equ ITEM, 0xFF                         | the item he holds at the start (a number of the ROM's item list: 7 is the J key; $FF none)
     .endif
 
     .equ PALETTE, 0xFF8240
@@ -244,6 +244,9 @@ start:
     bsr.w mantra_key                        | P: shows the mantra
     bsr.w menu_key                          | Tab (Select): the player menu
     bsr.w hero_step
+    .ifndef NO_PHYSICS
+    bsr.w use_item                          | Down and B: the item he holds is used
+    .endif
     bsr.w scroll_check                      | at the edge of the screen: scrolls to the next one (and comes back when it is done)
     .ifndef NO_PHYSICS
     bsr.w door_check                        | up in front of a door: the screen on the other side
@@ -472,9 +475,8 @@ restore_rect:
 | 2 holding to climb, 4 falling, 8 can climb, $10 climbing), climb 20, mtick 22, atk 24, atk timer 26, atk phase 28.
 hero_step:
     movem.l %d0-%d4/%a0-%a2, -(%sp)
-    .ifndef NO_PHYSICS
-    bsr.w wings_update
-    .endif
+    lea step_clock(%pc), %a0
+    addq.w #1, (%a0)
     lea input_state(%pc), %a0
     move.b IN_PAD(%a0), %d0
     moveq #0, %d4
@@ -716,7 +718,11 @@ hurt_keys:
     st (%a0)
     tst.w %d0
     bne.s 9f
-    bsr.w death_start                       | no power left (and no Elixir yet): dead
+    btst #3, inv+INV_SPECIAL(%pc)           | no power left: the Elixir, or dead
+    beq.s 3f
+    bsr.w use_elixir
+    bra.s 9f
+3:  bsr.w death_start
 9:  movem.l (%sp)+, %d0-%d1/%a0
     rts
 
@@ -868,6 +874,9 @@ hero_respawn:
     move.w %d2, (%a0)
     lea hud_dirty(%pc), %a0
     st (%a0)
+    lea hero_next(%pc), %a0                 | Player_SetInitialExpAndGold: the rank earned is the rank he has
+    move.w hero_title(%pc), (%a0)
+    bsr.w timers_clear                      | Game_ClearTimedItems: wing boots, hour glass, glove and ointment are lost; the mattock quest bit too
     lea hero_flip(%pc), %a0
     move.w #HERO_FLIP, (%a0)
     move.w #START_SCREEN, %d0
@@ -940,43 +949,6 @@ dissolve_image:
     blt.s 3b
     lea dissolve_buf(%pc), %a1
 9:  movem.l (%sp)+, %d0-%d5/%a0/%a2
-    rts
-
-| Game_DecWingBootsDuration: the seconds of wing boots left (hero_wings, -1 none) go down once every 64 frames and the boots are gone when they
-| pass 0. The W key puts them on for the rank's time (TITLE_TO_WINGBOOTS_DURATION) until there are items. Clobbers nothing.
-wings_update:
-    movem.l %d0-%d1/%a0, -(%sp)
-    moveq #0, %d1
-    lea input_state+IN_KEYS+0x11(%pc), %a0  | W
-    tst.b (%a0)
-    beq.s 1f
-    moveq #1, %d1
-1:  lea wings_key(%pc), %a0
-    move.w (%a0), %d0                       | down at the last frame?
-    move.w %d1, (%a0)
-    tst.w %d0
-    bne.s 2f
-    tst.w %d1
-    beq.s 2f
-    lea hero_title(%pc), %a0                | a new press: on for the rank's time
-    move.w (%a0), %d0
-    lsr.w #2, %d0
-    andi.w #3, %d0
-    lea wings_time(%pc), %a0
-    moveq #0, %d1
-    move.b (%a0,%d0.w), %d1
-    lea hero_wings(%pc), %a0
-    move.w %d1, (%a0)
-2:  lea wings_clock(%pc), %a0
-    addq.w #1, (%a0)
-    move.w (%a0), %d0
-    andi.w #0x3F, %d0
-    bne.s 9f
-    lea hero_wings(%pc), %a0
-    tst.w (%a0)
-    bmi.s 9f
-    subq.w #1, (%a0)
-9:  movem.l (%sp)+, %d0-%d1/%a0
     rts
 
 | Player_DrawWeapon's numbers: where the weapon is (weapon_x, weapon_y: the hero's place and the package's offsets for the pose) and how far it
@@ -1067,6 +1039,8 @@ magic_update:
     lea hud_dirty(%pc), %a0
     st (%a0)
     move.w %d0, (%a3)                       | the type
+    lea spell_hit(%pc), %a0
+    clr.w (%a0)
     moveq #0, %d2
     tst.w 4(%a1)
     beq.s 5f
@@ -1097,7 +1071,15 @@ magic_update:
 
 | The update handler of the spell on the screen. a3 = spell_state. Clobbers d0-d6, a0, a2.
 magic_step:
-    move.w (%a3), %d5
+    lea spell_hit(%pc), %a0                 | after a hit Thunder and Fire fly on for a time (24 and 255 updates) and hit nothing more
+    move.w (%a0), %d0
+    beq.s 0f
+    subq.w #1, %d0
+    move.w %d0, (%a0)
+    bne.s 0f
+    move.w #-1, (%a3)
+    rts
+0:  move.w (%a3), %d5
     cmpi.w #4, %d5
     beq.w 40f
     lea magic_speed(%pc), %a0               | Deluge 3, Thunder 2, Fire 4, Death 2 pixels a frame
@@ -1371,6 +1353,8 @@ spell_clear:
     lea spell_state(%pc), %a0
     move.w #-1, (%a0)
     clr.w 16(%a0)
+    lea spell_hit(%pc), %a0
+    clr.w (%a0)
     movea.l (%sp)+, %a0
     rts
 
@@ -2455,9 +2439,9 @@ door_check:
 5:  moveq #0, %d2
     move.b 6(%a1), %d2                      | the key he needs
     beq.s 6f
-    move.w keys_owned(%pc), %d3
-    btst %d2, %d3
-    beq.w 9f                                | locked (the ROM runs an IScript with the message: not done)
+    bsr.w door_unlock                       | the item he holds (used up), a ring he has: the door opens; else a message, and it stays shut
+    tst.w %d0
+    beq.w 9f
 6:  moveq #0, %d0
     move.b 3(%a1), %d0                      | the screen there
     moveq #0, %d1
@@ -2885,8 +2869,6 @@ saved_screen:
     .word 0
 saved_pos:
     .word 0
-keys_owned:
-    .word KEYS
 saved_vbl:
     .long 0
 pkg_name:
@@ -2972,6 +2954,10 @@ weapon_x:
     .word 0, 0, 0, 0                        | weapon_update: x, y, reach x, reach y
 spell_state:
     .word -1, 0, 0, 0, 0, 0, 0, 0, 0       | the spell: type (-1 none), flags ($40 flies right, $80 falls), x, x fraction, y, y fraction, counter, phase, interrupt counter
+hero_next:
+    .word TITLE                             | NextPlayerTitle: the rank earned (the experience reached its price); a guru makes it hero_title (not inside the hero block: it is addressed by offsets)
+spell_hit:
+    .word 0                                 | the spell has hit an enemy: the updates it flies on (Thunder 24, Fire 255) without hitting
 hero_magic:
     .word MAGIC                             | SelectedMagic
 magic_key:
@@ -2998,10 +2984,10 @@ dissolve_buf:
 blank_image:
     .space 40
     .even
-wings_key:
-    .word 0                                 | the W key was down at the last frame
-wings_clock:
-    .word 0                                 | frames, counted for the seconds
+step_clock:
+    .word 0                                 | frames the hero's step has run (for the tests)
+hourglass:
+    .word -1                                | DurationHourGlass: seconds left (-1: not in force); enemies of the category 0 stand still while it is
 wings_time:
     .byte 40, 30, 20, 10                    | TITLE_TO_WINGBOOTS_DURATION
 acc_delta:
