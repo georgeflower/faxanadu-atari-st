@@ -41,7 +41,7 @@ The numbers are the order I intend to work in. A step is done when its tests pas
 
 - D1. **Sprite data** (done for Zozura, Monodron, Snowman, Zombie, Ikeda, Myconid, Yuinaru, Hornet, Charron (with its fireball), Raiden, Grimlock, Lamprey, Giant Strider, Maskman and Geributa, the same path for the rest: add the kind to `enemy_data.py`): all enemy and NPC tiles, frames and palettes (banks 6-8, 11), converted as for the hero; per-screen sprite placements; the sprite entity tables (`SPRITE_ENTITY_*`: hit points, damage, drop values, ranges).
 - D2. **Enemy behaviours** (done: every ordinary enemy that stands on a screen, from Zozura to Ishiisu, with the death effect, drops, experience and touch damage; open: spawning and respawn rules, and what a spell does to an enemy; the bosses are D4, the NPCs and items are D3 and E): one kind at a time, each with a golden scene from the harness.
-- D3. **Items and magic**: pickups, the inventory, equipment changes (re-load the hero's tiles), magic spells and their sprites, keys and doors that need them.
+- D3. **Items and magic** (done: pickups and their effects on the lists, power and experience, the items' behaviours; open: glove and ointment time and effect, the inventory menu and equipment, magic): pickups, the inventory, equipment changes (re-load the hero's tiles), magic spells and their sprites, keys and doors that need them.
 - D4. **Bosses**: one each, after the normal enemies; their rooms and music cues. Done: Rokusutahn, Borabohra, Ripasheiku, King Grieve, Zoradohna, Pakukame, Zorugeriru, Shadow Eura; open: their drops and the ending (D3).
 
 ### E. Towns, buildings, text

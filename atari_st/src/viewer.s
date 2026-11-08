@@ -2826,6 +2826,7 @@ hud_load_state:
     .include "password.s"
     .include "text.s"
     .include "enemy.s"
+    .include "items.s"
 
     .section .rodata
 hud_layout:

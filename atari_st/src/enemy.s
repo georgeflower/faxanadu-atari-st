@@ -39,7 +39,7 @@
     .equ K_BW, 24
     .equ K_BH, 26
     .equ K_DMG, 28
-    .equ K_BOSS, 30                         | 1: a boss (when it dies, the boss death effect takes its place)
+    .equ K_CAT, 30                          | the ROM's category: 0 enemy, 1 dropped, 5 item, 7 boss (when it dies, the boss death effect takes its place)
     .equ KIND_BYTES, 32
     .equ E_BREAD, 1                         | the entities that are not enemies: bread and a coin (drops), the death effect
     .equ E_COIN, 2
@@ -256,7 +256,13 @@ en_behaviour:
     beq.w beh_hop
     cmpi.w #21, %d0
     beq.w beh_fall
-    cmpi.w #1, %d0
+    cmpi.w #41, %d0                         | the items (41 to 56 and 61)
+    bcs.s 1f
+    cmpi.w #57, %d0
+    bcs.w beh_item
+    cmpi.w #61, %d0
+    beq.w beh_item
+1:  cmpi.w #1, %d0
     bne.s en_behaviour_end
     bsr.w en_ready                          | Wait
     bsr.w en_countdown
@@ -2202,6 +2208,9 @@ en_weapon:
     beq.w 9f
     cmpi.b #E_BOSS_DEATH, %d0
     beq.w 9f
+    movea.l E_KIND(%a3), %a0
+    cmpi.w #5, K_CAT(%a0)                   | an item is not hit
+    beq.w 9f
     btst #4, E_FLAGS(%a3)                   | hidden (Tamazutsu, Nash): it cannot be hit
     bne.w 9f
     btst #7, hero_air+1(%pc)                | Player_Flags bit 7: attacking
@@ -2266,8 +2275,8 @@ en_weapon:
 1:  lea hud_dirty(%pc), %a1
     st (%a1)
     move.l %a0, E_PREV(%a3)                 | Sprite_SetDeathEntity: what it was, the death effect's script (a boss has its own)
-    tst.w K_BOSS(%a0)
-    bne.s 2f
+    cmpi.w #7, K_CAT(%a0)
+    beq.s 2f
     moveq #E_DEATH, %d0
     bra.s 3f
 2:  moveq #E_BOSS_DEATH, %d0
@@ -2351,7 +2360,11 @@ en_touch:
     andi.w #0xFF, %d2
     cmp.w %d2, %d1
     bcc.w 9f
-    lea hud_state(%pc), %a1
+    cmpi.w #5, K_CAT(%a0)                   | an item: the message and what it does
+    bne.s 15f
+    bsr.w item_pickup
+    bra.w 9f
+15: lea hud_state(%pc), %a1
     cmpi.b #E_BREAD, %d5
     beq.w 5f
     cmpi.b #E_COIN, %d5
@@ -2631,6 +2644,11 @@ draw_enemies:
     andi.b #2, %d0
     bne.w 8f                                | hit: it blinks (CurrentSprite_UpdateState draws when the counter's bit 1 is clear)
     movea.l E_KIND(%a3), %a0
+    cmpi.w #5, K_CAT(%a0)
+    bne.s 14f
+    btst #4, E_FLAGS(%a3)                   | an item that is hidden is not drawn
+    bne.w 8f
+14:
     move.w K_POSE(%a0), %d6
     move.w K_RULE(%a0), %d0
     beq.w 2f

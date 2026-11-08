@@ -826,9 +826,9 @@ class ViewerTests(unittest.TestCase):
                     (5, 32, "16,144", 290), (5, 34, "16,144", 290), (5, 3, "144,144", 290), (6, 13, "144,144", 290), (6, 10, "16,160", 290), (6, 11, "144,144", 290),
                     (7, 15, "208,144", 293), (7, 16, "16,144", 290), (2, 80, "16,160", 290), (2, 81, "16,160", 290), (2, 82, "16,160", 290),
                     (6, 30, "240,144", 290), (2, 59, "240,144", 302), (6, 23, "16,144", 290), (6, 25, "240,144", 290),
-                    (1, 58, "16,144", 290), (6, 26, "16,144", 290), (7, 17, "208,144", 290),
+                    (1, 58, "16,144", 293), (6, 26, "16,144", 290), (7, 17, "208,144", 290),
                     (2, 51, "16,144", 290), (2, 63, "16,144", 290), (7, 4, "16,144", 290), (6, 22, "16,144", 302),
-                    (2, 65, "16,144", 290), (6, 18, "16,144", 290), (7, 1, "16,144", 291),
+                    (2, 65, "208,144", 290), (6, 18, "16,144", 290), (7, 1, "16,144", 291),
                     (6, 31, "16,144", 330), (7, 7, "16,144", 330), (7, 11, "16,144", 330),
                     (7, 5, "16,144", 330), (7, 12, "16,144", 330), (2, 64, "64,144", 290),
                     (7, 0, "240,144", 310), (7, 0, "240,144", 345))    # area, screen, hero, the capture's VBL
@@ -845,9 +845,9 @@ class ViewerTests(unittest.TestCase):
         eng = em.Engine(rom.prg(14), ed.random_table(rom), bytes(fm.decode_screen(rom, area, screen)[:208]) + bytes([free]) * 48, props)
         eng.hero_x, eng.hero_y = word("hero_x"), word("hero_y")
         eng.hero.flags = 0x40 if word("hero_flip") else 0           # (Player_Flags: bit 6 faces right)
-        for ent in ed.EXTRAS + ed.ENEMIES + tuple(ed.SPAWNED.values()):
+        for ent in ed.EXTRAS + ed.ENEMIES + ed.ITEMS + tuple(ed.SPAWNED.values()):
             eng.kinds[ent] = ed.kind_info(rom, ent)
-        for i, (ent, x, y) in enumerate(p for p in ed.placements(rom, area_index, screen) if p[0] in ed.ENEMIES):
+        for i, (ent, x, y) in enumerate(p for p in ed.placements(rom, area_index, screen) if p[0] in ed.ENEMIES or p[0] in ed.ITEMS):
             s = eng.sprites[7 - i]
             s.ent, s.x, s.y, s.beh, s.hbox = ent, x, y, 0xFF, ed.entity(rom, ent)["hitbox"]
             s.script = rom.word("SPRITE_BSCRIPTS", ent)
@@ -889,7 +889,7 @@ class ViewerTests(unittest.TestCase):
                                                   hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 0, word("hero_frame"), bool(word("hero_flip"))))
                     masks = em.flip_masks([(sp.ent, sp.flags, sp.hit) for sp in sprites], counter, 0x40 if word("hero_flip") else 0)
                     for i, sp in enumerate(sprites):
-                        if sp.ent == em.NONE or not em.is_drawn(sp.ent, sp.phase, counter, sp.d2):
+                        if sp.ent == em.NONE or not em.is_drawn(sp.ent, sp.phase, counter, sp.d2, sp.flags):
                             continue
                         app = fs.appearance(rom, ed.entity(rom, sp.ent)["appearance"] + em.appearance_offset(sp.ent, sp.phase, counter, sp.d2, sp.internal), "TILEINFO_ENTITY_ADDRS")
                         layer = fs.sprite_layer(fs.place(app, sp.x, sp.y, masks[i]), fs.entity_tiles(rom, sp.ent), palettes)
@@ -991,6 +991,32 @@ class ViewerTests(unittest.TestCase):
         state = word.raw("hud_state", 10)
         self.assertLess(state[0], 80)
         self.assertEqual((80 - state[0]) % 7, 0, state[0])
+
+    def item_scene(self, area: int, screen: int, hero: str, keys: bool, capture: int):
+        """The hero put on the spot above an item (area, screen, hero x,y), a key pressed every 20 VBLs from 400 to dismiss the message when `keys`."""
+        pokes = []
+        for v in range(400, 520, 20) if keys else ():
+            pokes += [(v, "b", 1), (v + 4, "b", 0)]
+        ram, word, _ = self.run_scenario(["ALL=1", f"AREA={area}", f"SCREEN={screen}", f"HERO={hero},0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], pokes, capture, "shots_item")
+        return word, [word.raw("enemies", 8 * 30)[i * 30] for i in range(8)], word.raw("hud_state", 10), word.raw("inv", 36)
+
+    def test_the_glove_waits_for_a_key_and_then_gives_20_seconds_and_100_experience(self) -> None:
+        """Area 1 screen 24: the hero lands on the Power Glove. The message (ROM text) comes first and holds everything: the glove is still there, nothing
+        changed. A key takes the message away; the glove is gone, the experience is 100 and the glove's time (inv, DurationGlove) is 20
+        (tests/test_items.py checks the effects against the game)."""
+        word, slots, hud, inv = self.item_scene(1, 24, "16,32", False, 430)
+        self.assertIn(0x48, slots)
+        self.assertEqual((int.from_bytes(hud[2:4], "big"), inv[31]), (0, 255))
+        word, slots, hud, inv = self.item_scene(1, 24, "16,32", True, 560)
+        self.assertNotIn(0x48, slots)
+        self.assertEqual((int.from_bytes(hud[2:4], "big"), inv[31]), (100, 20))
+
+    def test_a_poison_potion_takes_16_power(self) -> None:
+        """Area 1 screen 53: the potion on the floor (the Snowmen may hurt him too, in steps of 4, so no more than 16 and 4 off)."""
+        word, slots, hud, inv = self.item_scene(1, 53, "32,144", True, 560)
+        self.assertNotIn(0x4C, slots)
+        self.assertLessEqual(hud[0], 64)
+        self.assertEqual((80 - 16 - hud[0]) % 4, 0, hud[0])
 
     def test_up_at_a_building_door_goes_in_and_walking_off_the_side_comes_out(self) -> None:
         """Eolis screen 1, the hero at the first door (x 48, block 147): a building (the ROM, in jsnes: area 4, screen 7's layout, palette 24,

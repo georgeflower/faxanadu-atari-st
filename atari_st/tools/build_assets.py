@@ -157,10 +157,16 @@ def main() -> int:
     # the font (96 glyphs of 8 bytes), then the texts the program shows, each ended by a 0 byte: text_data + TEXT_x is where one starts
     wrong, ask = ft.password_lines(rom)
     texts = {"DEATH": ft.message(rom, ft.MESSAGE_DEATH), "MEDITATE": ft.message(rom, ft.MESSAGE_MEDITATE), "WRONG": wrong, "ASK": ask}
+    import enemy_model as em
+
+    for message in sorted(set(em.Engine.ITEM_MESSAGES.values())):         # what the game says when an item is picked up (the ROM's messages)
+        texts[f"MSG_{message:02X}"] = ft.message(rom, message)
     text_blob, text_equ = bytearray(ft.font(rom)), []
     for name, text in texts.items():
         text_equ.append(f"    .equ TEXT_{name}, {len(text_blob)}\n")
         text_blob += text.encode("ascii") + b"\0"
+    for ent in range(0x48, 0x61):                  # TEXT of an item's message by entity (0 for what is no item): the table items.s reads
+        text_equ.append(f"    .equ ITEMTXT_{ent:02X}, " + (f"TEXT_MSG_{em.Engine.ITEM_MESSAGES[ent]:02X}" if ent in em.Engine.ITEM_MESSAGES else "0") + "\n")
     (args.out / "text.bin").write_bytes(bytes(text_blob))
     (args.out / "random.bin").write_bytes(ed.random_table(rom))
     hero = sc.Hero(*[bool(v) if i == 6 else v for i, v in enumerate(int(t) for t in args.hero.split(","))])

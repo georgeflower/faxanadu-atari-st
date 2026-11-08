@@ -95,6 +95,12 @@ class Hero:
     weapon: int = 0
     armour: int = 0
     special: int = 0
+    shield: int = 0xFF            # SelectedShield
+    quests: int = 0
+    weapons: list = None          # WeaponInventory (the first NumberOfWeapons bytes), ArmorInventory, ShieldInventory
+    armours: list = None
+    shields: list = None
+    items: list = None            # ItemInventory
     glove: int = 0xFF
     ointment: int = 0xFF
     exp: int = 0
@@ -119,7 +125,8 @@ class Engine:
         self.ip = 0                   # Sprites_ReadInfoAddr
         self.kinds: dict = {}         # enemy_data.kind_info by entity
         self.combat: dict = {}        # enemy_data.tables
-        self.hero = Hero(events=[])
+        self.hero = Hero(events=[], weapons=[], armours=[], shields=[], items=[])
+        self.visits = 0               # Screen_TrackedVisitCount
 
     @property
     def hero_x(self) -> int:
@@ -935,7 +942,150 @@ class Engine:
             s.internal = 0 if s.internal + 1 >= 3 else s.internal + 1
 
     BEHAVIOURS = {BEH_SHADOW_EURA: "behaviour_shadow_eura", BEH_AIMED: "behaviour_aimed", BEH_ZORUGERIRU: "behaviour_zorugeriru", BEH_ROCK: "behaviour_rock", BEH_PAKUKAME: "behaviour_pakukame", BEH_LILITH: "behaviour_lilith", BEH_ZORADOHNA: "behaviour_zoradohna", BEH_MOVE_VERTICALLY: "behaviour_move_vertically", BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_BIHORUDA: "behaviour_bihoruda", BEH_GAWAINE: "behaviour_gawaine", BEH_NAGA: "behaviour_naga", BEH_NECRON: "behaviour_necron", BEH_NASH: "behaviour_nash", BEH_FLASH: "behaviour_flash", BEH_BEES: "behaviour_bees", BEH_MAGMAN: "behaviour_magman", BEH_TAMAZUTSU: "behaviour_tamazutsu", BEH_ISHIISU: "behaviour_ishiisu", BEH_HOOD: "behaviour_hood", BEH_YAREEKA: "behaviour_yareeka", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death", BEH_BOSS_DEATH: "behaviour_boss_death", BEH_BORABOHRA: "behaviour_borabohra", BEH_RIPASHEIKU: "behaviour_ripasheiku", BEH_KING_GRIEVE: "behaviour_king_grieve", BEH_BOLT: "behaviour_fireball",
-                  BEH_HOP: "behaviour_hop", BEH_FALL: "behaviour_fall"}
+                  BEH_HOP: "behaviour_hop", BEH_FALL: "behaviour_fall", 41: "behaviour_ointment", 42: "behaviour_glove", 43: "behaviour_battle_suit",
+                  44: "behaviour_battle_helmet", 45: "behaviour_dragon_slayer", 46: "behaviour_mattock", 47: "behaviour_wing_boots", 48: "behaviour_black_onyx",
+                  49: "behaviour_pendant", 50: "behaviour_random_item", 51: "behaviour_random_item", 52: "behaviour_random_item", 53: "behaviour_random_item",
+                  54: "behaviour_random_item", 55: "behaviour_random_item", 56: "behaviour_random_item", 61: "behaviour_magical_rod"}
+
+    # -- the items that stand on the screens (category 5)
+    def fall_if_needed(self, s: Sprite) -> None:
+        self.can_move(s)
+        self.handle_fall(s)
+
+    def behaviour_timed_item(self, s: Sprite, duration: int) -> None:
+        """SpriteBehavior_Ointment and _Glove: the item is there while its effect is not running, and falls to the ground."""
+        if not s.flags & F_READY:
+            if duration >= 0x80:
+                s.flags |= F_READY
+            else:
+                s.ent = NONE
+                return
+        self.fall_if_needed(s)
+
+    def behaviour_ointment(self, s: Sprite) -> None:
+        self.behaviour_timed_item(s, self.hero.ointment)
+
+    def behaviour_glove(self, s: Sprite) -> None:
+        self.behaviour_timed_item(s, self.hero.glove)
+
+    def clear_all(self) -> None:
+        for t in self.sprites:
+            t.ent = NONE
+
+    def boss_gate(self, s: Sprite, boss: int) -> None:
+        """What every dropped item ends with: hidden while its boss is on the screen."""
+        if any(t.ent == boss for t in self.sprites):
+            s.flags |= F_HIDDEN
+        else:
+            s.flags &= ~F_HIDDEN & 255
+
+    def behaviour_boss_item(self, s: Sprite, owned: bool, quest_or_special: bool, boss: int) -> None:
+        if not s.flags & F_READY:
+            if owned:
+                self.clear_all() if not quest_or_special else setattr(s, "ent", NONE)
+                return
+            s.phase = 0
+            s.flags |= F_READY
+        self.boss_gate(s, boss)
+
+    def behaviour_battle_suit(self, s: Sprite) -> None:
+        h = self.hero
+        self.behaviour_boss_item(s, h.armour == 3 or 3 in h.armours, False, 0x2E)
+
+    def behaviour_battle_helmet(self, s: Sprite) -> None:
+        h = self.hero
+        self.behaviour_boss_item(s, h.shield == 3 or 3 in h.shields, False, 0x2E)
+
+    def behaviour_dragon_slayer(self, s: Sprite) -> None:
+        h = self.hero
+        self.behaviour_boss_item(s, h.weapon == 3 or 3 in h.weapons, False, 0x32)
+
+    def behaviour_mattock(self, s: Sprite) -> None:
+        self.behaviour_boss_item(s, bool(self.hero.quests & 0x10), True, 0x2D)
+
+    def behaviour_wing_boots(self, s: Sprite) -> None:
+        self.behaviour_boss_item(s, bool(self.hero.quests & 0x08), True, 0x31)
+
+    def behaviour_black_onyx(self, s: Sprite) -> None:
+        self.behaviour_boss_item(s, bool(self.hero.special & 0x01), True, 0x2E)
+
+    def behaviour_pendant(self, s: Sprite) -> None:
+        self.behaviour_boss_item(s, bool(self.hero.special & 0x02), True, 0x2D)
+
+    def behaviour_random_item(self, s: Sprite) -> None:
+        """SpriteBehavior_RandomlyShowItem_50 to _56: every fourth time (the count is the game's, one for all of them) the item is there; shown when no enemy is."""
+        if not s.flags & F_READY:
+            self.visits += 1
+            if self.visits < 4:
+                s.ent = NONE
+                return
+            self.visits = 0
+            s.phase = 0
+            s.flags |= F_READY
+        if any(t.ent != NONE and self.kinds[t.ent]["category"] == 0 for t in self.sprites if t.ent in self.kinds):
+            s.flags |= F_HIDDEN
+        else:
+            s.flags &= ~F_HIDDEN & 255
+
+    def behaviour_magical_rod(self, s: Sprite) -> None:
+        if self.hero.special & 0x04:
+            s.ent = NONE
+
+    # -- picking an item up (Player_PickUp): what it does to the hero; the message (its number) is shown first, then sound 8 plays and this happens
+    ITEM_MESSAGES = {0x48: 0xBC, 0x49: 0xB8, 0x4A: 0xB9, 0x4B: 0xB1, 0x4C: 0xBB, 0x4D: 0xB0, 0x4E: 0xBE, 0x50: 0xB2, 0x55: 0xB3, 0x56: 0xB4, 0x57: 0xBA, 0x58: 0xB5,
+                     0x59: 0xB6, 0x5A: 0xB7, 0x5B: 0xB2, 0x5C: 0xB3, 0x5D: 0xB1, 0x5E: 0xBB, 0x5F: 0xBC, 0x60: 0xBE}
+
+    def add_item(self, item: int) -> None:
+        h = self.hero
+        if len(h.items) < 8:
+            h.items.append(item)
+
+    def put_in(self, lst: list, count: int, value: int) -> None:
+        """Battle Suit, Battle Helmet and Dragon Slayer: the next place of the list, the last one when it has four; `count` is the number the game looks at
+        (the suit and the slayer look at the wrong list)."""
+        index = count if count < 4 else 3
+        del lst[index:]
+        lst[:] = lst + [0] * (index - len(lst)) + [value]
+
+    def pickup(self, ent: int) -> None:
+        h = self.hero
+        if ent in (0x5B, 0x5C):
+            h.quests |= 0x10 if ent == 0x5B else 0x08
+        if ent in (0x50, 0x5B):
+            self.add_item(9)
+        elif ent in (0x55, 0x5C):
+            self.add_item(0x0F)
+        elif ent == 0x56:
+            self.add_item(0x0D)
+        elif ent in (0x4B, 0x5D):
+            self.add_item(0x10)
+        elif ent in (0x4C, 0x5E):                                  # poison: hurts him, with nothing taken off
+            self.sound(4)
+            h.inv = 0x3C
+            h.status |= 2
+            self.reduce_hp(0x1000)
+            return
+        elif ent in (0x48, 0x5F):
+            h.glove = 20
+            h.exp = min(h.exp + 100, 0xFFFF)
+        elif ent in (0x4E, 0x60):
+            h.ointment = 30
+            h.exp = min(h.exp + 100, 0xFFFF)
+        elif ent == 0x49:
+            h.special |= 1
+        elif ent == 0x4A:
+            h.special |= 2
+        elif ent == 0x4D:
+            h.special |= 8
+        elif ent == 0x57:
+            h.special |= 4
+        elif ent == 0x58:
+            self.put_in(h.armours, len(h.weapons), 3)
+        elif ent == 0x59:
+            self.put_in(h.shields, len(h.shields), 3)
+        elif ent == 0x5A:
+            self.put_in(h.weapons, len(h.armours), 3)
+        self.sound(8) if ent not in (0x4C, 0x5E) else None
 
     # -- the dropped coin: SpriteBehavior_BounceAndExpire
     def behaviour_bounce(self, s: Sprite) -> None:
@@ -1328,9 +1478,15 @@ ZOMBIE_PHASES = (0, 1, 2, 1)           # SPRITEBEHAVIOR_ENEMY_ZOMBIE_PHASES, by 
 MONODRON_PHASES = (0, 2, 0, 1)      # SPRITE_MONODRON_APPEARANCE_PHASES, by (phase - 1) & 3
 
 
-def is_drawn(ent: int, phase: int, counter: int, d2: int = 0) -> bool:
+def is_item(ent: int) -> bool:
+    return 0x48 <= ent <= 0x60 and ent not in (0x4F, 0x51, 0x52, 0x53, 0x54)
+
+
+def is_drawn(ent: int, phase: int, counter: int, d2: int = 0, flags: int = 0) -> bool:
     """False when the update handler leaves without a picture (the sprite is drawn when the handler picks one): Nash in step 0 and, in step 1, while bit 2 of the
     counter is set; Tamazutsu in step 0 until its count is below 30. (Bit 4 of the flags, hidden, does not stop the drawing: it stops being hit and touching.)"""
+    if is_item(ent):                                 # (an item that is hidden is not drawn either)
+        return not flags & F_HIDDEN
     if ent == 0x0D:
         return phase != 0 and not (phase == 1 and counter & 4)
     if ent == 0x2C:
@@ -1439,6 +1595,8 @@ def appearance_offset(ent: int, phase: int, counter: int, d2: int = 0, internal:
         return (counter >> 2) & 1
     if ent in (0x1F, 0x21):                          # Sir Gawaine and the Wolfman: the step is the picture
         return phase
+    if is_item(ent):      # the things that lie about: one picture (SpriteUpdateHandler_Item_Standard and _Special)
+        return 0
     raise NotImplementedError(f"the pictures of entity {ent}")
 
 

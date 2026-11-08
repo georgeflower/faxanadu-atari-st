@@ -22,10 +22,12 @@ SCENES = ((0, 4, "left", 400), (0, 5, "left", 400), (0, 8, "right", 400), (1, 16
           (1, 58, "right", 400), (6, 26, "right", 400), (7, 17, "right", 400),
           (2, 51, "right", 400), (2, 63, "right", 400), (7, 4, "right", 400), (6, 22, "right", 400),
           (2, 65, "right", 400), (6, 18, "right", 400), (7, 1, "right", 400),
+          (1, 24, "right", 400), (1, 14, "right", 400), (1, 19, "right", 400), (1, 60, "right", 400), (1, 45, "right", 400), (5, 7, "right", 400), (5, 16, "right", 400),
+          (5, 29, "right", 400), (5, 30, "right", 400), (6, 21, "right", 400), (2, 17, "right", 400), (7, 10, "right", 400), (2, 48, "right", 400),
           (6, 31, "right", 400), (7, 7, "right", 400), (7, 11, "right", 400),
           (7, 5, "right", 400), (7, 12, "right", 400), (2, 64, "right", 400), (7, 0, "right", 400))
 FIGHT_HEROX = {(2, 51): 16, (6, 22): 16, (2, 65): 16, (6, 18): 16, (7, 1): 16}      # where the hero starts a fight when 208 is a pit or a wall
-HEROX = {(1, 23): 80, (1, 29): 16, (2, 23): 144, (2, 39): 80, (2, 60): 144, (5, 25): 144, (5, 2): 144, (5, 31): 144, (5, 21): 144, (5, 35): 144, (5, 36): 144, (2, 1): 16, (2, 3): 144, (2, 25): 144, (2, 33): 144, (2, 38): 16, (2, 30): 144, (2, 31): 144, (2, 42): 144, (5, 5): 240, (5, 32): 16, (5, 34): 16, (5, 3): 144, (6, 13): 144, (6, 10): 144, (6, 11): 144, (7, 15): 208, (7, 16): 112, (2, 80): 16, (2, 81): 16, (2, 82): 16, (6, 30): 144, (2, 59): 144, (6, 23): 16, (6, 25): 240, (1, 58): 16, (6, 26): 16, (7, 17): 208, (2, 51): 16, (2, 63): 16, (7, 4): 16, (6, 22): 16, (2, 65): 16, (6, 18): 16, (7, 1): 16, (6, 31): 16, (7, 7): 16, (7, 11): 16, (7, 5): 16, (7, 12): 16, (2, 64): 64, (7, 0): 144}       # where the hero stands when the default (64) has him fall off the screen or walk into a wall
+HEROX = {(1, 24): 150, (1, 60): 208, (1, 45): 208, (5, 7): 208, (5, 16): 208, (2, 48): 208, (1, 23): 80, (1, 29): 16, (2, 23): 144, (2, 39): 80, (2, 60): 144, (5, 25): 144, (5, 2): 144, (5, 31): 144, (5, 21): 144, (5, 35): 144, (5, 36): 144, (2, 1): 16, (2, 3): 144, (2, 25): 144, (2, 33): 144, (2, 38): 16, (2, 30): 144, (2, 31): 144, (2, 42): 144, (5, 5): 240, (5, 32): 16, (5, 34): 16, (5, 3): 144, (6, 13): 144, (6, 10): 144, (6, 11): 144, (7, 15): 208, (7, 16): 112, (2, 80): 16, (2, 81): 16, (2, 82): 16, (6, 30): 144, (2, 59): 144, (6, 23): 16, (6, 25): 240, (1, 58): 16, (6, 26): 16, (7, 17): 208, (2, 51): 16, (2, 63): 16, (7, 4): 16, (6, 22): 16, (2, 65): 16, (6, 18): 16, (7, 1): 16, (6, 31): 16, (7, 7): 16, (7, 11): 16, (7, 5): 16, (7, 12): 16, (2, 64): 64, (7, 0): 144}       # where the hero stands when the default (64) has him fall off the screen or walk into a wall
 FIELDS = (("ent", "Entities"), ("x", "x"), ("xf", "xf"), ("y", "y"), ("yf", "yf"), ("flags", "Flags"), ("phase", "Phases"), ("beh", "Behaviors"), ("arg1", "BehaviorArg1"),
           ("d2", "BehaviorData2"), ("d3", "BehaviorData3"), ("internal", "InternalBehaviorStates"), ("bxf", "BehaviorState_XFrac"), ("bxfull", "BehaviorState_XFull"),
           ("byf", "BehaviorState_YFrac"), ("byfull", "BehaviorState_YFull"))
@@ -78,10 +80,11 @@ class EnemyTests(unittest.TestCase):
         # (a screen the hero has just entered may stand still for a few records, the counter already running: start at the first record that has moved)
         start = next((n for n in range(1, 12) if rec[n]["slots"] != rec[0]["slots"]), 0)
         eng.rnd, eng.counter = rec[start]["rnd"], rec[start]["counter"]
-        for ent in ed.EXTRAS + ed.ENEMIES + tuple(ed.SPAWNED.values()):
+        for ent in ed.EXTRAS + ed.ENEMIES + ed.ITEMS + tuple(ed.SPAWNED.values()):
             eng.kinds[ent] = dict(ed.kind_info(self.rom, ent))
             if packed and ent in where:
                 eng.kinds[ent]["script"] = where[ent][eng.kinds[ent]["script"]]
+        eng.hero.weapon = eng.hero.shield = 0xFF                    # (a new game owns nothing and has chosen nothing)
         for i, s in enumerate(rec[start]["slots"]):
             sp = eng.sprites[i]
             for mine, theirs in FIELDS:
@@ -129,7 +132,7 @@ class EnemyTests(unittest.TestCase):
         run = json.loads(out.read_text())
         frames = run["frames"]
         eng = em.Engine(self.bank14, self.random_table, bytes(run["start"]["blocks"]), self.props_by_area[area])
-        for ent in ed.EXTRAS + ed.ENEMIES + tuple(ed.SPAWNED.values()):
+        for ent in ed.EXTRAS + ed.ENEMIES + ed.ITEMS + tuple(ed.SPAWNED.values()):
             eng.kinds[ent] = ed.kind_info(self.rom, ent)
         eng.combat = ed.tables(self.rom)
         first = next(n for n, f in enumerate(frames) if f["preSlots"])          # (a screen the hero has just entered may stand still for a few frames)
@@ -241,7 +244,8 @@ class EnemyTests(unittest.TestCase):
     def test_the_kinds_of_the_other_areas_move_as_in_the_rom(self) -> None:
         for area, screen in ((2, 23), (2, 39), (2, 60), (5, 25), (5, 2), (5, 31), (2, 4), (2, 14), (2, 19), (5, 21), (5, 35), (5, 36),
                              (2, 1), (2, 3), (2, 25), (2, 29), (2, 32), (2, 37), (2, 45),
-                             (2, 33), (2, 38), (2, 30), (2, 31), (2, 42), (5, 5), (5, 32), (5, 34), (5, 3), (6, 13), (6, 10), (6, 11), (7, 15), (7, 16), (2, 80), (2, 81), (2, 82), (6, 30), (2, 59), (6, 23), (6, 25), (1, 58), (6, 26), (7, 17)):
+                             (2, 33), (2, 38), (2, 30), (2, 31), (2, 42), (5, 5), (5, 32), (5, 34), (5, 3), (6, 13), (6, 10), (6, 11), (7, 15), (7, 16), (2, 80), (2, 81), (2, 82), (6, 30), (2, 59), (6, 23), (6, 25), (1, 58), (6, 26), (7, 17),
+                             (1, 24), (1, 14), (1, 19), (1, 60), (1, 45), (5, 7), (5, 16), (5, 29), (5, 30), (6, 21), (2, 17), (7, 10), (2, 48)):
             with self.subTest(area=area, screen=screen):
                 self.check(screen, area=area)
 
@@ -260,7 +264,7 @@ class EnemyTests(unittest.TestCase):
                 want = []
                 masks = em.flip_masks([(s["Entities"], s["Flags"], s["HitCounter"]) for s in rec[n]["slots"]], rec[n]["counter"], rec[n - 1]["pf"])      # (the hero is drawn before the sprites update, with the flags of the frame before)
                 for i, s in enumerate(rec[n]["slots"]):
-                    if s["Entities"] == 255 or not em.is_drawn(s["Entities"], s["Phases"], rec[n]["counter"], s["BehaviorData2"]):
+                    if s["Entities"] == 255 or not em.is_drawn(s["Entities"], s["Phases"], rec[n]["counter"], s["BehaviorData2"], s["Flags"]):
                         continue
                     app = fs.appearance(self.rom, ed.entity(self.rom, s["Entities"])["appearance"] + em.appearance_offset(s["Entities"], s["Phases"], rec[n]["counter"], s["BehaviorData2"], s["InternalBehaviorStates"]),
                                         "TILEINFO_ENTITY_ADDRS")
