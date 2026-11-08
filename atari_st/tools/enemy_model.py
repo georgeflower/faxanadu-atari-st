@@ -18,7 +18,7 @@ F_RIGHT, F_FLY, F_AIR, F_READY, F_DOWN = 0x01, 0x02, 0x04, 0x40, 0x80
 NONE = 0xFF
 
 BEH_MOVE, BEH_WAIT, BEH_BOUNCE, BEH_WALK, BEH_DEATH, BEH_HOP, BEH_FALL, BEH_BIHORUDA, BEH_WAVE, BEH_FIREBALL, BEH_FINISH, BEH_NAGA, BEH_YAREEKA, BEH_GAWAINE, BEH_BUZZ = 0, 1, 2, 4, 7, 9, 21, 23, 25, 27, 30, 33, 34, 40, 63
-BEH_NECRON, BEH_NASH, BEH_FLASH, BEH_BEES, BEH_MAGMAN, BEH_TAMAZUTSU, BEH_HOOD = 22, 26, 31, 32, 35, 39, 65
+BEH_NECRON, BEH_NASH, BEH_FLASH, BEH_BEES, BEH_MAGMAN, BEH_TAMAZUTSU, BEH_ISHIISU, BEH_HOOD = 22, 26, 31, 32, 35, 39, 64, 65
 E_MAGIC = 0x51                 # the magic of Nash and the Execution Hood (the fireball's script, another picture)
 F_HIDDEN = 0x10                # SPRITE_FLAGS_VISIBLE, which Sprite_SetVisible sets and Sprites_IsSpriteHidden tests: a sprite with it set is not drawn and cannot be touched or hit
 BUZZ_Y = (0x00, 0x00, 0x80, 0x40, 0x00, 0x40, 0x80, 0x00)        # SPRITE_BEHAVIOR_BUZZ_AROUND_Y_FRAC and ..._X_FRAC (the whole pixels of the vertical step)
@@ -591,6 +591,28 @@ class Engine:
             s.d2 = a
         s.phase &= 3                                               # (SpriteUpdateHandler_Enemy_Tamazutsu keeps it to 0 to 3)
 
+    def behaviour_ishiisu(self, s: Sprite) -> None:
+        """SpriteBehavior_Ishiisu: even steps: it walks to the hero (3/4 pixel a frame, turning at walls) until it is less than 32 away (the bare difference of
+        the x positions), then waits for the two of them to face each other. Odd steps: 30 frames facing him, casting magic at the 10th."""
+        if not s.flags & F_READY:
+            s.phase = 0
+            s.flags |= F_READY
+        if not s.phase & 1:
+            if abs(s.x - self.hero_x) >= 0x20:
+                self.actions(s, 0)
+                self.move_horiz_and_turn(s, 0xC0, 0)
+                return
+            if (self.hero.flags & 0x40) == (0 if s.flags & 1 else 0x40):
+                s.phase = (s.phase + 1) & 255
+                s.d2 = 0x1E
+            return
+        self.actions(s, 0)
+        s.d2 = (s.d2 - 1) & 255
+        if not s.d2:
+            s.phase = (s.phase + 1) & 255
+        elif s.d2 == 0x14:
+            self.cast_at(s, E_MAGIC, 4, 0x0C)
+
     def behaviour_hood(self, s: Sprite) -> None:
         """SpriteBehavior_ExecutionHood: half a pixel sideways a frame, bobbing on a wave of 16 ticks (turning up or down every 8); after 16 ticks it goes
         on to the next step, and in the fourth it stands facing him for 15 frames and casts magic."""
@@ -688,7 +710,7 @@ class Engine:
         elif s.d3 >= HOP_GROUND[s.internal]:
             s.d3 = (s.d3 - 1) & 255
 
-    BEHAVIOURS = {BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_BIHORUDA: "behaviour_bihoruda", BEH_GAWAINE: "behaviour_gawaine", BEH_NAGA: "behaviour_naga", BEH_NECRON: "behaviour_necron", BEH_NASH: "behaviour_nash", BEH_FLASH: "behaviour_flash", BEH_BEES: "behaviour_bees", BEH_MAGMAN: "behaviour_magman", BEH_TAMAZUTSU: "behaviour_tamazutsu", BEH_HOOD: "behaviour_hood", BEH_YAREEKA: "behaviour_yareeka", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death",
+    BEHAVIOURS = {BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_BIHORUDA: "behaviour_bihoruda", BEH_GAWAINE: "behaviour_gawaine", BEH_NAGA: "behaviour_naga", BEH_NECRON: "behaviour_necron", BEH_NASH: "behaviour_nash", BEH_FLASH: "behaviour_flash", BEH_BEES: "behaviour_bees", BEH_MAGMAN: "behaviour_magman", BEH_TAMAZUTSU: "behaviour_tamazutsu", BEH_ISHIISU: "behaviour_ishiisu", BEH_HOOD: "behaviour_hood", BEH_YAREEKA: "behaviour_yareeka", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death",
                   BEH_HOP: "behaviour_hop", BEH_FALL: "behaviour_fall"}
 
     # -- the dropped coin: SpriteBehavior_BounceAndExpire
@@ -998,6 +1020,10 @@ def appearance_offset(ent: int, phase: int, counter: int, d2: int = 0) -> int:
         return LAMPREY_FRAMES[(counter >> 3) & 7]
     if ent == 0x1E:                                  # Giant Strider: picture 2 in step 2, else a change every 4 updates
         return 2 if phase == 2 else (counter >> 2) & 1
+    if ent == 0x0F:                                  # Ishiisu: a change every 4 updates in the even steps; in the odd ones picture 2, and 3 for the last 20 updates
+        if phase & 1:
+            return 2 if d2 >= 0x14 else 3
+        return (counter >> 2) & 1
     if ent == 0x20:                                  # Maskman: a change every 8 updates in the odd steps, else picture 4
         return (counter >> 3) & 1 if phase & 1 else 4
     if ent == 0x17:                                  # Geributa: picture 2 in step 0, else a change every 4 updates

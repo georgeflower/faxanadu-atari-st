@@ -822,7 +822,7 @@ class ViewerTests(unittest.TestCase):
                     (2, 45, "208,144", 290),
                     (2, 33, "144,144", 290), (2, 38, "16,144", 290), (2, 30, "144,144", 290), (2, 31, "144,144", 290), (2, 42, "144,144", 300), (5, 5, "240,144", 290),
                     (5, 32, "16,144", 290), (5, 34, "16,144", 290), (5, 3, "144,144", 290), (6, 13, "144,144", 290), (6, 10, "16,160", 290), (6, 11, "144,144", 290),
-                    (7, 15, "208,144", 293), (7, 16, "16,144", 290))    # area, screen, hero, the capture's VBL
+                    (7, 15, "208,144", 293), (7, 16, "16,144", 290), (2, 80, "16,160", 290), (2, 81, "16,160", 290), (2, 82, "16,160", 290))    # area, screen, hero, the capture's VBL
 
     def enemy_engine(self, rom, area_index: int, screen: int, word):
         """The model with the enemies of a screen as they are placed, the hero where the viewer has him."""

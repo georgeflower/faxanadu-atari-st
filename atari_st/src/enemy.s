@@ -199,6 +199,8 @@ en_behaviour:
     beq.w beh_magman
     cmpi.w #39, %d0
     beq.w beh_tamazutsu
+    cmpi.w #64, %d0
+    beq.w beh_ishiisu
     cmpi.w #65, %d0
     beq.w beh_hood
     cmpi.w #33, %d0
@@ -1184,6 +1186,52 @@ beh_hood:
     move.b #0x0F, E_D2(%a3)
     bra.w en_behaviour_end
 
+| Ishiisu: it walks to the hero (3/4 pixel a frame, turning at walls) until it is less than 32 away, then waits for the two of them to face each other; then it
+| stands facing him for 30 frames and casts magic at the 10th.
+beh_ishiisu:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    clr.b E_PHASE(%a3)
+    bsr.w en_ready
+1:  btst #0, E_PHASE(%a3)
+    bne.s 5f
+    move.w hero_x(%pc), %d1
+    move.b E_X(%a3), %d0
+    sub.b %d1, %d0
+    bcc.s 2f
+    neg.b %d0
+2:  cmpi.b #0x20, %d0
+    bcs.s 3f
+    bsr.w ac_face_x
+    move.w #0x00C0, %d3
+    bsr.w en_step_x
+    tst.w %d0
+    beq.w en_behaviour_end
+    eori.b #1, E_FLAGS(%a3)
+    bra.w en_behaviour_end
+3:  move.w hero_flip(%pc), %d0                 | he faces right (nonzero): it must face left, and the other way round
+    sne %d0
+    andi.b #1, %d0
+    move.b E_FLAGS(%a3), %d1
+    andi.b #1, %d1
+    cmp.b %d1, %d0
+    beq.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    move.b #0x1E, E_D2(%a3)
+    bra.w en_behaviour_end
+5:  bsr.w ac_face_x
+    subq.b #1, E_D2(%a3)
+    beq.s 6f
+    cmpi.b #0x14, E_D2(%a3)
+    bne.w en_behaviour_end
+    moveq #E_MAGIC, %d0
+    moveq #4, %d1
+    moveq #0x0C, %d2
+    bsr.w ac_cast_at
+    bra.w en_behaviour_end
+6:  addq.b #1, E_PHASE(%a3)
+    bra.w en_behaviour_end
+
 beh_fall:
     bsr.w en_ready
     bsr.w en_can_move
@@ -1871,6 +1919,8 @@ draw_enemies:
     beq.w 35f
     cmpi.w #28, %d0
     beq.w 36f
+    cmpi.w #29, %d0
+    beq.w 37f
     moveq #0, %d1
     cmpi.w #2, %d0
     bne.s 5f
@@ -2102,6 +2152,17 @@ draw_enemies:
     add.w %d0, %d0
     add.w %d0, %d6
     bra.w 4f
+37: btst #0, E_PHASE(%a3)                   | rule 29, Ishiisu: a change every 4 updates in the even steps; in the odd ones picture 2, and 3 for the last 20 updates
+    bne.s 45f
+    move.w en_counter(%pc), %d0
+    lsr.w #2, %d0
+    andi.w #1, %d0
+    bra.w 7f
+45: moveq #2, %d0
+    cmpi.b #0x14, E_D2(%a3)
+    bcc.w 7f
+    moveq #3, %d0
+    bra.w 7f
 18: moveq #0, %d2                           | rule 11, Charron: picture 2 in step 5, 1 in step 0 and the odd ones, else a change every 8 updates
     move.b E_PHASE(%a3), %d2
     moveq #2, %d0
