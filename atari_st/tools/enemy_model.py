@@ -19,6 +19,8 @@ NONE = 0xFF
 
 BEH_MOVE, BEH_WAIT, BEH_BOUNCE, BEH_WALK, BEH_DEATH, BEH_HOP, BEH_FALL, BEH_BIHORUDA, BEH_WAVE, BEH_FIREBALL, BEH_FINISH, BEH_NAGA, BEH_YAREEKA, BEH_GAWAINE, BEH_BUZZ = 0, 1, 2, 4, 7, 9, 21, 23, 25, 27, 30, 33, 34, 40, 63
 BEH_NECRON, BEH_NASH, BEH_FLASH, BEH_BEES, BEH_MAGMAN, BEH_TAMAZUTSU, BEH_ISHIISU, BEH_HOOD = 22, 26, 31, 32, 35, 39, 64, 65
+BEH_BOSS_DEATH = 62
+BEH_BORABOHRA = 12
 E_MAGIC = 0x51                 # the magic of Nash and the Execution Hood (the fireball's script, another picture)
 F_HIDDEN = 0x10                # SPRITE_FLAGS_VISIBLE, which Sprite_SetVisible sets and Sprites_IsSpriteHidden tests: a sprite with it set is not drawn and cannot be touched or hit
 BUZZ_Y = (0x00, 0x00, 0x80, 0x40, 0x00, 0x40, 0x80, 0x00)        # SPRITE_BEHAVIOR_BUZZ_AROUND_Y_FRAC and ..._X_FRAC (the whole pixels of the vertical step)
@@ -710,7 +712,7 @@ class Engine:
         elif s.d3 >= HOP_GROUND[s.internal]:
             s.d3 = (s.d3 - 1) & 255
 
-    BEHAVIOURS = {BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_BIHORUDA: "behaviour_bihoruda", BEH_GAWAINE: "behaviour_gawaine", BEH_NAGA: "behaviour_naga", BEH_NECRON: "behaviour_necron", BEH_NASH: "behaviour_nash", BEH_FLASH: "behaviour_flash", BEH_BEES: "behaviour_bees", BEH_MAGMAN: "behaviour_magman", BEH_TAMAZUTSU: "behaviour_tamazutsu", BEH_ISHIISU: "behaviour_ishiisu", BEH_HOOD: "behaviour_hood", BEH_YAREEKA: "behaviour_yareeka", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death",
+    BEHAVIOURS = {BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_BIHORUDA: "behaviour_bihoruda", BEH_GAWAINE: "behaviour_gawaine", BEH_NAGA: "behaviour_naga", BEH_NECRON: "behaviour_necron", BEH_NASH: "behaviour_nash", BEH_FLASH: "behaviour_flash", BEH_BEES: "behaviour_bees", BEH_MAGMAN: "behaviour_magman", BEH_TAMAZUTSU: "behaviour_tamazutsu", BEH_ISHIISU: "behaviour_ishiisu", BEH_HOOD: "behaviour_hood", BEH_YAREEKA: "behaviour_yareeka", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death", BEH_BOSS_DEATH: "behaviour_boss_death", BEH_BORABOHRA: "behaviour_borabohra",
                   BEH_HOP: "behaviour_hop", BEH_FALL: "behaviour_fall"}
 
     # -- the dropped coin: SpriteBehavior_BounceAndExpire
@@ -744,6 +746,47 @@ class Engine:
         if s.d2 >= 8:
             self.drop(s)
             s.ent = NONE
+
+    # -- Borabohra (SpriteBehavior_Borabohra): 20 updates of standing, then a walk whose speed is a triangle wave of its count (up to nearly a pixel a frame),
+    #    facing the hero again at each step (the A register the ROM tests for the 128-step turn is the Y register of the move, 0)
+    def behaviour_borabohra(self, s: Sprite) -> None:
+        if not s.flags & F_READY:
+            s.hbox, s.d2, s.phase = 2, 0, 0
+            s.flags |= F_READY
+        if not s.phase & 1:
+            s.d2 = (s.d2 + 1) & 255
+            if s.d2 >= 0x14:
+                s.phase = (s.phase + 1) & 255
+                self.actions(s, 0)
+            return
+        t = s.d2 & 0x3F
+        a = 0x3F - t if s.d2 & 0x40 else t
+        self.move_horiz(s, (a << 2) & 255, a >> 6)
+        s.d2 = (s.d2 + 1) & 255
+        self.actions(s, 0)
+
+    # -- the death of a boss: SpriteBehavior_BossDeath; ten steps of 8 updates, each time it jumps to the next place of two tables and
+    #    (in the first four) leaves what the boss dropped
+    BOSS_DEATH_X = (0x00, 0x20, 0xF0, 0xF0, 0x20, 0xE0, 0x20, 0xF0, 0xF0, 0x20, 0xE0)
+    BOSS_DEATH_Y = (0x00, 0x20, 0xF0, 0x10, 0xE0, 0x00, 0x20, 0xF0, 0x10, 0xE0, 0x00)
+
+    def behaviour_boss_death(self, s: Sprite) -> None:
+        if not s.flags & F_READY:
+            s.d2, s.phase = 0, 0
+            s.flags |= F_READY
+        s.d2 = (s.d2 + 1) & 255
+        if s.d2 < 8:
+            return
+        s.phase = (s.phase + 1) & 255
+        if s.phase >= 10:
+            s.ent = NONE
+            return
+        s.x = (s.x + self.BOSS_DEATH_X[s.phase]) & 255
+        s.y = (s.y + self.BOSS_DEATH_Y[s.phase]) & 255
+        s.d2 = 0
+        self.sound(3)
+        if s.phase < 5:
+            self.drop(s)
 
     def sound(self, n: int) -> None:
         self.hero.events.append(n)
@@ -1042,6 +1085,10 @@ def appearance_offset(ent: int, phase: int, counter: int, d2: int = 0) -> int:
         return (counter >> 2) & 1 if phase == 2 else 2
     if ent == 0x23:                                  # Magman: a change every 8 updates in the odd steps (out of sight in the even ones, where it keeps the last)
         return (counter >> 3) & 1 if phase & 1 else 0
+    if ent == 0x2F:                                  # Borabohra: while standing the count d2 / 8 (0 to 2), then four pictures (4 to 7), a change every 8 updates
+        return (counter >> 3) & 3 | 4 if phase & 1 else d2 >> 3
+    if ent == 0x11:                                  # Rokusutahn: four pictures, a change every 16 updates
+        return (counter >> 4) & 3
     if ent == 0x2C:                                  # Tamazutsu: by its step (0 to 3) and its count d2; hidden in all but step 2
         if phase == 0:
             return 0 if d2 >= 0x1E else (d2 >> 3) & 1
@@ -1071,6 +1118,23 @@ LAMPREY_FLIPS = (0, 0, 0x40, 0x40, 0x40, 0, 0, 0x40)      # LAMPREY_HORIZ_FLIP_B
 def flip_extra(ent: int, counter: int) -> int:
     """What a kind's update handler does to the flip mask after the facing has set it (the Lamprey turns round on its own)."""
     return LAMPREY_FLIPS[(counter >> 3) & 7] if ent == 0x28 else 0
+
+
+STALE_FLIP = (0x11,)       # kinds whose update handler does not set the flip mask: they are drawn with what the sprite before them (or, first, the hero) left
+
+
+def flip_masks(slots: list, counter: int, hero_flags: int) -> list:
+    """The flip mask each slot is drawn with, in the order the ROM updates them (7 to 0). `slots` are (entity, flags, hit counter) for the 8 slots."""
+    last = 0x40 if hero_flags & 0x40 else 0
+    out = [0] * 8
+    for i in range(7, -1, -1):
+        ent, flags, hit = slots[i]
+        if ent == NONE or hit & 2:                  # (a sprite that blinks is not drawn)
+            continue
+        if ent not in STALE_FLIP:
+            last = 0 if ent in (E_BREAD, E_COIN, E_DEATH, E_BOSS_DEATH) else flip_mask(flags, ent) ^ flip_extra(ent, counter)
+        out[i] = last
+    return out
 
 
 def flip_mask(flags: int, ent: int = 0) -> int:

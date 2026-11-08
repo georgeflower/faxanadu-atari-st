@@ -35,7 +35,9 @@ const slotsNow = () => {
   return slots;
 };
 // the hero as the sprites see him: read when Sprites_UpdateAll is entered
-const ENEMIES = [0x47, 0x2A, 0x0C, 0x06, 0x26, 0x1B, 0x15, 0x04, 0x19, 0x28, 0x1E, 0x20, 0x17, 0x08, 0x1F, 0x21, 0x1C, 0x22, 0x1A, 0x18, 0x05, 0x0D, 0x23, 0x2C, 0x10, 0x0E];        // Zozura ... Geributa, Bihoruda, Sir Gawaine, Wolfman, Naga, Yareeka: what the hero fights
+const ENEMIES = [0x47, 0x2A, 0x0C, 0x06, 0x26, 0x1B, 0x15, 0x04, 0x19, 0x28, 0x1E, 0x20, 0x17, 0x08, 0x1F, 0x21, 0x1C, 0x22, 0x1A, 0x18, 0x05, 0x0D, 0x23, 0x2C, 0x10, 0x0E, 0x11];        // Zozura ... Geributa, Bihoruda, Sir Gawaine, Wolfman, Naga, Yareeka: what the hero fights
+const JUMP = !!process.env.JUMP;
+const REACH = +(process.env.REACH ?? 30);      // (how near the hero must be to swing: 30, a boss needs less)
 let pre = null, preSlots = null, preState = null;
 const entry = g.romLabels["Sprites_UpdateAll"][0] - 1, cpu = g.nes.cpu, emulate = cpu.emulate.bind(cpu);
 cpu.emulate = function () {
@@ -50,7 +52,7 @@ let blocks = null;
 for (let f = 0; f < frames; f++) {
   // the pad: walk to the nearest enemy, attack when near (B pressed for two frames out of 24)
   const h = hero(), live = slotsNow().filter((s) => ENEMIES.includes(s.Entities));
-  g.nes.buttonUp(1, BTN.LEFT); g.nes.buttonUp(1, BTN.RIGHT); g.nes.buttonUp(1, BTN.B);
+  g.nes.buttonUp(1, BTN.LEFT); g.nes.buttonUp(1, BTN.RIGHT); g.nes.buttonUp(1, BTN.B); g.nes.buttonUp(1, BTN.A);
   const items = slotsNow().filter((s) => s.Entities === 1 || s.Entities === 2);
   if (!live.length && items.length) {                       // nothing to fight: pick up what was dropped
     const dx = items[0].x - h.x;
@@ -58,10 +60,14 @@ for (let f = 0; f < frames; f++) {
   } else if (live.length) {
     const t = live.reduce((a, b) => (Math.abs(a.x - h.x) <= Math.abs(b.x - h.x) ? a : b));
     const dx = t.x - h.x;
-    if (Math.abs(dx) > 22) g.nes.buttonDown(1, dx > 0 ? BTN.RIGHT : BTN.LEFT);
+    if (Math.abs(dx) > REACH - 8) g.nes.buttonDown(1, dx > 0 ? BTN.RIGHT : BTN.LEFT);
     else if (Math.abs(dx) > 6 && f % 24 === 0) g.nes.buttonDown(1, dx > 0 ? BTN.RIGHT : BTN.LEFT);
-    if (Math.abs(dx) <= 30 && f % 24 < 2) g.nes.buttonDown(1, BTN.B);
+    if (JUMP) {                                              // (a tall enemy is hit from the air: jump, swing at the top of the jump)
+      if (Math.abs(dx) <= REACH && f % 40 < 2) g.nes.buttonDown(1, BTN.A);
+      if (Math.abs(dx) <= REACH && f % 40 >= 12 && f % 40 < 14) g.nes.buttonDown(1, BTN.B);
+    } else if (Math.abs(dx) <= REACH && f % 24 < 2) g.nes.buttonDown(1, BTN.B);
   }
+  if (process.env.HEAL && g.rd("Player_HP_U") < 40) { g.wr("Player_HP_U", 80); g.wr("Player_HP_L", 0); }      // (a boss hits hard: the run goes on while he is cured now and then)
   pre = null;
   g.run(1);
   if (!blocks) blocks = Array.from({length: 256}, (_, i) => g.rd(g.addr("ScreenBuffer") + i));

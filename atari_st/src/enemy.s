@@ -37,10 +37,12 @@
     .equ K_BW, 24
     .equ K_BH, 26
     .equ K_DMG, 28
+    .equ K_BOSS, 30                         | 1: a boss (when it dies, the boss death effect takes its place)
     .equ KIND_BYTES, 32
     .equ E_BREAD, 1                         | the entities that are not enemies: bread and a coin (drops), the death effect
     .equ E_COIN, 2
     .equ E_DEATH, 0x13
+    .equ E_BOSS_DEATH, 0x64
     .equ E_FIREBALL, 0x54                   | Charron's fireball (cast, never placed)
     .equ E_MAGIC, 0x51                      | the magic of Nash and the Execution Hood
 
@@ -217,6 +219,10 @@ en_behaviour:
     beq.w beh_bounce
     cmpi.w #7, %d0
     beq.w beh_death
+    cmpi.w #62, %d0
+    beq.w beh_boss_death
+    cmpi.w #12, %d0
+    beq.w beh_borabohra
     cmpi.w #9, %d0
     beq.w beh_hop
     cmpi.w #21, %d0
@@ -1232,6 +1238,39 @@ beh_ishiisu:
 6:  addq.b #1, E_PHASE(%a3)
     bra.w en_behaviour_end
 
+| Borabohra: 20 updates of standing, then a walk whose speed is a triangle wave of its count (d2 and 63, up to 63/64 pixel a frame), turning to the hero again
+| at each step.
+beh_borabohra:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    move.b #2, E_HBOX(%a3)
+    clr.b E_D2(%a3)
+    clr.b E_PHASE(%a3)
+    bsr.w en_ready
+1:  btst #0, E_PHASE(%a3)
+    bne.s 3f
+    addq.b #1, E_D2(%a3)
+    cmpi.b #0x14, E_D2(%a3)
+    bcs.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    bsr.w ac_face_x
+    bra.w en_behaviour_end
+3:  moveq #0, %d0
+    move.b E_D2(%a3), %d1
+    move.b %d1, %d0
+    andi.w #0x3F, %d0
+    btst #6, %d1
+    beq.s 4f
+    moveq #0x3F, %d2
+    sub.w %d0, %d2
+    move.w %d2, %d0
+4:  lsl.w #2, %d0
+    move.w %d0, %d3
+    bsr.w en_step_x
+    addq.b #1, E_D2(%a3)
+    bsr.w ac_face_x
+    bra.w en_behaviour_end
+
 beh_fall:
     bsr.w en_ready
     bsr.w en_can_move
@@ -1528,6 +1567,8 @@ en_weapon:
     beq.w 9f
     cmpi.b #E_DEATH, %d0
     beq.w 9f
+    cmpi.b #E_BOSS_DEATH, %d0
+    beq.w 9f
     btst #4, E_FLAGS(%a3)                   | hidden (Tamazutsu, Nash): it cannot be hit
     bne.w 9f
     btst #7, hero_air+1(%pc)                | Player_Flags bit 7: attacking
@@ -1591,12 +1632,17 @@ en_weapon:
     move.w #0xFFFF, 2(%a1)
 1:  lea hud_dirty(%pc), %a1
     st (%a1)
-    move.l %a0, E_PREV(%a3)                 | Sprite_SetDeathEntity: what it was, the death effect's script
+    move.l %a0, E_PREV(%a3)                 | Sprite_SetDeathEntity: what it was, the death effect's script (a boss has its own)
+    tst.w K_BOSS(%a0)
+    bne.s 2f
     moveq #E_DEATH, %d0
+    bra.s 3f
+2:  moveq #E_BOSS_DEATH, %d0
+3:  move.b %d0, %d5
     bsr.w en_find_kind
     move.l %a0, E_KIND(%a3)
     move.w K_SCRIPT(%a0), E_SCRIPT(%a3)
-    move.b #E_DEATH, E_ENT(%a3)
+    move.b %d5, E_ENT(%a3)
     move.b #0xFF, E_BEH(%a3)
     clr.b E_D2(%a3)
     bclr #6, E_FLAGS(%a3)
@@ -1622,6 +1668,8 @@ en_touch:
     movem.l %d0-%d5/%a0-%a2, -(%sp)
     move.b E_ENT(%a3), %d5
     cmpi.b #E_DEATH, %d5
+    beq.w 9f
+    cmpi.b #E_BOSS_DEATH, %d5
     beq.w 9f
     btst #4, E_FLAGS(%a3)                   | hidden: it cannot touch him
     bne.w 9f
@@ -1772,9 +1820,89 @@ beh_death:
 1:  addq.b #1, E_D2(%a3)
     cmpi.b #8, E_D2(%a3)
     bcs.w en_behaviour_end
-    bsr.s en_drop
+    bsr.w en_drop
     move.b #0xFF, E_ENT(%a3)
     bra.w en_behaviour_end
+
+| SpriteBehavior_BossDeath: ten steps of 8 updates; in each it moves to the next place of a table (and plays the death sound), in the first four it
+| leaves what the boss dropped (a coin each time), then it is gone.
+beh_boss_death:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    clr.b E_D2(%a3)
+    clr.b E_PHASE(%a3)
+    bsr.w en_ready
+1:  addq.b #1, E_D2(%a3)
+    cmpi.b #8, E_D2(%a3)
+    bcs.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    moveq #0, %d0
+    move.b E_PHASE(%a3), %d0
+    cmpi.b #10, %d0
+    bcs.s 2f
+    move.b #0xFF, E_ENT(%a3)
+    bra.w en_behaviour_end
+2:  lea boss_death_x(%pc), %a1
+    move.b (%a1,%d0.w), %d1
+    add.b %d1, E_X(%a3)
+    lea boss_death_y(%pc), %a1
+    move.b (%a1,%d0.w), %d1
+    add.b %d1, E_Y(%a3)
+    clr.b E_D2(%a3)
+    movem.l %d0, -(%sp)
+    moveq #3, %d0
+    bsr.w sound_play_sfx
+    movem.l (%sp)+, %d0
+    cmpi.b #5, %d0
+    bcc.w en_behaviour_end
+    bsr.w en_drop
+    bra.w en_behaviour_end
+
+boss_death_x:
+    .byte 0x00, 0x20, 0xF0, 0xF0, 0x20, 0xE0, 0x20, 0xF0, 0xF0, 0x20, 0xE0, 0
+boss_death_y:
+    .byte 0x00, 0x20, 0xF0, 0x10, 0xE0, 0x00, 0x20, 0xF0, 0x10, 0xE0, 0x00, 0
+
+| The mirror (0 or 1) of a kind whose update handler never sets the flip mask (CurrentSprite_FlipMask): what the sprite updated before it left (the slots go
+| 7 to 0), and what the hero's drawing left when there is none. A drop and a death effect leave none, an enemy its facing. (Rokusutahn)
+en_stale_flip:
+    movem.l %a0/%a2/%d1, -(%sp)
+    lea E_BYTES(%a3), %a2
+1:  lea enemies+8*E_BYTES(%pc), %a0
+    cmpa.l %a0, %a2
+    bcc.s 6f
+    move.b E_ENT(%a2), %d0
+    cmpi.b #0xFF, %d0
+    beq.s 2f
+    btst #1, E_HIT(%a2)                     | blinking: not drawn
+    bne.s 2f
+    movea.l E_KIND(%a2), %a0
+    cmpi.w #30, K_RULE(%a0)                 | a kind with no mirror of its own
+    beq.s 2f
+    cmpi.b #E_BREAD, %d0
+    beq.s 5f
+    cmpi.b #E_COIN, %d0
+    beq.s 5f
+    cmpi.b #E_DEATH, %d0
+    beq.s 5f
+    cmpi.b #E_BOSS_DEATH, %d0
+    beq.s 5f
+    cmpi.b #E_MAGIC, %d0
+    beq.s 5f
+    moveq #0, %d0
+    move.b E_FLAGS(%a2), %d0
+    andi.w #1, %d0
+    bra.s 9f
+2:  lea E_BYTES(%a2), %a2
+    bra.s 1b
+5:  moveq #0, %d0
+    bra.s 9f
+6:  moveq #0, %d0
+    move.w hero_flip(%pc), %d1
+    beq.s 9f
+    moveq #1, %d0
+9:  movem.l (%sp)+, %a0/%a2/%d1
+    rts
 
 | Sprite_RunDeathDropHandler: the enemy a3 was had a drop (its kind's K_DROP: bread or a coin and the value).
 en_drop:
@@ -1921,6 +2049,12 @@ draw_enemies:
     beq.w 36f
     cmpi.w #29, %d0
     beq.w 37f
+    cmpi.w #30, %d0
+    beq.w 38f
+    cmpi.w #31, %d0
+    beq.w 39f
+    cmpi.w #32, %d0
+    beq.w 52f
     moveq #0, %d1
     cmpi.w #2, %d0
     bne.s 5f
@@ -2162,6 +2296,38 @@ draw_enemies:
     cmpi.b #0x14, E_D2(%a3)
     bcc.w 7f
     moveq #3, %d0
+    bra.w 7f
+38: move.w en_counter(%pc), %d0              | rule 30, Rokusutahn: four pictures, a change every 16 updates; its handler does not set the mirror
+    lsr.w #4, %d0                           | (en_stale_flip)
+    andi.w #3, %d0
+    add.w %d0, %d0
+    add.w %d0, %d6
+    bsr.w en_stale_flip
+    add.w %d0, %d6
+    bra.w 4f
+39: move.w en_counter(%pc), %d0              | rule 31, the boss death: drawn on every other update; the frame is the count of the step, and in steps 2 and 7
+    btst #0, %d0                            | (the lightning) the pictures are those of 8 to 15
+    bne.w 8f
+    moveq #0, %d1
+    move.b E_D2(%a3), %d1
+    move.b E_PHASE(%a3), %d0
+    cmpi.b #2, %d0
+    beq.s 46f
+    cmpi.b #7, %d0
+    bne.s 47f
+46: addq.w #8, %d1
+47: add.w %d1, %d6
+    bra.w 4f
+52: btst #0, E_PHASE(%a3)                   | rule 32, Borabohra: while standing d2 / 8, then pictures 4 to 7, a change every 8 updates
+    bne.s 53f
+    moveq #0, %d0
+    move.b E_D2(%a3), %d0
+    lsr.w #3, %d0
+    bra.w 7f
+53: move.w en_counter(%pc), %d0
+    lsr.w #3, %d0
+    andi.w #3, %d0
+    addq.w #4, %d0
     bra.w 7f
 18: moveq #0, %d2                           | rule 11, Charron: picture 2 in step 5, 1 in step 0 and the odd ones, else a change every 8 updates
     move.b E_PHASE(%a3), %d2

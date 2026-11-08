@@ -8,20 +8,21 @@ import faxanadu_sprites as fs
 
 ENTITIES = 101                      # SPRITE_* ids 0 to 100
 NONE = 0xFF
+E_BOSS_DEATH = 0x64
 CATEGORY_ENEMY, CATEGORY_DROPPED, CATEGORY_NPC, CATEGORY_EFFECT, CATEGORY_TRIGGER, CATEGORY_ITEM, CATEGORY_MAGIC, CATEGORY_BOSS = range(8)
 
 # The kinds the ST code runs so far: entity -> (frames of pictures, the picture rule of `enemy_model.appearance_offset`).
 ENEMIES = (0x47, 0x2A, 0x0C, 0x06, 0x26, 0x1B, 0x0B, 0x07, 0x15,
-           0x04, 0x19, 0x28, 0x1E, 0x20, 0x17, 0x08, 0x1F, 0x21, 0x1C, 0x22, 0x1A, 0x18, 0x05, 0x0D, 0x23, 0x2C, 0x10, 0x0E, 0x0F)      # Zozura, Monodron, Snowman, Zombie, Ikeda, Myconid, Yuinaru, Hornet, Charron, Raiden, Grimlock, Lamprey, Giant Strider, Maskman, Geributa, Bihoruda, Sir Gawaine, Wolfman, Naga, Yareeka, Giant Bees, Sugata, Necron Aides, Nash, Magman, Tamazutsu, Execution Hood, Fire Giant, Ishiisu
-KINDS = {0x47: 2, 0x2A: 3, 0x0C: 2, 0x06: 3, 0x26: 3, 0x1B: 2, 0x0B: 2, 0x07: 2, 0x15: 3, 0x54: 4, 0x04: 4, 0x19: 4, 0x28: 2, 0x1E: 3, 0x20: 5, 0x17: 3, 0x08: 2, 0x1F: 3, 0x21: 3, 0x1C: 2, 0x22: 2, 0x1A: 2, 0x18: 2, 0x05: 2, 0x0D: 3, 0x23: 2, 0x2C: 7, 0x10: 2, 0x0E: 3, 0x0F: 4, 0x51: 2, 0x13: 8, 1: 1, 2: 2}      # + the death effect (a picture for each of its 8 frames), bread, coin
-RULE = {0x47: 0, 0x2A: 1, 0x0C: 5, 0x06: 6, 0x26: 7, 0x1B: 8, 0x0B: 9, 0x07: 10, 0x15: 11, 0x54: 12, 0x04: 13, 0x19: 14, 0x28: 15, 0x1E: 16, 0x20: 17, 0x17: 18, 0x08: 19, 0x1F: 20, 0x21: 20, 0x1C: 21, 0x22: 21, 0x1A: 21, 0x18: 21, 0x05: 22, 0x0E: 23, 0x2C: 24, 0x0D: 25, 0x10: 26, 0x23: 27, 0x51: 28, 0x0F: 29, 0x13: 2, 1: 3, 2: 4}
+           0x04, 0x19, 0x28, 0x1E, 0x20, 0x17, 0x08, 0x1F, 0x21, 0x1C, 0x22, 0x1A, 0x18, 0x05, 0x0D, 0x23, 0x2C, 0x10, 0x0E, 0x0F, 0x11, 0x2F)      # Zozura, Monodron, Snowman, Zombie, Ikeda, Myconid, Yuinaru, Hornet, Charron, Raiden, Grimlock, Lamprey, Giant Strider, Maskman, Geributa, Bihoruda, Sir Gawaine, Wolfman, Naga, Yareeka, Giant Bees, Sugata, Necron Aides, Nash, Magman, Tamazutsu, Execution Hood, Fire Giant, Ishiisu, Rokusutahn, Borabohra
+KINDS = {0x47: 2, 0x2A: 3, 0x0C: 2, 0x06: 3, 0x26: 3, 0x1B: 2, 0x0B: 2, 0x07: 2, 0x15: 3, 0x54: 4, 0x04: 4, 0x19: 4, 0x28: 2, 0x1E: 3, 0x20: 5, 0x17: 3, 0x08: 2, 0x1F: 3, 0x21: 3, 0x1C: 2, 0x22: 2, 0x1A: 2, 0x18: 2, 0x05: 2, 0x0D: 3, 0x23: 2, 0x2C: 7, 0x10: 2, 0x0E: 3, 0x0F: 4, 0x11: 4, 0x2F: 8, 0x51: 2, 0x13: 8, 0x64: 16, 1: 1, 2: 2}      # + the death effect (a picture for each of its 8 frames), bread, coin
+RULE = {0x47: 0, 0x2A: 1, 0x0C: 5, 0x06: 6, 0x26: 7, 0x1B: 8, 0x0B: 9, 0x07: 10, 0x15: 11, 0x54: 12, 0x04: 13, 0x19: 14, 0x28: 15, 0x1E: 16, 0x20: 17, 0x17: 18, 0x08: 19, 0x1F: 20, 0x21: 20, 0x1C: 21, 0x22: 21, 0x1A: 21, 0x18: 21, 0x05: 22, 0x0E: 23, 0x2C: 24, 0x0D: 25, 0x10: 26, 0x23: 27, 0x51: 28, 0x0F: 29, 0x11: 30, 0x2F: 32, 0x64: 31, 0x13: 2, 1: 3, 2: 4}
 SPAWNED = {0x15: 0x54, 0x0D: 0x51, 0x10: 0x51, 0x0F: 0x51}                 # what an enemy makes: Charron's fireball (it is in a package whenever its maker is, but is never placed on a screen)
-EXTRAS = (0x13, 1, 2)                   # what an enemy leaves: they are in every package that has enemies; their tiles are the common sprite tiles
+EXTRAS = (0x13, 1, 2, 0x64)             # what an enemy leaves: they are in every package that has enemies (the boss death only where a boss is); their tiles are the common sprite tiles
 KIND_BYTES = 32
 PLACE_BYTES = 6
 
 # The bytes of data a behaviour takes from the script when it starts (the number it adds to Sprites_ReadInfoAddr), for the behaviours modelled.
-BEHAVIOUR_DATA = {0: 2, 1: 0, 2: 0, 4: 2, 7: 0, 9: 3, 21: 0, 23: 0, 25: 0, 27: 0, 30: 0, 22: 0, 26: 0, 31: 0, 32: 0, 33: 0, 34: 0, 35: 0, 39: 0, 40: 0, 63: 0, 64: 0, 65: 0}
+BEHAVIOUR_DATA = {0: 2, 1: 0, 2: 0, 4: 2, 7: 0, 9: 3, 21: 0, 23: 0, 25: 0, 27: 0, 30: 0, 22: 0, 26: 0, 31: 0, 32: 0, 33: 0, 34: 0, 35: 0, 39: 0, 40: 0, 12: 0, 62: 0, 63: 0, 64: 0, 65: 0}
 # The length of each op's own bytes; op 0 (switch behaviour) is followed by its behaviour's data.
 OP_BYTES = {0: 3, 1: 3, 2: 2, 3: 7, 4: 1, 5: 3, 7: 2}
 JUMPS = {1: (1,), 5: (1,), 3: (3, 5)}       # the byte offsets of the addresses in an op
@@ -131,7 +132,7 @@ def package_parts(rom: fr.Rom, area: int, screens: list[int], palette_index: int
     enemy_places: a word a screen (the offset of its list from the start of the part), then the lists, each place being the entity, x and y (words), ended by -1;
     enemy_kinds: a record of KIND_BYTES for each kind in the area (and the death effect, bread and coin): entity, hit box type, hit points, the script's offset in
       enemy_scripts, its first pose (frame f facing left is pose first + 2f, facing right + 1), the rule, experience, what it drops (kind << 8 | value), the weapon's
-      extents x and y, the touch box left, top, width, height, the damage it does, a pad (words);
+      extents x and y, the touch box left, top, width, height, the damage it does, 1 for a boss (words);
     enemy_anim, enemy_images: the poses and the 8x8 images, as for the spells; enemy_scripts: the scripts, jumps as offsets within them."""
     import st_convert as sc
 
@@ -141,7 +142,8 @@ def package_parts(rom: fr.Rom, area: int, screens: list[int], palette_index: int
     used = sorted({p[0] for items in lists for p in items})
     used += [SPAWNED[e] for e in used if e in SPAWNED]
     if used:
-        used += list(EXTRAS)
+        bosses = any(entity(rom, e)["category"] == CATEGORY_BOSS for e in used)
+        used += [e for e in EXTRAS if bosses or e != E_BOSS_DEATH]
     palettes = sc.sprite_palettes(rom, palette_index)
     images: list[bytes] = []
     index: dict[tuple, int] = {}
@@ -159,10 +161,13 @@ def package_parts(rom: fr.Rom, area: int, screens: list[int], palette_index: int
             for flip in ((0, 0x40) if ent in ENEMIES or ent in SPAWNED.values() else (0,)):
                 entries_ = []
                 # the death effect (SpriteUpdateHandler_Effect_EnemyDeath) is three pieces: the first where the enemy was, the second 4 * frame lines above it, the third as far below
-                pieces = [(base + 0, 0), (base + 1, -4 * frame), (base + 2, 4 * frame)] if ent == 0x13 else [(base + frame, 0)]
-                for number, dy in pieces:
+                pieces = [(base + 0, 0, 0, 0), (base + 1, 0, -4 * frame, 0), (base + 2, 0, 4 * frame, 0)] if ent == 0x13 or (ent == E_BOSS_DEATH and frame < 8) else [(base + frame, 0, 0, 0)]
+                if ent == E_BOSS_DEATH and frame >= 8:      # (SpriteUpdateHandler_Effect_LightningBall20: four pieces flying up, down, left and right)
+                    d = 4 * (frame - 8)
+                    pieces = [(base + 1, 0, -d, 0), (base + 2, 0, d, 0), (base + 3, -d, 0, 0), (base + 3, d, 0, 0x40)]
+                for number, dx, dy, mirror in pieces:
                     app = fs.appearance(rom, number, "TILEINFO_ENTITY_ADDRS")
-                    for sp in fs.place(app, sc.ANIM_BASE, sc.ANIM_BASE + dy, flip):
+                    for sp in fs.place(app, sc.ANIM_BASE + dx, sc.ANIM_BASE + dy, flip ^ mirror):
                         key = (ent, sp.tile, sp.attr & 3, bool(sp.attr & 0x40), bool(sp.attr & 0x80))
                         if key not in index:
                             index[key] = len(images)
@@ -182,7 +187,7 @@ def package_parts(rom: fr.Rom, area: int, screens: list[int], palette_index: int
     for ent in used:
         info, kind = entity(rom, ent), kind_info(rom, ent)
         drop = 0 if kind["drop"] is None else kind["drop"][0] << 8 | kind["drop"][1]
-        row = [ent, info["hitbox"], info["hp"], entries[ent], firsts[ent], RULE[ent], kind["exp"], drop, *kind["extent"], *kind["bounds"], kind["damage"], 0]
+        row = [ent, info["hitbox"], info["hp"], entries[ent], firsts[ent], RULE[ent], kind["exp"], drop, *kind["extent"], *kind["bounds"], kind["damage"], int(kind["category"] == CATEGORY_BOSS)]
         kinds += b"".join(v.to_bytes(2, "big") for v in row)
     head = 2 * len(lists)
     body, places = bytearray(), []

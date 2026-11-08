@@ -761,7 +761,7 @@ class ViewerTests(unittest.TestCase):
 
     def run_scenario(self, make_args: list[str], pokes: list[tuple[int, str, int]], capture: int, name: str):
         """Builds the viewer, runs it in Hatari and pokes the stick (`joy`, a byte: 1 up, 2 down, 4 left, 8 right) or the hero's x (`x`, a word) at
-        the given VBLs; returns (RAM at the capture VBL, a reader for words by symbol, the Hatari log)."""
+        the given VBLs (`hp`: the hit points of the sprite in slot 7); returns (RAM at the capture VBL, a reader for words by symbol, the Hatari log)."""
         import hatari_shot as hs
 
         subprocess.run(["make", "-C", str(ROOT), "viewer", *make_args], check=True, capture_output=True)
@@ -792,6 +792,8 @@ class ViewerTests(unittest.TestCase):
                 text = f"memwrite ${base + sym['input_state'] + 264 + 0x19:x} 0x{value:02x}\ncont\n"
             elif what in ("h", "g"):                                   # the H and G keys (debug: hit from the right / from the left)
                 text = f"memwrite ${base + sym['input_state'] + 264 + (0x23 if what == 'h' else 0x22):x} 0x{value:02x}\ncont\n"
+            elif what == "hp":                                         # the hit points (a byte) of the sprite in slot 7 (E_HP is 15, a slot has 28 bytes)
+                text = f"memwrite ${base + sym['enemies'] + 7 * 28 + 15:x} 0x{value:02x}\ncont\n"
             elif what == "y":                                          # the hero's y (a word)
                 text = f"memwrite ${base + sym['hero_y']:x} 0x{value >> 8:02x} 0x{value & 255:02x}\ncont\n"
             else:
@@ -815,14 +817,16 @@ class ViewerTests(unittest.TestCase):
 
     ENEMY_SCENES = ((0, 8, "16,144", 360), (0, 4, "240,144", 260), (0, 5, "240,144", 260), (1, 16, "16,144", 260),
                     (1, 7, "240,144", 280), (1, 31, "240,144", 260), (1, 22, "16,144", 260),
-                    (1, 29, "16,144", 280), (1, 45, "64,144", 280), (1, 60, "208,144", 280), (1, 25, "16,144", 378),
+                    (1, 29, "16,144", 280), (1, 45, "64,144", 280), (1, 60, "208,144", 280), (1, 25, "16,144", 380),
                     (2, 39, "16,144", 284), (2, 23, "16,144", 284), (2, 60, "16,144", 284), (5, 25, "16,144", 279), (5, 2, "16,144", 262), (5, 31, "16,144", 279),
                     (2, 4, "240,144", 284), (2, 14, "240,144", 284), (2, 19, "240,144", 284), (5, 21, "16,144", 279), (5, 35, "16,144", 279), (5, 36, "16,144", 282),
                     (2, 1, "16,144", 284), (2, 3, "144,144", 284), (2, 25, "144,144", 284), (2, 29, "208,144", 340), (2, 32, "16,144", 290), (2, 37, "64,144", 284),
                     (2, 45, "208,144", 290),
                     (2, 33, "144,144", 290), (2, 38, "16,144", 290), (2, 30, "144,144", 290), (2, 31, "144,144", 290), (2, 42, "144,144", 300), (5, 5, "240,144", 290),
                     (5, 32, "16,144", 290), (5, 34, "16,144", 290), (5, 3, "144,144", 290), (6, 13, "144,144", 290), (6, 10, "16,160", 290), (6, 11, "144,144", 290),
-                    (7, 15, "208,144", 293), (7, 16, "16,144", 290), (2, 80, "16,160", 290), (2, 81, "16,160", 290), (2, 82, "16,160", 290))    # area, screen, hero, the capture's VBL
+                    (7, 15, "208,144", 293), (7, 16, "16,144", 290), (2, 80, "16,160", 290), (2, 81, "16,160", 290), (2, 82, "16,160", 290),
+                    (6, 30, "240,144", 290), (2, 59, "240,144", 290), (6, 23, "16,144", 290), (6, 25, "240,144", 290),
+                    (1, 58, "16,144", 290), (6, 26, "16,144", 290), (7, 17, "208,144", 290))    # area, screen, hero, the capture's VBL
 
     def enemy_engine(self, rom, area_index: int, screen: int, word):
         """The model with the enemies of a screen as they are placed, the hero where the viewer has him."""
@@ -877,11 +881,12 @@ class ViewerTests(unittest.TestCase):
                 for sprites, counter in states:
                     expected = sc.expected_screen(rom, area, screen, word("camera"), state=dict(hp=word.raw("hud_state", 2)[0], mp=80, experience=0, gold=0, seconds=0),      # (a Sugata or a bee may have hurt him)
                                                   hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 0, word("hero_frame"), bool(word("hero_flip"))))
-                    for sp in sprites:
+                    masks = em.flip_masks([(sp.ent, sp.flags, sp.hit) for sp in sprites], counter, 0x40 if word("hero_flip") else 0)
+                    for i, sp in enumerate(sprites):
                         if sp.ent == em.NONE or not em.is_drawn(sp.ent, sp.phase, counter, sp.d2):
                             continue
                         app = fs.appearance(rom, ed.entity(rom, sp.ent)["appearance"] + em.appearance_offset(sp.ent, sp.phase, counter, sp.d2), "TILEINFO_ENTITY_ADDRS")
-                        layer = fs.sprite_layer(fs.place(app, sp.x, sp.y, em.flip_mask(sp.flags, sp.ent) ^ em.flip_extra(sp.ent, counter)), fs.entity_tiles(rom, sp.ent), palettes)
+                        layer = fs.sprite_layer(fs.place(app, sp.x, sp.y, masks[i]), fs.entity_tiles(rom, sp.ent), palettes)
                         for (x, line), c in layer.items():
                             y = line - word("camera")
                             if sc.ST_TOP <= y < 200 and sc.ST_LEFT <= x + sc.ST_LEFT < sc.ST_LEFT + 256:
@@ -930,6 +935,21 @@ class ViewerTests(unittest.TestCase):
         self.assertGreater(exp, 0)
         self.assertEqual(exp % 30, 0, exp)
         self.assertEqual((80 - power) % 7, 0, power)
+
+    def test_the_boss_dies_in_ten_steps_and_leaves_coins(self) -> None:
+        """Area 6 screen 30, Rokusutahn walks up to the hero, who jumps and swings the sword (it reaches only the top of its 48 lines) and is left with 1 hit point:
+        he gets its 120 experience, the boss death effect (entity 100) takes its place, flies about in 10 steps and leaves coins that he picks up (tests/test_enemy.py
+        checks all of it against the game)."""
+        pokes = [(300, "hp", 1)]
+        for v in range(310, 700, 40):
+            pokes += [(v, "space", 1), (v + 3, "space", 0), (v + 14, "b", 1), (v + 17, "b", 0)]
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=6", "SCREEN=30", "HERO=120,144,0,255,1,0,1", "WORLD=1", "HUD=80,80,0,0,0"], pokes, 650, "shots_fight")
+        state = word.raw("hud_state", 10)
+        self.assertEqual(int.from_bytes(state[2:4], "big"), 120)
+        gold = int.from_bytes(state[4:8], "big")
+        self.assertGreater(gold, 0)
+        self.assertEqual(gold % 120, 0, gold)                          # (the coins he picked up; the effect is gone)
+        self.assertNotIn(100, [word.raw("enemies", 8 * 28)[i * 28] for i in range(8)])
 
     def test_a_snowman_that_hops_into_him_takes_four_power_a_touch(self) -> None:
         """Area 1 screen 16 (a wall cuts off its left half, so the hero stands at 208): the Snowman leaps at him, and each touch takes its 4 off the power."""
