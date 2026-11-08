@@ -2256,9 +2256,17 @@ en_weapon:
     andi.b #0xFE, E_FLAGS(%a3)
     or.b %d0, E_FLAGS(%a3)
     move.b #8, E_HIT(%a3)
-    lea weapon_damage(%pc), %a1
+    lea weapon_strength(%pc), %a1           | the weapon's strength, a quarter more without the pendant (the ROM's bug), the glove's on top
     move.b (%a1,%d1.w), %d0
-    move.b E_HP(%a3), %d2
+    btst #1, inv+INV_SPECIAL(%pc)
+    bne.s 6f
+    move.b %d0, %d3
+    lsr.b #2, %d3
+    add.b %d3, %d0
+6:  move.b inv+INV_GLOVE(%pc), %d3
+    bmi.s 7f
+    add.b weapon_glove-weapon_strength(%a1,%d1.w), %d0
+7:  move.b E_HP(%a3), %d2
     move.b %d2, %d4
     sub.b %d0, %d4
     move.b %d4, E_HP(%a3)
@@ -2369,8 +2377,10 @@ en_touch:
     beq.w 5f
     cmpi.b #E_COIN, %d5
     beq.w 6f
-    move.w hero_invinc(%pc), %d0            | an enemy: nothing happens while he is invincible
+    move.w hero_invinc(%pc), %d0            | an enemy: nothing happens while he is invincible, or while the ointment is in force
     bne.w 9f
+    move.b inv+INV_OINTMENT(%pc), %d0
+    bpl.w 9f
     cmpi.b #5, %d5                          | Necron Aides, touching him: it comes off the ladder
     bne.s 14f
     ori.b #0x80, E_PHASE(%a3)
@@ -2389,7 +2399,8 @@ en_touch:
     move.w %d1, %d0
     lsl.w #8, %d0                           | the damage, 8.8
     lsl.w #5, %d1                           | an eighth of it
-    moveq #HERO_ARMOUR, %d2                 | Player_ApplyDamage: the armour's multiplier takes that many eighths off (Leather and the Battle Suit's slot none)
+    moveq #0, %d2                           | Player_ApplyDamage: the armour's multiplier takes that many eighths off (Leather and the Battle Suit's slot none)
+    move.b inv+INV_ARMOUR(%pc), %d2
     beq.s 2f
     cmpi.w #4, %d2
     bcc.s 2f
@@ -2399,7 +2410,10 @@ en_touch:
     bra.s 4f
 3:  sub.w %d1, %d0
 4:  dbra %d3, 3b
-2:  bsr.w en_reduce_hp
+2:  btst #0, inv+INV_SPECIAL(%pc)           | the Black Onyx: another eighth off
+    beq.s 8f
+    sub.w %d1, %d0
+8:  bsr.w en_reduce_hp
     cmpi.b #E_FIREBALL, E_ENT(%a3)          | (magic is gone when it has hurt him)
     beq.s 15f
     cmpi.b #E_BOLT, E_ENT(%a3)
@@ -3182,8 +3196,10 @@ hop_ground:
     .byte 0xC0, 0x60, 0x30, 0x18, 0x30
 hop_peak:                                   | SPRITE_BEHAVIOR_HOP_PEAK_TICKS and SPRITES_MAYBE_GRAVITY, by the gravity
     .byte 0xFF, 0x7F, 0x3F, 0x1F, 0x0F, 0x07, 0x03, 0x01
-weapon_damage:                              | WEAPON_STRENGTHS (4, 8, 12, 16) plus a quarter: the pendant bug
-    .byte 5, 10, 15, 20
+weapon_strength:                            | WEAPON_STRENGTHS
+    .byte 4, 8, 12, 16
+weapon_glove:                               | WEAPON_TO_GLOVE_STRENGTH
+    .byte 2, 4, 8, 10
 armour_multiplier:                          | ARMOR_DEFENSE_MULTIPLIERS
     .byte 0, 1, 2, 4
 hop_maybe:

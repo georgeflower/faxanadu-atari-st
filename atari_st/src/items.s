@@ -212,6 +212,35 @@ item_pickup:
     movem.l (%sp)+, %d0-%d7/%a0-%a2
     rts
 
+| GameLoop_CountdownItems for the glove and the ointment: every 64th frame each loses a second; at the end of its last one (it goes from 0 to $FF) a message
+| says the power is gone. (Called once a frame.)
+items_tick:
+    movem.l %d0-%d1/%a0-%a2, -(%sp)
+    lea item_ticks(%pc), %a0
+    addq.b #1, (%a0)
+    move.b (%a0), %d0
+    andi.b #0x3F, %d0
+    bne.s 9f
+    lea inv(%pc), %a2
+    lea INV_GLOVE(%a2), %a1
+    lea text_data+TEXT_GLOVE_GONE(%pc), %a0
+    bsr.s item_count
+    lea INV_OINTMENT(%a2), %a1
+    lea text_data+TEXT_OINTMENT_GONE(%pc), %a0
+    bsr.s item_count
+9:  movem.l (%sp)+, %d0-%d1/%a0-%a2
+    rts
+
+item_count:                                 | a1 = the time left, a0 = the message for its end
+    tst.b (%a1)
+    bmi.s 1f
+    subq.b #1, (%a1)
+    bpl.s 1f
+    movem.l %a1-%a2, -(%sp)
+    bsr.w message_box
+    movem.l (%sp)+, %a1-%a2
+1:  rts
+
 item_jumps:
     .word item_none-item_jumps, item_add-item_jumps, item_poison-item_jumps, item_glove-item_jumps, item_ointment-item_jumps
     .word item_special-item_jumps, item_suit-item_jumps, item_helmet-item_jumps, item_slayer-item_jumps
@@ -353,6 +382,8 @@ item_actions:                               | by entity from $48: 0 nothing, 1 a
     .even
 
     .section .data
+item_ticks:
+    .byte 0
 inv:                                        | the inventory (a new game: nothing, no glove and no ointment in force, the equipment the build gave him)
     .space INV_GLOVE
     .byte 0xFF, 0xFF, 0, HERO_ARMOUR, HERO_SHIELD & 0xFF

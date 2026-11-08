@@ -794,6 +794,8 @@ class ViewerTests(unittest.TestCase):
                 text = f"memwrite ${base + sym['input_state'] + 264 + (0x23 if what == 'h' else 0x22):x} 0x{value:02x}\ncont\n"
             elif what == "hp":                                         # the hit points (a byte) of the sprite in slot 7 (E_HP is 15, a slot has 28 bytes)
                 text = f"memwrite ${base + sym['enemies'] + 7 * 30 + 15:x} 0x{value:02x}\ncont\n"
+            elif what == "inv":                                        # a byte of the inventory block: value = offset << 8 | byte
+                text = f"memwrite ${base + sym['inv'] + (value >> 8):x} 0x{value & 255:02x}\ncont\n"
             elif what == "y":                                          # the hero's y (a word)
                 text = f"memwrite ${base + sym['hero_y']:x} 0x{value >> 8:02x} 0x{value & 255:02x}\ncont\n"
             else:
@@ -817,16 +819,16 @@ class ViewerTests(unittest.TestCase):
 
     ENEMY_SCENES = ((0, 8, "16,144", 360), (0, 4, "240,144", 260), (0, 5, "240,144", 260), (1, 16, "16,144", 272),
                     (1, 7, "240,144", 280), (1, 31, "240,144", 272), (1, 22, "16,144", 272),
-                    (1, 29, "16,144", 280), (1, 45, "64,144", 280), (1, 60, "208,144", 280), (1, 25, "16,144", 382),
+                    (1, 29, "16,144", 280), (1, 45, "64,144", 280), (1, 60, "208,144", 280), (1, 25, "16,144", 385),
                     (2, 39, "16,144", 284), (2, 23, "16,144", 284), (2, 60, "16,144", 284), (5, 25, "16,144", 279), (5, 2, "16,144", 274), (5, 31, "16,144", 279),
                     (2, 4, "240,144", 284), (2, 14, "240,144", 284), (2, 19, "240,144", 284), (5, 21, "16,144", 279), (5, 35, "16,144", 279), (5, 36, "16,144", 282),
                     (2, 1, "16,144", 284), (2, 3, "144,144", 284), (2, 25, "144,144", 284), (2, 29, "208,144", 340), (2, 32, "16,144", 290), (2, 37, "64,144", 284),
                     (2, 45, "208,144", 290),
                     (2, 33, "144,144", 290), (2, 38, "16,144", 291), (2, 30, "144,144", 290), (2, 31, "144,144", 290), (2, 42, "144,144", 300), (5, 5, "240,144", 290),
-                    (5, 32, "16,144", 290), (5, 34, "16,144", 290), (5, 3, "144,144", 290), (6, 13, "144,144", 290), (6, 10, "16,160", 290), (6, 11, "144,144", 290),
+                    (5, 32, "16,144", 290), (5, 34, "16,144", 290), (5, 3, "144,144", 290), (6, 13, "144,144", 290), (6, 10, "16,160", 293), (6, 11, "144,144", 290),
                     (7, 15, "208,144", 293), (7, 16, "16,144", 290), (2, 80, "16,160", 290), (2, 81, "16,160", 290), (2, 82, "16,160", 290),
-                    (6, 30, "240,144", 290), (2, 59, "240,144", 302), (6, 23, "16,144", 290), (6, 25, "240,144", 290),
-                    (1, 58, "16,144", 293), (6, 26, "16,144", 290), (7, 17, "208,144", 290),
+                    (6, 30, "240,144", 290), (2, 59, "240,144", 302), (6, 23, "16,144", 293), (6, 25, "240,144", 290),
+                    (1, 58, "16,144", 293), (6, 26, "16,144", 290), (7, 17, "208,144", 293),
                     (2, 51, "16,144", 290), (2, 63, "16,144", 290), (7, 4, "16,144", 290), (6, 22, "16,144", 302),
                     (2, 65, "208,144", 290), (6, 18, "16,144", 290), (7, 1, "16,144", 291),
                     (6, 31, "16,144", 330), (7, 7, "16,144", 330), (7, 11, "16,144", 330),
@@ -1002,14 +1004,49 @@ class ViewerTests(unittest.TestCase):
 
     def test_the_glove_waits_for_a_key_and_then_gives_20_seconds_and_100_experience(self) -> None:
         """Area 1 screen 24: the hero lands on the Power Glove. The message (ROM text) comes first and holds everything: the glove is still there, nothing
-        changed. A key takes the message away; the glove is gone, the experience is 100 and the glove's time (inv, DurationGlove) is 20
+        changed. A key takes the message away; the glove is gone, the experience is 100 and the glove's time (inv, DurationGlove) is about 20
         (tests/test_items.py checks the effects against the game)."""
         word, slots, hud, inv = self.item_scene(1, 24, "16,32", False, 430)
         self.assertIn(0x48, slots)
         self.assertEqual((int.from_bytes(hud[2:4], "big"), inv[31]), (0, 255))
         word, slots, hud, inv = self.item_scene(1, 24, "16,32", True, 560)
         self.assertNotIn(0x48, slots)
-        self.assertEqual((int.from_bytes(hud[2:4], "big"), inv[31]), (100, 20))
+        self.assertEqual(int.from_bytes(hud[2:4], "big"), 100)
+        self.assertIn(inv[31], (18, 19, 20))                            # (it runs: a second off every 64 frames)
+
+    def two_blows(self, inv: list[tuple[int, int]]) -> int:
+        """Eolis screen 4, a Long Sword (strength 8), the first enemy given 200 hit points and five swings (two of them hit): how many hit points it lost. `inv`: bytes of the
+        inventory block to set first (offset, value)."""
+        pokes = [(395, "hp", 200)] + [(390 + i, "inv", o << 8 | v) for i, (o, v) in enumerate(inv)]
+        for v in range(400, 520, 24):
+            pokes += [(v, "b", 1), (v + 3, "b", 0)]
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=4", "HERO=200,144,0,255,1,0,1", "WORLD=1", "HUD=80,80,0,0,0"], pokes, 560, "shots_fight")
+        return 200 - word.raw("enemies", 8 * 30)[7 * 30 + 15]
+
+    def test_the_sword_takes_a_quarter_more_without_the_pendant_and_the_glove_adds_its_own(self) -> None:
+        """Long Sword, 8 a blow: 10 without the pendant (the ROM's bug), 8 with it; the glove (while its time runs) adds 4 (INV_SPECIAL 29: bit 1 the pendant,
+        INV_GLOVE 31)."""
+        self.assertEqual(self.two_blows([]), 20)
+        self.assertEqual(self.two_blows([(31, 20)]), 28)
+        self.assertEqual(self.two_blows([(29, 2)]), 16)
+        self.assertEqual(self.two_blows([(29, 2), (31, 20)]), 24)
+
+    def test_nothing_hurts_while_the_ointment_is_in_force(self) -> None:
+        """Eolis screen 4: a Zozura that walks into him takes 7 power without the ointment; with 30 seconds of it nothing."""
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=4", "HERO=200,144,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [(285, "inv", 32 << 8 | 30)], 700, "shots_touch")
+        self.assertEqual(word.raw("hud_state", 1)[0], 80)
+
+    def test_the_glove_runs_out_with_a_message_every_64_frames_a_second(self) -> None:
+        """Area 1 screen 24 without the glove lying about is not needed: a quiet screen (area 0 screen 1), the glove at 0 runs out at the next
+        64th frame ($FF) and the message "The power of the Glove is gone" holds the game until a key (the ointment, counted after the glove, waits with it)."""
+        pokes = [(390, "inv", 31 << 8 | 0), (391, "inv", 32 << 8 | 2)]
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1", "HERO=144,144,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], pokes, 480, "shots_glove")
+        inv = word.raw("inv", 36)
+        self.assertEqual((inv[31], inv[32]), (255, 2))
+        held = word("en_counter")
+        pokes += [(v, "b", 1) for v in (500, 540)] + [(v + 4, "b", 0) for v in (500, 540)]
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=1", "HERO=144,144,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], pokes, 600, "shots_glove")
+        self.assertGreater(word("en_counter"), held + 40)
 
     def test_a_poison_potion_takes_16_power(self) -> None:
         """Area 1 screen 53: the potion on the floor (the Snowmen may hurt him too, in steps of 4, so no more than 16 and 4 off)."""

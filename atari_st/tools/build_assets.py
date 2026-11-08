@@ -159,6 +159,7 @@ def main() -> int:
     texts = {"DEATH": ft.message(rom, ft.MESSAGE_DEATH), "MEDITATE": ft.message(rom, ft.MESSAGE_MEDITATE), "WRONG": wrong, "ASK": ask}
     import enemy_model as em
 
+    texts["GLOVE_GONE"], texts["OINTMENT_GONE"] = ft.message(rom, 0xBD), ft.message(rom, 0xBF)       # (IScripts $93 and $95)
     for message in sorted(set(em.Engine.ITEM_MESSAGES.values())):         # what the game says when an item is picked up (the ROM's messages)
         texts[f"MSG_{message:02X}"] = ft.message(rom, message)
     text_blob, text_equ = bytearray(ft.font(rom)), []

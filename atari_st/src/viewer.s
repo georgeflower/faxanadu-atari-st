@@ -250,6 +250,7 @@ start:
     .ifndef NO_PHYSICS
     bsr.w enemies_erase
     bsr.w enemies_update
+    bsr.w items_tick
     bsr.w draw_spell
     bsr.w draw_enemies
     .endif
