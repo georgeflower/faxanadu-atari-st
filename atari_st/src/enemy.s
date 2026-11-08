@@ -23,7 +23,9 @@
     .equ E_HIT, 22                          | CurrentSprites_HitCounter: 8 when the sword hit it, counts down; it stands still (and blinks) meanwhile
     .equ E_VAL, 23                          | CurrentSprites_Values: what a dropped coin is worth, how much bread heals
     .equ E_PREV, 24                         | long: the kind record of what a dying enemy was (its drop, CurrentSprites_InternalBehaviorStates)
-    .equ E_BYTES, 28
+    .equ E_BYFULL, 28                       | the vertical move's speed (whole pixels, then the fraction)
+    .equ E_BYF, 29
+    .equ E_BYTES, 30
     .equ K_HBOX, 2                          | in a kind's record: the hit box type, the script's offset, the first pose, the picture rule, experience, drop (kind << 8 | value),
     .equ K_SCRIPT, 6                        | the weapon's extents, the touch box (left, top, width, height) and the damage (all words)
     .equ K_POSE, 8
@@ -105,6 +107,7 @@ enemies_load:
     clr.b E_INT(%a3)
     clr.w E_D3(%a3)
     clr.w E_BXFULL(%a3)
+    clr.w E_BYFULL(%a3)
     move.b 3(%a0), E_HBOX(%a3)
     move.b 5(%a0), E_HP(%a3)
     move.w 6(%a0), E_SCRIPT(%a3)
@@ -229,6 +232,18 @@ en_behaviour:
     beq.w beh_borabohra
     cmpi.w #10, %d0
     beq.w beh_ripasheiku
+    cmpi.w #18, %d0
+    beq.w beh_zoradohna
+    cmpi.w #19, %d0
+    beq.w beh_move_vertically
+    cmpi.w #13, %d0
+    beq.w beh_pakukame
+    cmpi.w #14, %d0
+    beq.w beh_zorugeriru
+    cmpi.w #3, %d0
+    beq.w beh_rock
+    cmpi.w #24, %d0
+    beq.w beh_lilith
     cmpi.w #15, %d0
     beq.w beh_king_grieve
     cmpi.w #28, %d0
@@ -1434,6 +1449,336 @@ beh_king_grieve:
     clr.b E_D2(%a3)
     bra.w en_behaviour_end
 
+| Zoradohna's hop (SpriteBehavior_SomethingZoradohna_18): the hop's curve with tables of its own, turning at a wall; at the top of the curve (every
+| 2^(gravity-1) ticks) it only turns round, else the countdown runs. Its data: the sideways speed and the kind.
+beh_zoradohna:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    move.b (%a5,%d6.w), E_BXF(%a3)
+    move.b 1(%a5,%d6.w), E_BXFULL(%a3)
+    move.b 2(%a5,%d6.w), E_INT(%a3)
+    addq.w #3, %d6
+    bsr.w en_ready
+    bset #7, E_FLAGS(%a3)
+1:  move.w E_BXFULL(%a3), %d3
+    bsr.w en_step_x
+    tst.w %d0
+    beq.s 2f
+    eori.b #1, E_FLAGS(%a3)
+2:  moveq #0, %d0
+    move.b E_INT(%a3), %d0
+    lea zora_gravity(%pc), %a0
+    moveq #0, %d1
+    move.b (%a0,%d0.w), %d1                 | the gravity
+    lea hop_peak(%pc), %a0
+    moveq #0, %d2
+    move.b (%a0,%d1.w), %d2
+    moveq #0, %d4
+    move.b E_D3(%a3), %d4
+    move.w %d4, %d5
+    and.w %d2, %d5
+    lea hop_maybe(%pc), %a0
+    move.b (%a0,%d1.w), %d0
+    and.b %d4, %d0
+    beq.s 3f
+    sub.w %d5, %d2
+    move.w %d2, %d5
+3:  moveq #0, %d0
+    move.b E_INT(%a3), %d0
+    lea zora_strength(%pc), %a0
+    moveq #0, %d3
+    move.b (%a0,%d0.w), %d3
+    lsl.w %d3, %d5
+    move.w %d5, %d3
+    bsr.w en_step_y
+    addq.b #1, E_D3(%a3)
+    moveq #0, %d0
+    move.b E_INT(%a3), %d0
+    lea zora_gravity(%pc), %a0
+    moveq #0, %d1
+    move.b (%a0,%d0.w), %d1
+    subq.w #1, %d1
+    lea hop_peak(%pc), %a0
+    moveq #0, %d2
+    move.b (%a0,%d1.w), %d2
+    moveq #0, %d4
+    move.b E_D3(%a3), %d4
+    and.w %d2, %d4
+    beq.s 4f
+    bsr.w en_countdown
+    bra.w en_behaviour_end
+4:  eori.b #0x80, E_FLAGS(%a3)
+    bra.w en_behaviour_end
+zora_gravity:
+    .byte 3, 4, 5, 6
+zora_strength:
+    .byte 3, 5, 5, 7
+
+| MoveVertically: the script's speed (two bytes) up or down, the other way when it meets something; counts down.
+beh_move_vertically:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    move.b (%a5,%d6.w), E_BYF(%a3)
+    move.b 1(%a5,%d6.w), E_BYFULL(%a3)
+    addq.w #2, %d6
+    bsr.w en_ready
+1:  move.w E_BYFULL(%a3), %d3
+    bsr.w en_step_y
+    tst.w %d0
+    beq.s 2f
+    eori.b #0x80, E_FLAGS(%a3)
+2:  bsr.w en_countdown
+    bra.w en_behaviour_end
+
+| The highest free slot: a0 (0 if there is none). Clobbers d0.
+en_free_slot:
+    lea enemies(%pc), %a0
+    adda.w #7*E_BYTES, %a0
+    moveq #7, %d0
+1:  cmpi.b #0xFF, E_ENT(%a0)
+    beq.s 2f
+    lea -E_BYTES(%a0), %a0
+    dbra %d0, 1b
+    suba.l %a0, %a0
+2:  rts
+
+| Pakukame: it stays; 64 updates of waiting, then (with a free slot and fewer than three Liliths) steps 1 to 4 of 8 counts each, and at the third it lets a
+| Lilith out 8 pixels right and 16 below; and round again.
+beh_pakukame:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    clr.b E_PHASE(%a3)
+    clr.b E_D2(%a3)
+    move.b #4, E_HBOX(%a3)
+    bsr.w en_ready
+1:  tst.b E_PHASE(%a3)
+    bne.s 5f
+    addq.b #1, E_D2(%a3)
+    cmpi.b #0x40, E_D2(%a3)
+    bcs.w en_behaviour_end
+    bsr.w en_free_slot
+    move.l %a0, %d0
+    beq.w en_behaviour_end
+    lea enemies(%pc), %a0
+    moveq #7, %d1
+    moveq #0, %d2
+2:  cmpi.b #9, E_ENT(%a0)
+    bne.s 3f
+    addq.w #1, %d2
+3:  lea E_BYTES(%a0), %a0
+    dbra %d1, 2b
+    cmpi.w #3, %d2
+    bcc.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    moveq #0x12, %d0
+    bsr.w sound_play_sfx
+    bra.w en_behaviour_end
+5:  move.w en_counter(%pc), %d0
+    andi.w #7, %d0
+    bne.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    cmpi.b #5, E_PHASE(%a3)
+    bcs.s 6f
+    clr.b E_PHASE(%a3)
+    clr.b E_D2(%a3)
+    bra.w en_behaviour_end
+6:  cmpi.b #3, E_PHASE(%a3)
+    bne.w en_behaviour_end
+    bsr.w en_free_slot
+    movea.l %a0, %a1
+    move.l %a0, %d0
+    beq.w en_behaviour_end
+    moveq #9, %d0
+    bsr.w en_find_kind
+    move.l %a0, %d1
+    beq.w en_behaviour_end
+    move.b #9, E_ENT(%a1)
+    clr.b E_FLAGS(%a1)
+    move.b E_X(%a3), %d1
+    addq.b #8, %d1
+    move.b %d1, E_X(%a1)
+    move.b E_Y(%a3), %d1
+    addi.b #0x10, %d1
+    move.b %d1, E_Y(%a1)
+    clr.b E_PHASE(%a1)
+    move.b #0xFF, E_BEH(%a1)
+    move.b 3(%a0), E_HBOX(%a1)
+    move.b 5(%a0), E_HP(%a1)
+    move.w 6(%a0), E_SCRIPT(%a1)
+    move.l %a0, E_KIND(%a1)
+    bra.w en_behaviour_end
+
+| Zorugeriru: in the even steps a count down (a look every 16 updates: with a free slot and fewer than four rocks it goes on), in the odd ones a count up to 32
+| and then a rock falls (from a slot of its own, above the hero or just beside him).
+beh_zorugeriru:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    move.b #4, E_HBOX(%a3)
+    clr.b E_D2(%a3)
+    clr.b E_PHASE(%a3)
+    bsr.w en_ready
+1:  btst #0, E_PHASE(%a3)
+    bne.s 5f
+    subq.b #1, E_D2(%a3)
+    move.b E_D2(%a3), %d0
+    andi.b #0x0F, %d0
+    bne.w en_behaviour_end
+    bsr.w en_free_slot
+    move.l %a0, %d0
+    beq.w en_behaviour_end
+    lea enemies(%pc), %a0
+    moveq #7, %d1
+    moveq #0, %d2
+2:  cmpi.b #3, E_ENT(%a0)
+    bne.s 3f
+    addq.w #1, %d2
+3:  lea E_BYTES(%a0), %a0
+    dbra %d1, 2b
+    cmpi.w #4, %d2
+    bcc.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    clr.b E_D2(%a3)
+    bra.w en_behaviour_end
+5:  addq.b #1, E_D2(%a3)
+    cmpi.b #0x20, E_D2(%a3)
+    bcs.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    move.b #0x3C, E_D2(%a3)
+    bsr.w en_free_slot
+    movea.l %a0, %a1
+    move.l %a0, %d0
+    beq.w en_behaviour_end
+    moveq #3, %d0
+    bsr.w en_find_kind
+    move.l %a0, %d1
+    beq.w en_behaviour_end
+    move.b #3, E_ENT(%a1)
+    clr.b E_PHASE(%a1)
+    clr.b E_FLAGS(%a1)
+    move.w hero_x(%pc), %d1
+    move.b E_X(%a3), %d2
+    cmp.b %d2, %d1
+    bcs.s 6f
+    addi.b #0x10, %d2
+    cmp.b %d2, %d1
+    bcc.s 6f
+    subi.b #0x10, %d1
+6:  move.b %d1, E_X(%a1)
+    move.b #0x20, E_Y(%a1)
+    move.b #0xFF, E_BEH(%a1)
+    move.b 3(%a0), E_HBOX(%a1)
+    move.w 6(%a0), E_SCRIPT(%a1)
+    move.l %a0, E_KIND(%a1)
+    bra.w en_behaviour_end
+
+| The rock: it falls faster and faster (to 8 pixels a step) until it hits the ground, shakes for 5 steps and is gone after 15 more.
+beh_rock:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    clr.b E_HBOX(%a3)
+    clr.b E_D3(%a3)
+    clr.b E_PHASE(%a3)
+    bsr.w en_ready
+1:  move.b E_PHASE(%a3), %d0
+    cmpi.b #1, %d0
+    bne.s 3f
+    moveq #0, %d0
+    move.b E_D2(%a3), %d0
+    andi.b #1, %d0
+    lsl.b #2, %d0
+    subq.b #2, %d0
+    add.b %d0, E_Y(%a3)
+    subq.b #1, E_D2(%a3)
+    bne.w en_behaviour_end
+    move.b #0x0F, E_D2(%a3)
+    addq.b #1, E_PHASE(%a3)
+    bra.w en_behaviour_end
+3:  cmpi.b #2, %d0
+    bne.s 4f
+    subq.b #1, E_D2(%a3)
+    bne.w en_behaviour_end
+    move.b #0xFF, E_ENT(%a3)
+    bra.w en_behaviour_end
+4:  bset #7, E_FLAGS(%a3)
+    moveq #0, %d3
+    move.b E_D3(%a3), %d3
+    lsl.w #5, %d3
+    bsr.w en_step_y
+    tst.w %d0
+    bne.s 5f
+    addq.b #1, E_D3(%a3)
+    cmpi.b #0x41, E_D3(%a3)
+    bcs.w en_behaviour_end
+    subq.b #1, E_D3(%a3)
+    bra.w en_behaviour_end
+5:  addq.b #1, E_PHASE(%a3)
+    move.b #5, E_D2(%a3)
+    moveq #7, %d0
+    bsr.w sound_play_sfx
+    bra.w en_behaviour_end
+
+| Lilith: 60 updates of bobbing along (a step of 1 sideways, up and down on a wave of 16 ticks), then she faces the hero and floats after him on two waves,
+| turning round at the edges of the screen.
+beh_lilith:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    clr.w E_D3(%a3)
+    clr.b E_PHASE(%a3)
+    bset #7, E_FLAGS(%a3)
+    move.b #0x3C, E_INT(%a3)
+    bsr.w en_ready
+    bsr.w ac_random_x
+1:  tst.b E_PHASE(%a3)
+    bne.s 6f
+    move.w #0x0100, %d3
+    bsr.w en_step_x
+    moveq #0, %d0
+    move.b E_D3(%a3), %d0
+    moveq #7, %d1
+    moveq #8, %d2
+    bsr.w en_wave
+    lsl.w #5, %d0
+    move.w E_Y(%a3), %d1
+    btst #7, E_FLAGS(%a3)
+    beq.s 2f
+    add.w %d0, %d1
+    bra.s 3f
+2:  sub.w %d0, %d1
+3:  move.w %d1, E_Y(%a3)
+    addq.b #1, E_D3(%a3)
+    move.b E_D3(%a3), %d0
+    andi.b #0x0F, %d0
+    bne.s 4f
+    eori.b #0x80, E_FLAGS(%a3)
+4:  subq.b #1, E_INT(%a3)
+    bne.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    bsr.w ac_face_x
+    bsr.w ac_face_y
+    clr.w E_D3(%a3)
+    bra.w en_behaviour_end
+6:  moveq #0, %d0
+    move.b E_D2(%a3), %d0
+    moveq #0x1F, %d1
+    moveq #0x20, %d2
+    bsr.w en_wave
+    lsl.w #4, %d0
+    move.w %d0, %d3
+    bsr.w en_edge_x
+    addq.b #1, E_D2(%a3)
+    move.b E_D2(%a3), %d0
+    andi.b #0x3F, %d0
+    bne.s 7f
+    bsr.w ac_face_x
+7:  addq.b #1, E_D3(%a3)
+    cmpi.b #0x27, E_D3(%a3)
+    beq.s 8f
+    clr.b E_D3(%a3)
+    bsr.w ac_face_y
+8:  move.w #0x0100, %d3
+    bsr.w en_edge_y
+    bra.w en_behaviour_end
+
 beh_fall:
     bsr.w en_ready
     bsr.w en_can_move
@@ -2044,6 +2389,8 @@ en_stale_flip:
     movea.l E_KIND(%a2), %a0
     cmpi.w #30, K_RULE(%a0)                 | a kind with no mirror of its own
     beq.s 2f
+    cmpi.w #36, K_RULE(%a0)
+    beq.s 2f
     cmpi.b #E_BREAD, %d0
     beq.s 5f
     cmpi.b #E_COIN, %d0
@@ -2224,6 +2571,14 @@ draw_enemies:
     beq.w 54f
     cmpi.w #34, %d0
     beq.w 56f
+    cmpi.w #35, %d0
+    beq.w 57f
+    cmpi.w #36, %d0
+    beq.w 58f
+    cmpi.w #37, %d0
+    beq.w 60f
+    cmpi.w #38, %d0
+    beq.w 61f
     moveq #0, %d1
     cmpi.w #2, %d0
     bne.s 5f
@@ -2527,6 +2882,38 @@ draw_enemies:
 grieve_frames:
     .byte 0, 1, 2, 1
     .even
+57: move.w en_counter(%pc), %d0              | rule 35, Zoradohna: four pictures, a change every 8 updates
+    lsr.w #3, %d0
+    andi.w #3, %d0
+    bra.w 7f
+58: moveq #0, %d0                           | rule 36, Pakukame: picture 0 in step 0, then 0, 1, 2, 1 for steps 1 to 4; its handler does not set the mirror
+    move.b E_PHASE(%a3), %d0
+    beq.s 59f
+    subq.w #1, %d0
+    andi.w #3, %d0
+    lea grieve_frames(%pc), %a1
+    move.b (%a1,%d0.w), %d0
+59: add.w %d0, %d0
+    add.w %d0, %d6
+    bsr.w en_stale_flip
+    add.w %d0, %d6
+    bra.w 4f
+60: moveq #0, %d0                           | rule 37, Zorugeriru: picture 0 in the even steps, else 0, 1, 2, 1 by the count
+    btst #0, E_PHASE(%a3)
+    beq.w 7f
+    move.w en_counter(%pc), %d0
+    lsr.w #3, %d0
+    andi.w #3, %d0
+    lea grieve_frames(%pc), %a1
+    move.b (%a1,%d0.w), %d0
+    bra.w 7f
+61: moveq #0, %d0                           | rule 38, the rock: the ROM's picture 5 (here 1) from step 2 on while its count is below 5, else 3 (here 0)
+    cmpi.b #2, E_PHASE(%a3)
+    bcs.w 7f
+    cmpi.b #5, E_D2(%a3)
+    bcc.w 7f
+    moveq #1, %d0
+    bra.w 7f
 18: moveq #0, %d2                           | rule 11, Charron: picture 2 in step 5, 1 in step 0 and the odd ones, else a change every 8 updates
     move.b E_PHASE(%a3), %d2
     moveq #2, %d0

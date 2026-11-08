@@ -24,6 +24,7 @@ TOS = Path(os.environ.get("TOS") or os.environ.get("TOS_PAL") or "")
 AS, LD, NM = "m68k-linux-gnu-as", "m68k-linux-gnu-ld", "m68k-linux-gnu-nm"
 LOAD = 0x10000
 BIN_AT = 0x100000
+SONG_AT = 0x180000
 STACK = 0x7F000
 CALL = 0x400
 SND_MPTR, SND_SPTR, SND_MLEFT, SND_SLEFT, SND_MREGS, SND_OUT = 4, 12, 16, 20, 22, 34
@@ -199,6 +200,7 @@ class PlayerTests(unittest.TestCase):
         (tmp / "rec").mkdir()
         write_recordings(tmp / "rec")
         cls.data, _ = bs.build(tmp / "rec", 2, 2)
+        cls.packed = bs.pack_songs(cls.data)
         source = tmp / "sound_test.s"
         source.write_text('    .text\n    .include "frame.s"\n', encoding="utf-8")
         subprocess.run([AS, "-m68000", "-I", str(ROOT / "src"), "-o", str(tmp / "t.o"), str(source)], check=True, capture_output=True)
@@ -217,10 +219,10 @@ class PlayerTests(unittest.TestCase):
         m = self.m
         machine = m.Machine(m.CPUType.M68000, 16384)
         machine.mem.w_block(LOAD, self.image)
-        machine.mem.w_block(BIN_AT, self.data if data is None else data)
+        machine.mem.w_block(BIN_AT, bs.pack_songs(data) if data is not None else self.packed)
         return machine
 
-    def call(self, machine, name: str, d0: int = 0, a0: int = 0) -> None:
+    def call(self, machine, name: str, d0: int = 0, a0: int = 0, a1: int = 0) -> None:
         m = self.m
         mem, cpu = machine.mem, machine.cpu
         mem.w16(CALL, 0x4EB9)
@@ -236,6 +238,7 @@ class PlayerTests(unittest.TestCase):
         cpu.w_sp(STACK)
         cpu.w_reg(m.Register.D0, d0)
         cpu.w_reg(m.Register.A0, a0)
+        cpu.w_reg(m.Register.A1, a1)
         cpu.w_pc(CALL)
         machine.execute(200_000)
 
@@ -244,7 +247,7 @@ class PlayerTests(unittest.TestCase):
 
     def play(self, song: int, sfx: int | None, sfx_at: int, ticks: int, data: bytes | None = None) -> list[bytes]:
         mc = self.machine(data)
-        self.call(mc, "sound_init", a0=BIN_AT)
+        self.call(mc, "sound_init", a0=BIN_AT, a1=SONG_AT)
         self.call(mc, "sound_play_music", d0=song)
         got = []
         for t in range(ticks):
@@ -253,6 +256,10 @@ class PlayerTests(unittest.TestCase):
             self.call(mc, "sound_tick")
             got.append(self.out(mc))
         return got
+
+    def test_the_songs_are_packed_and_unpack_to_what_was_made(self) -> None:
+        self.assertEqual(bs.unpack_songs(self.packed), self.data)
+        self.assertNotEqual(self.packed, self.data)
 
     def test_a_song_plays_frame_by_frame_and_loops(self) -> None:
         got = self.play(1, None, 0, 60 + 3 * 20 + 9)
@@ -284,7 +291,7 @@ class PlayerTests(unittest.TestCase):
 
     def test_the_chip_is_given_registers_0_to_10_and_not_the_floppy_lines(self) -> None:
         mc = self.machine()
-        self.call(mc, "sound_init", a0=BIN_AT)
+        self.call(mc, "sound_init", a0=BIN_AT, a1=SONG_AT)
         self.call(mc, "sound_play_music", d0=1)
         mem = mc.mem
         self.call(mc, "sound_tick")
@@ -301,7 +308,7 @@ class ViewerSoundTests(unittest.TestCase):
         import hatari_shot as hs
 
         subprocess.run(["make", "-C", str(ROOT), "viewer"], check=True, capture_output=True)
-        data = (ROOT / "build" / "generated" / "sound.bin").read_bytes()
+        data = bs.unpack_songs((ROOT / "build" / "generated" / "sound.bin").read_bytes())
         n_music = struct.unpack_from(">H", data, 0)[0]
         if n_music < 7:
             self.skipTest("the viewer was built without sound (node and the ROM harness are needed to record it)")

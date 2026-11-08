@@ -21,6 +21,11 @@ BEH_MOVE, BEH_WAIT, BEH_BOUNCE, BEH_WALK, BEH_DEATH, BEH_HOP, BEH_FALL, BEH_BIHO
 BEH_NECRON, BEH_NASH, BEH_FLASH, BEH_BEES, BEH_MAGMAN, BEH_TAMAZUTSU, BEH_ISHIISU, BEH_HOOD = 22, 26, 31, 32, 35, 39, 64, 65
 BEH_BOSS_DEATH = 62
 BEH_BORABOHRA, BEH_RIPASHEIKU, BEH_KING_GRIEVE, BEH_BOLT = 12, 10, 15, 28
+BEH_ZORADOHNA, BEH_MOVE_VERTICALLY = 18, 19
+BEH_PAKUKAME, BEH_LILITH = 13, 24
+BEH_ZORUGERIRU, BEH_ROCK = 14, 3
+E_LILITH = 9
+E_ROCK = 3                     # Garbled3: the rock Zorugeriru lets fall
 E_BOLT = 0x0A
 SPAWN_PHASE = {0x2D: 1}       # Ripasheiku: its set-up never runs in the ROM; the first update finds it in step 1
 E_MAGIC = 0x51                 # the magic of Nash and the Execution Hood (the fireball's script, another picture)
@@ -34,6 +39,8 @@ HOP_START = (0x40, 0x20, 0x10, 0x08, 0x10)
 HOP_GRAVITY = (2, 3, 4, 5, 4)
 HOP_STRENGTH = (4, 5, 6, 7, 7)
 HOP_GROUND = (0xC0, 0x60, 0x30, 0x18, 0x30)
+ZORADOHNA_GRAVITY = (3, 4, 5, 6)       # BYTE_ARRAY_PRG14__aaf2 and __aaf6, by the kind (the third byte of its data)
+ZORADOHNA_STRENGTH = (3, 5, 5, 7)
 PEAK_TICKS = (0xFF, 0x7F, 0x3F, 0x1F, 0x0F, 0x07, 0x03, 0x01)
 MAYBE_GRAVITY = (0x00, 0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02)
 HITBOX_WIDTH = (0x0F, 0x0F, 0x1F, 0x1F, 0x1F, 0x3F, 0x2F)
@@ -57,6 +64,8 @@ class Sprite:
     internal: int = 0     # CurrentSprites_InternalBehaviorStates: the hop kind
     bxf: int = 0          # CurrentSprites_BehaviorState_XFrac / XFull: the hop's sideways speed
     bxfull: int = 0
+    byf: int = 0          # CurrentSprites_BehaviorState_YFrac and _YFull
+    byfull: int = 0
     script: int = 0       # CurrentSprites_BehaviorAddrs: the next op (a CPU address in bank 14)
     hit: int = 0          # CurrentSprites_HitCounter: 8 when the weapon has hit it, counts down; the sprite stands still meanwhile
     hp: int = 0           # CurrentSprites_HP
@@ -714,7 +723,158 @@ class Engine:
         elif s.d3 >= HOP_GROUND[s.internal]:
             s.d3 = (s.d3 - 1) & 255
 
-    BEHAVIOURS = {BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_BIHORUDA: "behaviour_bihoruda", BEH_GAWAINE: "behaviour_gawaine", BEH_NAGA: "behaviour_naga", BEH_NECRON: "behaviour_necron", BEH_NASH: "behaviour_nash", BEH_FLASH: "behaviour_flash", BEH_BEES: "behaviour_bees", BEH_MAGMAN: "behaviour_magman", BEH_TAMAZUTSU: "behaviour_tamazutsu", BEH_ISHIISU: "behaviour_ishiisu", BEH_HOOD: "behaviour_hood", BEH_YAREEKA: "behaviour_yareeka", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death", BEH_BOSS_DEATH: "behaviour_boss_death", BEH_BORABOHRA: "behaviour_borabohra", BEH_RIPASHEIKU: "behaviour_ripasheiku", BEH_KING_GRIEVE: "behaviour_king_grieve", BEH_BOLT: "behaviour_fireball",
+    # -- Zoradohna's hop (SpriteBehavior_SomethingZoradohna_18): the hop's curve with its own tables, turning at walls, a flip of the direction at the top of the
+    #    curve instead of a landing; and the vertical move of the script (SpriteBehavior_MoveVertically)
+    def behaviour_zoradohna(self, s: Sprite) -> None:
+        if not s.flags & F_READY:
+            s.bxf, s.bxfull, s.internal = self.byte(self.ip), self.byte(self.ip + 1), self.byte(self.ip + 2)
+            self.ip += 3
+            s.flags |= F_READY | F_DOWN
+        self.move_horiz_and_turn(s, s.bxf, s.bxfull)
+        g = ZORADOHNA_GRAVITY[s.internal]
+        t = s.d3 & PEAK_TICKS[g]
+        a = PEAK_TICKS[g] - t if s.d3 & MAYBE_GRAVITY[g] else t
+        strength = ZORADOHNA_STRENGTH[s.internal]
+        self.move_vertical(s, (a << strength) & 255, a >> (8 - strength))
+        s.d3 = (s.d3 + 1) & 255
+        if s.d3 & PEAK_TICKS[g - 1]:
+            self.countdown(s)
+        else:
+            s.flags ^= F_DOWN
+
+    def behaviour_move_vertically(self, s: Sprite) -> None:
+        if not s.flags & F_READY:
+            s.byf, s.byfull = self.byte(self.ip), self.byte(self.ip + 1)
+            self.ip += 2
+            s.flags |= F_READY
+        if self.move_vertical(s, s.byf, s.byfull):
+            s.flags ^= F_DOWN
+        self.countdown(s)
+
+    # -- Pakukame (SpriteBehavior_Pakukame): it stays where it is; 64 updates of waiting, then (if there is a free slot and fewer than three Liliths) its
+    #    steps 1 to 4 last 8 counts each, and at the third it lets a Lilith out 8 pixels right and 16 below; and round again
+    def behaviour_pakukame(self, s: Sprite) -> None:
+        if not s.flags & F_READY:
+            s.phase, s.d2, s.hbox = 0, 0, 4
+            s.flags |= F_READY
+        free = next((i for i in range(7, -1, -1) if self.sprites[i].ent == NONE), None)
+        if s.phase < 1:
+            s.d2 = (s.d2 + 1) & 255
+            if s.d2 < 0x40 or free is None or sum(q.ent == E_LILITH for q in self.sprites) >= 3:
+                return
+            s.phase += 1
+            self.sound(0x12)
+            return
+        if self.counter & 7:
+            return
+        s.phase = (s.phase + 1) & 255
+        if s.phase >= 5:
+            s.phase = s.d2 = 0
+            return
+        if s.phase != 3 or free is None:
+            return
+        d = self.sprites[free]
+        d.x, d.y, d.flags, d.ent = (s.x + 8) & 255, (s.y + 0x10) & 255, 0, E_LILITH
+        d.hp = self.kinds[E_LILITH]["hp"]
+        d.script, d.beh, d.hbox, d.phase = self.kinds[E_LILITH]["script"], 0xFF, self.kinds[E_LILITH]["hbox"], 0
+
+    def new_vert_pos(self, s: Sprite, frac: int, full: int) -> None:
+        """Sprite_CalculateNewVertPos: a step up or down, through everything."""
+        v = (s.y << 8 | s.yf) + (full << 8 | frac) * (1 if s.flags & F_DOWN else -1)
+        s.y, s.yf = (v >> 8) & 255, v & 255
+
+    # -- Lilith (SpriteBehavior_Lilith): 60 updates of bobbing along (a step of 1, up and down on a wave of 16 ticks), then she faces the hero and floats
+    #    after him on two waves
+    def behaviour_lilith(self, s: Sprite) -> None:
+        if not s.flags & F_READY:
+            s.d2 = s.d3 = s.phase = 0
+            s.flags |= 0x80 | F_READY
+            s.internal = 0x3C
+            self.actions(s, 4)
+        if s.phase == 0:
+            self.move_horiz(s, 0, 1)
+            t = s.d3 & 7
+            a = 7 - t if s.d3 & 8 else t
+            self.new_vert_pos(s, (a << 5) & 255, a >> 3)
+            s.d3 = (s.d3 + 1) & 255
+            if not s.d3 & 0x0F:
+                s.flags ^= F_DOWN
+            s.internal = (s.internal - 1) & 255
+            if s.internal:
+                return
+            s.phase += 1
+            self.actions(s, 0)
+            self.actions(s, 2)
+            s.d2 = s.d3 = 0
+            return
+        t = s.d2 & 0x1F
+        a = 0x1F - t if s.d2 & 0x20 else t
+        self.edge_horiz(s, (a << 4) & 255, a >> 4)
+        s.d2 = (s.d2 + 1) & 255
+        if not s.d2 & 0x3F:
+            self.actions(s, 0)
+        s.d3 = (s.d3 + 1) & 255
+        if s.d3 != 0x27:
+            s.d3 = 0
+            self.actions(s, 2)
+        self.edge_vert(s, 0, 1)
+
+    # -- Zorugeriru (SpriteBehavior_Zorugeriru): in the even steps it counts down (a look every 16 updates: with a free slot and fewer than four rocks it goes
+    #    on), in the odd ones it counts up to 32 and lets a rock fall (from a slot of its own, above the hero or just beside him)
+    def behaviour_zorugeriru(self, s: Sprite) -> None:
+        if not s.flags & F_READY:
+            s.hbox, s.d2, s.phase = 4, 0, 0
+            s.flags |= F_READY
+        free = next((i for i in range(7, -1, -1) if self.sprites[i].ent == NONE), None)
+        if not s.phase & 1:
+            s.d2 = (s.d2 - 1) & 255
+            if s.d2 & 0x0F or free is None or sum(q.ent == E_ROCK for q in self.sprites) >= 4:
+                return
+            s.phase = (s.phase + 1) & 255
+            s.d2 = 0
+            return
+        s.d2 = (s.d2 + 1) & 255
+        if s.d2 < 0x20:
+            return
+        s.phase = (s.phase + 1) & 255
+        s.d2 = 0x3C
+        if free is None:
+            return
+        d = self.sprites[free]
+        hx = self.hero_x
+        d.ent, d.phase, d.flags = E_ROCK, 0, 0
+        d.x = hx if hx < s.x or hx >= (s.x + 0x10) & 255 else (hx - 0x10) & 255
+        d.y = 0x20
+        d.script, d.beh, d.hbox = self.kinds[E_ROCK]["script"], 0xFF, self.kinds[E_ROCK]["hbox"]
+
+    # -- the rock (SpriteBehavior_Garbled3): it falls faster and faster (to 8 pixels a step) until it hits the ground, shakes for 5 steps and is gone after 15 more
+    def behaviour_rock(self, s: Sprite) -> None:
+        if not s.flags & F_READY:
+            s.hbox, s.d3, s.phase = 0, 0, 0
+            s.flags |= F_READY
+        if s.phase == 1:
+            s.y = (s.y + (s.d2 & 1) * 4 - 2) & 255
+            s.d2 = (s.d2 - 1) & 255
+            if not s.d2:
+                s.d2 = 0x0F
+                s.phase += 1
+            return
+        if s.phase == 2:
+            s.d2 = (s.d2 - 1) & 255
+            if not s.d2:
+                s.ent = NONE
+            return
+        s.flags |= 0x80
+        if self.move_vertical(s, (s.d3 << 5) & 255, s.d3 >> 3):
+            s.phase = (s.phase + 1) & 255
+            s.d2 = 5
+            self.sound(7)
+            return
+        s.d3 = (s.d3 + 1) & 255
+        if s.d3 >= 0x41:
+            s.d3 -= 1
+
+    BEHAVIOURS = {BEH_ZORUGERIRU: "behaviour_zorugeriru", BEH_ROCK: "behaviour_rock", BEH_PAKUKAME: "behaviour_pakukame", BEH_LILITH: "behaviour_lilith", BEH_ZORADOHNA: "behaviour_zoradohna", BEH_MOVE_VERTICALLY: "behaviour_move_vertically", BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_BIHORUDA: "behaviour_bihoruda", BEH_GAWAINE: "behaviour_gawaine", BEH_NAGA: "behaviour_naga", BEH_NECRON: "behaviour_necron", BEH_NASH: "behaviour_nash", BEH_FLASH: "behaviour_flash", BEH_BEES: "behaviour_bees", BEH_MAGMAN: "behaviour_magman", BEH_TAMAZUTSU: "behaviour_tamazutsu", BEH_ISHIISU: "behaviour_ishiisu", BEH_HOOD: "behaviour_hood", BEH_YAREEKA: "behaviour_yareeka", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death", BEH_BOSS_DEATH: "behaviour_boss_death", BEH_BORABOHRA: "behaviour_borabohra", BEH_RIPASHEIKU: "behaviour_ripasheiku", BEH_KING_GRIEVE: "behaviour_king_grieve", BEH_BOLT: "behaviour_fireball",
                   BEH_HOP: "behaviour_hop", BEH_FALL: "behaviour_fall"}
 
     # -- the dropped coin: SpriteBehavior_BounceAndExpire
@@ -1186,6 +1346,16 @@ def appearance_offset(ent: int, phase: int, counter: int, d2: int = 0) -> int:
         return (counter >> 2) & 1
     if ent == 0x2F:                                  # Borabohra: while standing the count d2 / 8 (0 to 2), then four pictures (4 to 7), a change every 8 updates
         return (counter >> 3) & 3 | 4 if phase & 1 else d2 >> 3
+    if ent == 0x30:                                  # Pakukame: picture 0 in step 0, then 0, 1, 2, 1 for steps 1 to 4
+        return 0 if phase == 0 else (0, 1, 2, 1)[(phase - 1) & 3]
+    if ent == 0x31:                                  # Zorugeriru: picture 0 in the even steps, else 0, 1, 2, 1 by the counter
+        return (0, 1, 2, 1)[(counter >> 3) & 3] if phase & 1 else 0
+    if ent == E_ROCK:                                # the rock: picture 5 from step 2 on while its count is below 5, else 3
+        return 5 if phase >= 2 and d2 < 5 else 3
+    if ent == E_LILITH:                              # Lilith: a change every 8 updates
+        return (counter >> 3) & 1
+    if ent == 0x2E:                                  # Zoradohna: four pictures, a change every 8 updates
+        return (counter >> 3) & 3
     if ent == 0x11:                                  # Rokusutahn: four pictures, a change every 16 updates
         return (counter >> 4) & 3
     if ent == 0x2C:                                  # Tamazutsu: by its step (0 to 3) and its count d2; hidden in all but step 2
@@ -1219,7 +1389,7 @@ def flip_extra(ent: int, counter: int) -> int:
     return LAMPREY_FLIPS[(counter >> 3) & 7] if ent == 0x28 else 0
 
 
-STALE_FLIP = (0x11,)       # kinds whose update handler does not set the flip mask: they are drawn with what the sprite before them (or, first, the hero) left
+STALE_FLIP = (0x11, 0x30)       # kinds whose update handler does not set the flip mask: they are drawn with what the sprite before them (or, first, the hero) left
 
 
 def flip_masks(slots: list, counter: int, hero_flags: int) -> list:

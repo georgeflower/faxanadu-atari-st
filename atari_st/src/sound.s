@@ -3,7 +3,7 @@
 | Included by frame.s. The data is sound.bin (tools/build_sound.py): the program gives its address to sound_init. A song is a stream of changes
 | from one frame to the next, a sound effect plain frames that take over the channels they name from the music (see build_sound.py).
 |
-| sound_init      a0 = sound.bin (or 0: no sound), clears the state
+| sound_init      a0 = sound.bin (or 0: no sound), a1 = a buffer of SND_SONG_MAX bytes for the song being played (the songs are packed), clears the state
 | sound_play_music d0 = song 1 up, 0 stops it; the song loops if it has a loop point
 | sound_play_sfx  d0 = sound effect 1 up
 | sound_tick      once a VBL (vbl_isr calls it): next frame of the song and the effect, mixed, into the YM's registers 0-10
@@ -23,7 +23,9 @@
     .equ SND_MREGS, 22                      | the song's registers 0-10 as they are now (12 bytes)
     .equ SND_OUT, 34                        | what was written to the YM last (12 bytes)
     .equ SND_LASTKEY, 46                    | sound_keys: the key that started the last sound, until it is released
-    .equ SND_SIZE, 48
+    .equ SND_SONG, 48                       | the buffer the song is unpacked into
+    .equ SND_SIZE, 52
+    .equ SND_SONG_MAX, 16384                | what a song may be unpacked (build_sound.SONG_MAX)
 
     .section .data
     .even
@@ -43,14 +45,15 @@ snd_state:
     .endm
 
 sound_init:
-    lea snd_state(%pc), %a1
+    lea snd_state(%pc), %a2
     moveq #(SND_SIZE/2)-1, %d0
-1:  clr.w (%a1)+
+1:  clr.w (%a2)+
     dbra %d0, 1b
-    lea snd_state(%pc), %a1
-    move.l %a0, SND_BIN(%a1)
-    move.b #0xFF, SND_MREGS+7(%a1)          | all tones and noises off, the two port bits high
-    move.b #0xFF, SND_OUT+7(%a1)
+    lea snd_state(%pc), %a2
+    move.l %a0, SND_BIN(%a2)
+    move.l %a1, SND_SONG(%a2)
+    move.b #0xFF, SND_MREGS+7(%a2)          | all tones and noises off, the two port bits high
+    move.b #0xFF, SND_OUT+7(%a2)
     rts
 
 | d0 = the song (0 stops it)
@@ -72,7 +75,12 @@ sound_play_music:
     move.w %d0, %d1
     lsl.w #2, %d1
     move.l 0(%a1,%d1.w), %d1                | the offset of song d0 (the table starts at 4, entry d0 is at 4 + 4 * (d0 - 1))
-    lea 0(%a1,%d1.l), %a2                   | the record
+    lea 0(%a1,%d1.l), %a2                   | the packed record
+    movea.l SND_SONG(%a0), %a1              | unpacked into the buffer (the song is silent meanwhile: SND_MLEFT is 0)
+    exg %a0, %a2
+    bsr.w unpack
+    exg %a0, %a2
+    movea.l SND_SONG(%a0), %a2              | the record
     lea 8(%a2), %a1                         | the stream
     move.l %a1, SND_MPTR(%a0)
     move.w 2(%a2), SND_MLLEFT(%a0)

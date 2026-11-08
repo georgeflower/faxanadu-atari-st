@@ -42,7 +42,7 @@ The numbers are the order I intend to work in. A step is done when its tests pas
 - D1. **Sprite data** (done for Zozura, Monodron, Snowman, Zombie, Ikeda, Myconid, Yuinaru, Hornet, Charron (with its fireball), Raiden, Grimlock, Lamprey, Giant Strider, Maskman and Geributa, the same path for the rest: add the kind to `enemy_data.py`): all enemy and NPC tiles, frames and palettes (banks 6-8, 11), converted as for the hero; per-screen sprite placements; the sprite entity tables (`SPRITE_ENTITY_*`: hit points, damage, drop values, ranges).
 - D2. **Enemy behaviours** (done: every ordinary enemy that stands on a screen, from Zozura to Ishiisu, with the death effect, drops, experience and touch damage; open: spawning and respawn rules, and what a spell does to an enemy; the bosses are D4, the NPCs and items are D3 and E): one kind at a time, each with a golden scene from the harness.
 - D3. **Items and magic**: pickups, the inventory, equipment changes (re-load the hero's tiles), magic spells and their sprites, keys and doors that need them.
-- D4. **Bosses**: one each, after the normal enemies; their rooms and music cues.
+- D4. **Bosses**: one each, after the normal enemies; their rooms and music cues. Done: Rokusutahn, Borabohra, Ripasheiku, King Grieve, Zoradohna, Pakukame, Zorugeriru; open: Shadow Eura.
 
 ### E. Towns, buildings, text
 
@@ -59,7 +59,7 @@ The numbers are the order I intend to work in. A step is done when its tests pas
 
 ### G. Making it a product
 
-- G1. **Memory map**: all areas, tiles, sprite images, music and text must fit 512 KB with the program, two screens and the buffers. Estimate now, verify at each step. Decided (the author, 6 Nov 2026): one area is in memory at a time and the next is loaded from disk at the door, with a pause at every area change (that includes the area's song, 15 KB at most; all songs together are 150 KB, too much to keep).
+- G1. **Memory map**: all areas, tiles, sprite images, music and text must fit 512 KB with the program, two screens and the buffers. Estimate now, verify at each step. Decided (the author, 6 Nov 2026): one area is in memory at a time and the next is loaded from disk at the door, with a pause at every area change (that includes the area's song, 15 KB at most; all songs together are 150 KB, too much to keep: the songs are kept packed, 37 KB, and the one that plays is unpacked).
 - G2. **Disk layout**, the final image, naming of images (a rule for no-PR numbering is still to be agreed with the author), loading screen, a README for the disk.
 - G3. **Real hardware checks** after each of A, B, C: the author runs the image on the 520 STFM and reports (speed, flicker, tearing, colours, sound). These are the real acceptance tests; Hatari timing is not exact.
 - G4. **Polish**: ST-specific options (joystick or keyboard, colour palette tweak, speed option) written in `AGENTS.md` section 8 as deliberate differences.

@@ -275,4 +275,5 @@ key_map:
     .byte 0
     .even
 
+    .include "unpack.s"
     .include "sound.s"

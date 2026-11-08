@@ -18,7 +18,8 @@ repeat and loops back to there. Nothing here is committed: it all comes from the
 sound.bin: word n_music, word n_sfx, then a long offset for each song (id 1 up) and each sound effect (id 1 up), then the records:
     song: word frames, word frames from the loop point to the end (0: the song ends), long byte offset of the loop point in the stream, the stream
     sound effect: word frames, the frames
-Every record starts on an even address.
+Every record starts on an even address. In the file a song is packed (tools/lz.py; five times smaller): the player unpacks the one it plays
+into a buffer of SONG_MAX bytes (`pack_songs`, `unpack_songs`).
 """
 from __future__ import annotations
 
@@ -31,9 +32,13 @@ import struct
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lz  # noqa: E402
+
 PAL_CPU = 1662607.0                             # the Europe NES; its sound engine's note table is tuned for it
 YM_CLOCK = 2000000.0
 FRAME = 12
+SONG_MAX = 16384                                # the player's buffer for the unpacked song (SND_SONG_MAX in src/sound.s)
 
 # the NES volume 0-15 as a YM2149 level (3 dB a step); the triangle has no volume, it sounds like a pulse about this loud
 TRIANGLE_LEVEL = 12
@@ -239,6 +244,41 @@ def build(rec_dir: Path | None, n_music: int = 16, n_sfx: int = 28) -> tuple[byt
     return head + b"".join(struct.pack(">L", o) for o in offsets) + b"".join(records), info
 
 
+def _records(data: bytes) -> tuple[int, int, list[bytes]]:
+    n_music, n_sfx = struct.unpack_from(">HH", data, 0)
+    offsets = [struct.unpack_from(">L", data, 4 + 4 * i)[0] for i in range(n_music + n_sfx)] + [len(data)]
+    return n_music, n_sfx, [data[offsets[i]:offsets[i + 1]] for i in range(n_music + n_sfx)]
+
+
+def _assemble(n_music: int, n_sfx: int, records: list[bytes]) -> bytes:
+    base = 4 + 4 * len(records)
+    offsets = []
+    for r in records:
+        offsets.append(base)
+        base += len(r)
+    return struct.pack(">HH", n_music, n_sfx) + b"".join(struct.pack(">L", o) for o in offsets) + b"".join(records)
+
+
+def pack_songs(data: bytes) -> bytes:
+    """The sound data as it is on the disk and in the program: every song packed (and padded to an even length), the sound effects as they are."""
+    n_music, n_sfx, records = _records(data)
+    out = []
+    for i, r in enumerate(records):
+        if i < n_music:
+            if len(r) > SONG_MAX:
+                raise SystemExit(f"song {i + 1} is {len(r)} bytes: the player's buffer holds {SONG_MAX}")
+            r = lz.pack(r)
+            r += b"\0" * (len(r) & 1)
+        out.append(r)
+    return _assemble(n_music, n_sfx, out)
+
+
+def unpack_songs(data: bytes) -> bytes:
+    """What `build` makes, from what `pack_songs` made."""
+    n_music, n_sfx, records = _records(data)
+    return _assemble(n_music, n_sfx, [lz.unpack(r) if i < n_music else r for i, r in enumerate(records)])
+
+
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -256,6 +296,7 @@ def main() -> int:
             print(f"build_sound: no sounds ({e}); the ROM, node and the harness's packages are needed", file=sys.stderr)
             rec_dir = None
     data, info = build(rec_dir)
+    data = pack_songs(data)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_bytes(data)
     for k, (frames, loop, size) in info.items():

@@ -793,7 +793,7 @@ class ViewerTests(unittest.TestCase):
             elif what in ("h", "g"):                                   # the H and G keys (debug: hit from the right / from the left)
                 text = f"memwrite ${base + sym['input_state'] + 264 + (0x23 if what == 'h' else 0x22):x} 0x{value:02x}\ncont\n"
             elif what == "hp":                                         # the hit points (a byte) of the sprite in slot 7 (E_HP is 15, a slot has 28 bytes)
-                text = f"memwrite ${base + sym['enemies'] + 7 * 28 + 15:x} 0x{value:02x}\ncont\n"
+                text = f"memwrite ${base + sym['enemies'] + 7 * 30 + 15:x} 0x{value:02x}\ncont\n"
             elif what == "y":                                          # the hero's y (a word)
                 text = f"memwrite ${base + sym['hero_y']:x} 0x{value >> 8:02x} 0x{value & 255:02x}\ncont\n"
             else:
@@ -815,19 +815,22 @@ class ViewerTests(unittest.TestCase):
         bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
 
-    ENEMY_SCENES = ((0, 8, "16,144", 360), (0, 4, "240,144", 260), (0, 5, "240,144", 260), (1, 16, "16,144", 260),
-                    (1, 7, "240,144", 280), (1, 31, "240,144", 260), (1, 22, "16,144", 260),
+    ENEMY_SCENES = ((0, 8, "16,144", 360), (0, 4, "240,144", 260), (0, 5, "240,144", 260), (1, 16, "16,144", 272),
+                    (1, 7, "240,144", 280), (1, 31, "240,144", 272), (1, 22, "16,144", 272),
                     (1, 29, "16,144", 280), (1, 45, "64,144", 280), (1, 60, "208,144", 280), (1, 25, "16,144", 382),
-                    (2, 39, "16,144", 284), (2, 23, "16,144", 284), (2, 60, "16,144", 284), (5, 25, "16,144", 279), (5, 2, "16,144", 262), (5, 31, "16,144", 279),
+                    (2, 39, "16,144", 284), (2, 23, "16,144", 284), (2, 60, "16,144", 284), (5, 25, "16,144", 279), (5, 2, "16,144", 274), (5, 31, "16,144", 279),
                     (2, 4, "240,144", 284), (2, 14, "240,144", 284), (2, 19, "240,144", 284), (5, 21, "16,144", 279), (5, 35, "16,144", 279), (5, 36, "16,144", 282),
                     (2, 1, "16,144", 284), (2, 3, "144,144", 284), (2, 25, "144,144", 284), (2, 29, "208,144", 340), (2, 32, "16,144", 290), (2, 37, "64,144", 284),
                     (2, 45, "208,144", 290),
                     (2, 33, "144,144", 290), (2, 38, "16,144", 291), (2, 30, "144,144", 290), (2, 31, "144,144", 290), (2, 42, "144,144", 300), (5, 5, "240,144", 290),
                     (5, 32, "16,144", 290), (5, 34, "16,144", 290), (5, 3, "144,144", 290), (6, 13, "144,144", 290), (6, 10, "16,160", 290), (6, 11, "144,144", 290),
                     (7, 15, "208,144", 293), (7, 16, "16,144", 290), (2, 80, "16,160", 290), (2, 81, "16,160", 290), (2, 82, "16,160", 290),
-                    (6, 30, "240,144", 290), (2, 59, "240,144", 290), (6, 23, "16,144", 290), (6, 25, "240,144", 290),
+                    (6, 30, "240,144", 290), (2, 59, "240,144", 302), (6, 23, "16,144", 290), (6, 25, "240,144", 290),
                     (1, 58, "16,144", 290), (6, 26, "16,144", 290), (7, 17, "208,144", 290),
-                    (2, 51, "16,144", 290), (2, 63, "16,144", 290), (7, 4, "16,144", 290), (6, 22, "16,144", 290))    # area, screen, hero, the capture's VBL
+                    (2, 51, "16,144", 290), (2, 63, "16,144", 290), (7, 4, "16,144", 290), (6, 22, "16,144", 302),
+                    (2, 65, "16,144", 290), (6, 18, "16,144", 290), (7, 1, "16,144", 291),
+                    (6, 31, "16,144", 330), (7, 7, "16,144", 330), (7, 11, "16,144", 330),
+                    (7, 5, "16,144", 330), (7, 12, "16,144", 330), (2, 64, "64,144", 290))    # area, screen, hero, the capture's VBL
 
     def enemy_engine(self, rom, area_index: int, screen: int, word):
         """The model with the enemies of a screen as they are placed, the hero where the viewer has him."""
@@ -917,11 +920,11 @@ class ViewerTests(unittest.TestCase):
                 eng = self.enemy_engine(rom, area, screen, word)
                 for _ in range(n):
                     eng.update_all()
-                raw = word.raw("enemies", 8 * 28)
+                raw = word.raw("enemies", 8 * 30)
                 for i, s in enumerate(eng.sprites):
-                    r = raw[i * 28:(i + 1) * 28]
-                    got = (r[0], r[2], r[3], r[4], r[5], r[1], r[6], r[7], r[8], r[10], r[11], r[9], r[13], r[12])
-                    want = (s.ent, s.x, s.xf, s.y, s.yf, s.flags, s.phase, s.beh, s.arg1, s.d3, s.d2, s.internal, s.bxf, s.bxfull)
+                    r = raw[i * 30:(i + 1) * 30]
+                    got = (r[0], r[2], r[3], r[4], r[5], r[1], r[6], r[7], r[8], r[10], r[11], r[9], r[13], r[12], r[29], r[28])
+                    want = (s.ent, s.x, s.xf, s.y, s.yf, s.flags, s.phase, s.beh, s.arg1, s.d3, s.d2, s.internal, s.bxf, s.bxfull, s.byf, s.byfull)
                     self.assertEqual(got, want, f"slot {i} after {n} updates")
 
     def test_the_sword_kills_the_zozuras_and_they_hurt_him(self) -> None:
@@ -951,7 +954,7 @@ class ViewerTests(unittest.TestCase):
         gold = int.from_bytes(state[4:8], "big")
         self.assertGreater(gold, 0)
         self.assertEqual(gold % 120, 0, gold)                          # (the coins he picked up; the effect is gone)
-        self.assertNotIn(100, [word.raw("enemies", 8 * 28)[i * 28] for i in range(8)])
+        self.assertNotIn(100, [word.raw("enemies", 8 * 30)[i * 30] for i in range(8)])
 
     def test_a_snowman_that_hops_into_him_takes_four_power_a_touch(self) -> None:
         """Area 1 screen 16 (a wall cuts off its left half, so the hero stands at 208): the Snowman leaps at him, and each touch takes its 4 off the power."""
@@ -971,7 +974,7 @@ class ViewerTests(unittest.TestCase):
     def test_charron_casts_a_fireball(self) -> None:
         """Area 1 screen 25: Charron stands on the upper floor (y 64) and casts a fireball (entity 84) into a free slot; the hero, far below, is not hurt."""
         ram, word, _ = self.run_scenario(["ALL=1", "AREA=1", "SCREEN=25", "HERO=16,144,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], 360, "shots_touch")
-        slots = [word.raw("enemies", 8 * 28)[i * 28] for i in range(8)]
+        slots = [word.raw("enemies", 8 * 30)[i * 30] for i in range(8)]
         self.assertIn(0x15, slots)
         self.assertIn(0x54, slots, "a fireball in flight")
         self.assertEqual(word.raw("hud_state", 1)[0], 80)
@@ -980,7 +983,7 @@ class ViewerTests(unittest.TestCase):
         """Area 1 screen 25, the hero on Charron's floor (96, 64): two fireballs hit him in the first 400 frames (8 off the power each) and are gone."""
         ram, word, _ = self.run_scenario(["ALL=1", "AREA=1", "SCREEN=25", "HERO=96,64,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], 430, "shots_touch")
         self.assertEqual(word.raw("hud_state", 1)[0], 64)
-        self.assertNotIn(0x54, [word.raw("enemies", 8 * 28)[i * 28] for i in range(8)])
+        self.assertNotIn(0x54, [word.raw("enemies", 8 * 30)[i * 30] for i in range(8)])
 
     def test_a_zozura_that_walks_into_him_takes_seven_power_and_he_is_invincible_for_a_while(self) -> None:
         ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=4", "HERO=200,144,0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], 700, "shots_touch")
