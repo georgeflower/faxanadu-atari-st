@@ -24,7 +24,10 @@ BEH_BORABOHRA, BEH_RIPASHEIKU, BEH_KING_GRIEVE, BEH_BOLT = 12, 10, 15, 28
 BEH_ZORADOHNA, BEH_MOVE_VERTICALLY = 18, 19
 BEH_PAKUKAME, BEH_LILITH = 13, 24
 BEH_ZORUGERIRU, BEH_ROCK = 14, 3
+BEH_SHADOW_EURA, BEH_AIMED = 16, 29
 E_LILITH = 9
+E_EURA_BOLT = 0x53              # the bolt of Shadow Eura
+EURA_STEPS = (0, 0, 8, 8, 8, 0, 0, 8, 8, 8)       # BYTE_ARRAY_PRG14__a064: how far he walks at each of his ten pictures
 E_ROCK = 3                     # Garbled3: the rock Zorugeriru lets fall
 E_BOLT = 0x0A
 SPAWN_PHASE = {0x2D: 1}       # Ripasheiku: its set-up never runs in the ROM; the first update finds it in step 1
@@ -874,7 +877,64 @@ class Engine:
         if s.d3 >= 0x41:
             s.d3 -= 1
 
-    BEHAVIOURS = {BEH_ZORUGERIRU: "behaviour_zorugeriru", BEH_ROCK: "behaviour_rock", BEH_PAKUKAME: "behaviour_pakukame", BEH_LILITH: "behaviour_lilith", BEH_ZORADOHNA: "behaviour_zoradohna", BEH_MOVE_VERTICALLY: "behaviour_move_vertically", BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_BIHORUDA: "behaviour_bihoruda", BEH_GAWAINE: "behaviour_gawaine", BEH_NAGA: "behaviour_naga", BEH_NECRON: "behaviour_necron", BEH_NASH: "behaviour_nash", BEH_FLASH: "behaviour_flash", BEH_BEES: "behaviour_bees", BEH_MAGMAN: "behaviour_magman", BEH_TAMAZUTSU: "behaviour_tamazutsu", BEH_ISHIISU: "behaviour_ishiisu", BEH_HOOD: "behaviour_hood", BEH_YAREEKA: "behaviour_yareeka", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death", BEH_BOSS_DEATH: "behaviour_boss_death", BEH_BORABOHRA: "behaviour_borabohra", BEH_RIPASHEIKU: "behaviour_ripasheiku", BEH_KING_GRIEVE: "behaviour_king_grieve", BEH_BOLT: "behaviour_fireball",
+    # -- Shadow Eura (SpriteBehavior_ShadowEura): he always faces the hero; in the even steps every 8th update he goes on to the next of ten pictures
+    #    (`internal`), at the 3rd and the 8th he throws a bolt (entity $53) and in the 2nd to 4th and the 7th to 9th he walks 8 pixels towards the hero; after
+    #    20 such moves 30 updates of standing. His song starts when he appears.
+    def behaviour_shadow_eura(self, s: Sprite) -> None:
+        if not s.flags & F_READY:
+            s.hbox, s.internal, s.d3, s.phase, s.d2 = 6, 0, 0, 0, 0x14
+            self.actions(s, 0)
+            s.flags |= F_READY
+            self.hero.events.append(0x100 | 0x0A)
+        self.actions(s, 0)
+        if not s.phase & 1:
+            s.d3 = (s.d3 + 1) & 255
+            if s.d3 & 7:
+                return
+            s.internal += 1
+            if s.internal >= 10:
+                s.internal = 0
+            if s.internal in (3, 8):
+                self.cast_at(s, E_EURA_BOLT, 0x20 if s.flags & 1 else 0, 0x10)
+            self.move_horiz(s, 0, EURA_STEPS[s.internal])
+            s.d2 = (s.d2 - 1) & 255
+            if not s.d2:
+                s.phase = (s.phase + 1) & 255
+                s.d2 = 0x1E
+            return
+        s.d2 = (s.d2 - 1) & 255
+        if not s.d2:
+            s.phase = (s.phase + 1) & 255
+            s.d2 = 0x14
+
+    @staticmethod
+    def divide(num: int, div: int) -> int:
+        """Player_Something_ChangeHP: num * 256 / div as 16 bits (all ones for a divisor of 0)."""
+        return 0xFFFF if div == 0 else ((num << 8) // div) & 0xFFFF
+
+    # -- the bolt of Shadow Eura (SpriteBehavior_Unknown_29): it flies at the hero along a straight line, twice the speed of a pixel a frame along the longer
+    #    way, gone at a wall; three pictures, a change every 4 updates
+    def behaviour_aimed(self, s: Sprite) -> None:
+        if not s.flags & F_READY:
+            s.internal = 0
+            facing = s.flags & 1
+            self.actions(s, 0)
+            self.actions(s, 2)
+            dx, dy = self.distance_x(s), self.distance_y(s)
+            if dy < dx:
+                vx, vy = 0x0100, self.divide(dy, dx)
+            else:
+                vx, vy = self.divide(dx, dy), 0x0100
+            vx, vy = (vx << 1) & 0xFFFF, (vy << 1) & 0xFFFF
+            s.bxfull, s.bxf, s.byfull, s.byf = vx >> 8, vx & 255, vy >> 8, vy & 255
+            s.flags = (s.flags & 0xFE) | facing | F_READY
+        if self.move_horiz(s, s.bxf, s.bxfull) or self.move_vertical(s, s.byf, s.byfull):
+            s.ent = NONE
+            return
+        if not self.counter & 3:
+            s.internal = 0 if s.internal + 1 >= 3 else s.internal + 1
+
+    BEHAVIOURS = {BEH_SHADOW_EURA: "behaviour_shadow_eura", BEH_AIMED: "behaviour_aimed", BEH_ZORUGERIRU: "behaviour_zorugeriru", BEH_ROCK: "behaviour_rock", BEH_PAKUKAME: "behaviour_pakukame", BEH_LILITH: "behaviour_lilith", BEH_ZORADOHNA: "behaviour_zoradohna", BEH_MOVE_VERTICALLY: "behaviour_move_vertically", BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_BIHORUDA: "behaviour_bihoruda", BEH_GAWAINE: "behaviour_gawaine", BEH_NAGA: "behaviour_naga", BEH_NECRON: "behaviour_necron", BEH_NASH: "behaviour_nash", BEH_FLASH: "behaviour_flash", BEH_BEES: "behaviour_bees", BEH_MAGMAN: "behaviour_magman", BEH_TAMAZUTSU: "behaviour_tamazutsu", BEH_ISHIISU: "behaviour_ishiisu", BEH_HOOD: "behaviour_hood", BEH_YAREEKA: "behaviour_yareeka", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death", BEH_BOSS_DEATH: "behaviour_boss_death", BEH_BORABOHRA: "behaviour_borabohra", BEH_RIPASHEIKU: "behaviour_ripasheiku", BEH_KING_GRIEVE: "behaviour_king_grieve", BEH_BOLT: "behaviour_fireball",
                   BEH_HOP: "behaviour_hop", BEH_FALL: "behaviour_fall"}
 
     # -- the dropped coin: SpriteBehavior_BounceAndExpire
@@ -1278,7 +1338,7 @@ def is_drawn(ent: int, phase: int, counter: int, d2: int = 0) -> bool:
     return True
 
 
-def appearance_offset(ent: int, phase: int, counter: int, d2: int = 0) -> int:
+def appearance_offset(ent: int, phase: int, counter: int, d2: int = 0, internal: int = 0) -> int:
     """The frame (added to SPRITE_APPEARANCE_PHASE_OFFSETS[ent]) the update handler of this kind picks. `counter` is SpriteUpdateCounter."""
     if ent == 0x47:                                  # Zozura: two frames, a change every 16 updates
         return (counter >> 4) & 1
@@ -1348,6 +1408,8 @@ def appearance_offset(ent: int, phase: int, counter: int, d2: int = 0) -> int:
         return (counter >> 3) & 3 | 4 if phase & 1 else d2 >> 3
     if ent == 0x30:                                  # Pakukame: picture 0 in step 0, then 0, 1, 2, 1 for steps 1 to 4
         return 0 if phase == 0 else (0, 1, 2, 1)[(phase - 1) & 3]
+    if ent == 0x33 or ent == E_EURA_BOLT:            # Shadow Eura (ten pictures) and his bolt (three): the sprite's own count
+        return internal
     if ent == 0x31:                                  # Zorugeriru: picture 0 in the even steps, else 0, 1, 2, 1 by the counter
         return (0, 1, 2, 1)[(counter >> 3) & 3] if phase & 1 else 0
     if ent == E_ROCK:                                # the rock: picture 5 from step 2 on while its count is below 5, else 3
@@ -1408,4 +1470,4 @@ def flip_masks(slots: list, counter: int, hero_flags: int) -> list:
 
 def flip_mask(flags: int, ent: int = 0) -> int:
     """CurrentSprite_UpdateFlipMask: facing right mirrors the picture (not the magic of Nash and the Hood, which clears the mask)."""
-    return 0x40 if flags & 1 and ent != E_MAGIC else 0
+    return 0x40 if flags & 1 and ent not in (E_MAGIC, E_EURA_BOLT) else 0

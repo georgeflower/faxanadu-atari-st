@@ -240,6 +240,10 @@ en_behaviour:
     beq.w beh_pakukame
     cmpi.w #14, %d0
     beq.w beh_zorugeriru
+    cmpi.w #16, %d0
+    beq.w beh_shadow_eura
+    cmpi.w #29, %d0
+    beq.w beh_aimed
     cmpi.w #3, %d0
     beq.w beh_rock
     cmpi.w #24, %d0
@@ -1608,6 +1612,127 @@ beh_pakukame:
     move.l %a0, E_KIND(%a1)
     bra.w en_behaviour_end
 
+| Shadow Eura: he always faces the hero. In the even steps, every 8th update, he goes on to the next of ten pictures (E_INT); at the 3rd and the 8th he throws
+| a bolt (entity $53) and in the 2nd to 4th and the 7th to 9th he walks 8 pixels towards the hero; after 20 such counts 30 updates of standing. His song
+| (10) starts when he appears.
+beh_shadow_eura:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    move.b #6, E_HBOX(%a3)
+    clr.b E_INT(%a3)
+    clr.b E_D3(%a3)
+    clr.b E_PHASE(%a3)
+    move.b #0x14, E_D2(%a3)
+    bsr.w ac_face_x
+    bsr.w en_ready
+    moveq #10, %d0
+    bsr.w sound_play_music
+1:  bsr.w ac_face_x
+    btst #0, E_PHASE(%a3)
+    bne.s 6f
+    addq.b #1, E_D3(%a3)
+    move.b E_D3(%a3), %d0
+    andi.b #7, %d0
+    bne.w en_behaviour_end
+    addq.b #1, E_INT(%a3)
+    cmpi.b #10, E_INT(%a3)
+    bcs.s 2f
+    clr.b E_INT(%a3)
+2:  cmpi.b #3, E_INT(%a3)
+    beq.s 3f
+    cmpi.b #8, E_INT(%a3)
+    bne.s 4f
+3:  moveq #0x53, %d0
+    moveq #0, %d1
+    btst #0, E_FLAGS(%a3)
+    beq.s 5f
+    moveq #0x20, %d1
+5:  moveq #0x10, %d2
+    bsr.w ac_cast_at
+4:  moveq #0, %d0
+    move.b E_INT(%a3), %d0
+    lea eura_steps(%pc), %a0
+    moveq #0, %d3
+    move.b (%a0,%d0.w), %d3
+    lsl.w #8, %d3
+    bsr.w en_step_x
+    subq.b #1, E_D2(%a3)
+    bne.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    move.b #0x1E, E_D2(%a3)
+    bra.w en_behaviour_end
+6:  subq.b #1, E_D2(%a3)
+    bne.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    move.b #0x14, E_D2(%a3)
+    bra.w en_behaviour_end
+eura_steps:
+    .byte 0, 0, 8, 8, 8, 0, 0, 8, 8, 8
+    .even
+
+| d1 = a number, d2 = a divisor (both 0 to 255): d3 = the number * 256 / the divisor as 16 bits (all ones for a divisor of 0; Player_Something_ChangeHP).
+en_divide:
+    tst.w %d2
+    bne.s 1f
+    move.w #0xFFFF, %d3
+    rts
+1:  moveq #0, %d3
+    move.w %d1, %d3
+    lsl.l #8, %d3
+    divu.w %d2, %d3
+    andi.l #0xFFFF, %d3
+    rts
+
+| The bolt of Shadow Eura: a straight line at the hero: one pixel a frame along the longer way, the other in proportion, all doubled; gone at a wall. Three pictures,
+| a change every 4 updates.
+beh_aimed:
+    btst #6, E_FLAGS(%a3)
+    bne.w 9f
+    clr.b E_INT(%a3)
+    move.b E_FLAGS(%a3), %d4
+    andi.b #1, %d4
+    bsr.w ac_face_x
+    bsr.w ac_face_y
+    bsr.w en_distance_x
+    move.w %d0, %d5
+    bsr.w en_distance_y
+    cmp.w %d5, %d0
+    bcc.s 2f
+    move.w %d0, %d1
+    move.w %d5, %d2
+    bsr.w en_divide
+    move.w #0x0100, E_BXFULL(%a3)
+    move.w %d3, E_BYFULL(%a3)
+    bra.s 3f
+2:  move.w %d5, %d1
+    move.w %d0, %d2
+    bsr.w en_divide
+    move.w %d3, E_BXFULL(%a3)
+    move.w #0x0100, E_BYFULL(%a3)
+3:  asl.w E_BXFULL(%a3)
+    asl.w E_BYFULL(%a3)
+    andi.b #0xFE, E_FLAGS(%a3)
+    or.b %d4, E_FLAGS(%a3)
+    bsr.w en_ready
+9:  move.w E_BXFULL(%a3), %d3
+    bsr.w en_step_x
+    tst.w %d0
+    bne.s 8f
+    move.w E_BYFULL(%a3), %d3
+    bsr.w en_step_y
+    tst.w %d0
+    bne.s 8f
+    move.w en_counter(%pc), %d0
+    andi.w #3, %d0
+    bne.w en_behaviour_end
+    addq.b #1, E_INT(%a3)
+    cmpi.b #3, E_INT(%a3)
+    bcs.w en_behaviour_end
+    clr.b E_INT(%a3)
+    bra.w en_behaviour_end
+8:  move.b #0xFF, E_ENT(%a3)
+    bra.w en_behaviour_end
+
 | Zorugeriru: in the even steps a count down (a look every 16 updates: with a free slot and fewer than four rocks it goes on), in the odd ones a count up to 32
 | and then a rock falls (from a slot of its own, above the hero or just beside him).
 beh_zorugeriru:
@@ -2579,6 +2704,10 @@ draw_enemies:
     beq.w 60f
     cmpi.w #38, %d0
     beq.w 61f
+    cmpi.w #39, %d0
+    beq.w 62f
+    cmpi.w #40, %d0
+    beq.w 63f
     moveq #0, %d1
     cmpi.w #2, %d0
     bne.s 5f
@@ -2914,6 +3043,14 @@ grieve_frames:
     bcc.w 7f
     moveq #1, %d0
     bra.w 7f
+62: moveq #0, %d0                           | rule 39, Shadow Eura: the picture is his count (0 to 9)
+    move.b E_INT(%a3), %d0
+    bra.w 7f
+63: moveq #0, %d0                           | rule 40, his bolt: the picture is its count (0 to 2), never mirrored
+    move.b E_INT(%a3), %d0
+    add.w %d0, %d0
+    add.w %d0, %d6
+    bra.w 4f
 18: moveq #0, %d2                           | rule 11, Charron: picture 2 in step 5, 1 in step 0 and the odd ones, else a change every 8 updates
     move.b E_PHASE(%a3), %d2
     moveq #2, %d0

@@ -830,7 +830,8 @@ class ViewerTests(unittest.TestCase):
                     (2, 51, "16,144", 290), (2, 63, "16,144", 290), (7, 4, "16,144", 290), (6, 22, "16,144", 302),
                     (2, 65, "16,144", 290), (6, 18, "16,144", 290), (7, 1, "16,144", 291),
                     (6, 31, "16,144", 330), (7, 7, "16,144", 330), (7, 11, "16,144", 330),
-                    (7, 5, "16,144", 330), (7, 12, "16,144", 330), (2, 64, "64,144", 290))    # area, screen, hero, the capture's VBL
+                    (7, 5, "16,144", 330), (7, 12, "16,144", 330), (2, 64, "64,144", 290),
+                    (7, 0, "240,144", 310), (7, 0, "240,144", 345))    # area, screen, hero, the capture's VBL
 
     def enemy_engine(self, rom, area_index: int, screen: int, word):
         """The model with the enemies of a screen as they are placed, the hero where the viewer has him."""
@@ -890,7 +891,7 @@ class ViewerTests(unittest.TestCase):
                     for i, sp in enumerate(sprites):
                         if sp.ent == em.NONE or not em.is_drawn(sp.ent, sp.phase, counter, sp.d2):
                             continue
-                        app = fs.appearance(rom, ed.entity(rom, sp.ent)["appearance"] + em.appearance_offset(sp.ent, sp.phase, counter, sp.d2), "TILEINFO_ENTITY_ADDRS")
+                        app = fs.appearance(rom, ed.entity(rom, sp.ent)["appearance"] + em.appearance_offset(sp.ent, sp.phase, counter, sp.d2, sp.internal), "TILEINFO_ENTITY_ADDRS")
                         layer = fs.sprite_layer(fs.place(app, sp.x, sp.y, masks[i]), fs.entity_tiles(rom, sp.ent), palettes)
                         for (x, line), c in layer.items():
                             y = line - word("camera")
