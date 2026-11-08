@@ -19,8 +19,10 @@ SCENES = ((0, 4, "left", 400), (0, 5, "left", 400), (0, 8, "right", 400), (1, 16
           (2, 45, "right", 400),
           (2, 33, "right", 400), (2, 38, "right", 400), (2, 30, "right", 400), (2, 31, "right", 400), (2, 42, "right", 400), (5, 5, "right", 400), (5, 32, "right", 400), (5, 34, "right", 400), (5, 3, "right", 400), (6, 13, "right", 400), (6, 10, "right", 400), (6, 11, "right", 400), (7, 15, "right", 400), (7, 16, "right", 400), (2, 80, "right", 400), (2, 81, "right", 400), (2, 82, "right", 400),
           (6, 30, "right", 400), (2, 59, "right", 400), (6, 23, "right", 400), (6, 25, "right", 400),
-          (1, 58, "right", 400), (6, 26, "right", 400), (7, 17, "right", 400))
-HEROX = {(1, 23): 80, (1, 29): 16, (2, 23): 144, (2, 39): 80, (2, 60): 144, (5, 25): 144, (5, 2): 144, (5, 31): 144, (5, 21): 144, (5, 35): 144, (5, 36): 144, (2, 1): 16, (2, 3): 144, (2, 25): 144, (2, 33): 144, (2, 38): 16, (2, 30): 144, (2, 31): 144, (2, 42): 144, (5, 5): 240, (5, 32): 16, (5, 34): 16, (5, 3): 144, (6, 13): 144, (6, 10): 144, (6, 11): 144, (7, 15): 208, (7, 16): 112, (2, 80): 16, (2, 81): 16, (2, 82): 16, (6, 30): 144, (2, 59): 144, (6, 23): 16, (6, 25): 240, (1, 58): 16, (6, 26): 16, (7, 17): 208}       # where the hero stands when the default (64) has him fall off the screen or walk into a wall
+          (1, 58, "right", 400), (6, 26, "right", 400), (7, 17, "right", 400),
+          (2, 51, "right", 400), (2, 63, "right", 400), (7, 4, "right", 400), (6, 22, "right", 400))
+FIGHT_HEROX = {(2, 51): 16, (6, 22): 16}      # where the hero starts a fight when 208 is a pit or a wall
+HEROX = {(1, 23): 80, (1, 29): 16, (2, 23): 144, (2, 39): 80, (2, 60): 144, (5, 25): 144, (5, 2): 144, (5, 31): 144, (5, 21): 144, (5, 35): 144, (5, 36): 144, (2, 1): 16, (2, 3): 144, (2, 25): 144, (2, 33): 144, (2, 38): 16, (2, 30): 144, (2, 31): 144, (2, 42): 144, (5, 5): 240, (5, 32): 16, (5, 34): 16, (5, 3): 144, (6, 13): 144, (6, 10): 144, (6, 11): 144, (7, 15): 208, (7, 16): 112, (2, 80): 16, (2, 81): 16, (2, 82): 16, (6, 30): 144, (2, 59): 144, (6, 23): 16, (6, 25): 240, (1, 58): 16, (6, 26): 16, (7, 17): 208, (2, 51): 16, (2, 63): 16, (7, 4): 16, (6, 22): 16}       # where the hero stands when the default (64) has him fall off the screen or walk into a wall
 FIELDS = (("ent", "Entities"), ("x", "x"), ("xf", "xf"), ("y", "y"), ("yf", "yf"), ("flags", "Flags"), ("phase", "Phases"), ("beh", "Behaviors"), ("arg1", "BehaviorArg1"),
           ("d2", "BehaviorData2"), ("d3", "BehaviorData3"), ("internal", "InternalBehaviorStates"), ("bxf", "BehaviorState_XFrac"), ("bxfull", "BehaviorState_XFull"))
 
@@ -93,13 +95,15 @@ class EnemyTests(unittest.TestCase):
 
     def check(self, screen: int, packed: bool = False, area: int = 0) -> None:
         rec = self.runs[(area, screen)]
-        placed = lambda slots: [s["Entities"] if s["Entities"] not in (0x51, 0x54) else 255 for s in slots]       # (a fireball comes and goes)
+        placed = lambda slots: [s["Entities"] if s["Entities"] not in (0x51, 0x54, 0x0A) else 255 for s in slots]       # (a fireball or a bolt comes and goes)
         first = placed(rec[0]["slots"])
         for n, eng in self.replay(rec, packed, area):
             if placed(rec[n]["slots"]) != first or abs(rec[n]["py"] - rec[n - 1]["py"]) > 100:     # the hero went on (the screen scrolled, the sprites were loaded anew)
                 self.assertGreater(n, 100, f"screen {screen}: the run ended early")
                 return
             for i, s in enumerate(rec[n]["slots"]):
+                if eng.sprites[i].ent == 0x0A and s["Entities"] == 255:      # (a bolt is gone when it has hurt the hero; this replay has no touch)
+                    eng.sprites[i].ent = 255
                 got = tuple(getattr(eng.sprites[i], mine) for mine, _ in FIELDS)
                 want = tuple(s[theirs] for _, theirs in FIELDS)
                 self.assertEqual(got, want, f"screen {screen} frame {n} slot {i}")
@@ -114,14 +118,15 @@ class EnemyTests(unittest.TestCase):
         out = Path(self.tmp.name) / f"fight{area}_{screen}_{int(boss)}.json"
         if not out.exists():
             subprocess.run(["node", "combatprobe.mjs", str(screen), "700", str(out), str(weapon), str(armour)], cwd=ROOT / "tools" / "refnes", check=True, capture_output=True,
-                           env={**os.environ, "AREA": str(area), "HEROX": "208", **({"HEAL": "1", "JUMP": "1", "REACH": "24"} if boss else {})})    # (on screen 16 of area 1 a wall cuts off the left half)
+                           env={**os.environ, "AREA": str(area), "HEROX": str(FIGHT_HEROX.get((area, screen), 208)), **({"HEAL": "1", "JUMP": "1", "REACH": "24"} if boss else {})})    # (on screen 16 of area 1 a wall cuts off the left half)
         run = json.loads(out.read_text())
         frames = run["frames"]
         eng = em.Engine(self.bank14, self.random_table, bytes(run["start"]["blocks"]), self.props_by_area[area])
         for ent in ed.EXTRAS + ed.ENEMIES + tuple(ed.SPAWNED.values()):
             eng.kinds[ent] = ed.kind_info(self.rom, ent)
         eng.combat = ed.tables(self.rom)
-        for i, s in enumerate(frames[0]["preSlots"]):
+        first = next(n for n, f in enumerate(frames) if f["preSlots"])          # (a screen the hero has just entered may stand still for a few frames)
+        for i, s in enumerate(frames[first]["preSlots"]):
             sp = eng.sprites[i]
             for mine, theirs in FIELDS:
                 setattr(sp, mine, s[theirs])
@@ -134,7 +139,7 @@ class EnemyTests(unittest.TestCase):
             if rec["scroll"] != 255:
                 self.assertGreater(n, 300, f"screen {screen}: the fight ended early")
                 break
-            if n and rec["counter"] == frames[n - 1]["counter"]:        # (the game did not run the sprites in this frame)
+            if n < first or (n and rec["counter"] == frames[n - 1]["counter"] and n > first):        # (the game did not run the sprites in this frame)
                 continue
             h = eng.hero
             for mine, theirs in names.items():
@@ -143,9 +148,13 @@ class EnemyTests(unittest.TestCase):
             h.special, h.glove, h.ointment = run["start"]["special"], run["start"]["glove"], run["start"]["ointment"]
             h.events = []
             eng.rnd, eng.mask = rec["rnd"] if False else eng.rnd, rec["mask"]
-            if n == 0:
+            if n == first:
                 eng.rnd, eng.counter = rec["rnd"], (rec["counter"] - 1) & 255
             eng.update_frame()
+            m = n
+            while m + 1 < len(frames) and frames[m + 1]["counter"] == rec["counter"] and frames[m + 1]["scroll"] == 255:        # (a long update runs into the next frame: its end is the last record with this count)
+                m += 1
+            rec = {**rec, **{k: frames[m][k] for k in ("slots", "hero", "exp", "gold")}}
             for i, s in enumerate(rec["slots"]):
                 sp = eng.sprites[i]
                 got = tuple(getattr(sp, mine) for mine, _ in FIELDS) + (sp.hit, sp.hp, sp.value)
@@ -171,6 +180,11 @@ class EnemyTests(unittest.TestCase):
             with self.subTest(area=area, screen=screen):
                 kills, pickups = self.fight(screen, 3, 2, area, boss=True)
                 self.assertGreaterEqual(kills, 1)
+
+    def test_ripasheiku_and_king_grieve_fly_and_shoot_as_in_the_rom_in_a_fight(self) -> None:
+        for area, screen in ((2, 51), (6, 22)):          # (the bolts hurt the hero, who is cured now and then: the slots, his power, experience and gold are the ROM's)
+            with self.subTest(area=area, screen=screen):
+                self.fight(screen, 3, 2, area, boss=True)
 
     def test_nash_tamazutsu_and_ishiisu_are_as_in_the_rom_when_the_sword_cuts_at_nothing(self) -> None:
         for area, screen in ((2, 42), (5, 3), (2, 80), (2, 81)):           # (they hide and show; the hero cuts at nothing, the slots and his power are the ROM's)

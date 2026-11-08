@@ -20,7 +20,9 @@ NONE = 0xFF
 BEH_MOVE, BEH_WAIT, BEH_BOUNCE, BEH_WALK, BEH_DEATH, BEH_HOP, BEH_FALL, BEH_BIHORUDA, BEH_WAVE, BEH_FIREBALL, BEH_FINISH, BEH_NAGA, BEH_YAREEKA, BEH_GAWAINE, BEH_BUZZ = 0, 1, 2, 4, 7, 9, 21, 23, 25, 27, 30, 33, 34, 40, 63
 BEH_NECRON, BEH_NASH, BEH_FLASH, BEH_BEES, BEH_MAGMAN, BEH_TAMAZUTSU, BEH_ISHIISU, BEH_HOOD = 22, 26, 31, 32, 35, 39, 64, 65
 BEH_BOSS_DEATH = 62
-BEH_BORABOHRA = 12
+BEH_BORABOHRA, BEH_RIPASHEIKU, BEH_KING_GRIEVE, BEH_BOLT = 12, 10, 15, 28
+E_BOLT = 0x0A
+SPAWN_PHASE = {0x2D: 1}       # Ripasheiku: its set-up never runs in the ROM; the first update finds it in step 1
 E_MAGIC = 0x51                 # the magic of Nash and the Execution Hood (the fireball's script, another picture)
 F_HIDDEN = 0x10                # SPRITE_FLAGS_VISIBLE, which Sprite_SetVisible sets and Sprites_IsSpriteHidden tests: a sprite with it set is not drawn and cannot be touched or hit
 BUZZ_Y = (0x00, 0x00, 0x80, 0x40, 0x00, 0x40, 0x80, 0x00)        # SPRITE_BEHAVIOR_BUZZ_AROUND_Y_FRAC and ..._X_FRAC (the whole pixels of the vertical step)
@@ -712,7 +714,7 @@ class Engine:
         elif s.d3 >= HOP_GROUND[s.internal]:
             s.d3 = (s.d3 - 1) & 255
 
-    BEHAVIOURS = {BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_BIHORUDA: "behaviour_bihoruda", BEH_GAWAINE: "behaviour_gawaine", BEH_NAGA: "behaviour_naga", BEH_NECRON: "behaviour_necron", BEH_NASH: "behaviour_nash", BEH_FLASH: "behaviour_flash", BEH_BEES: "behaviour_bees", BEH_MAGMAN: "behaviour_magman", BEH_TAMAZUTSU: "behaviour_tamazutsu", BEH_ISHIISU: "behaviour_ishiisu", BEH_HOOD: "behaviour_hood", BEH_YAREEKA: "behaviour_yareeka", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death", BEH_BOSS_DEATH: "behaviour_boss_death", BEH_BORABOHRA: "behaviour_borabohra",
+    BEHAVIOURS = {BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_BIHORUDA: "behaviour_bihoruda", BEH_GAWAINE: "behaviour_gawaine", BEH_NAGA: "behaviour_naga", BEH_NECRON: "behaviour_necron", BEH_NASH: "behaviour_nash", BEH_FLASH: "behaviour_flash", BEH_BEES: "behaviour_bees", BEH_MAGMAN: "behaviour_magman", BEH_TAMAZUTSU: "behaviour_tamazutsu", BEH_ISHIISU: "behaviour_ishiisu", BEH_HOOD: "behaviour_hood", BEH_YAREEKA: "behaviour_yareeka", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death", BEH_BOSS_DEATH: "behaviour_boss_death", BEH_BORABOHRA: "behaviour_borabohra", BEH_RIPASHEIKU: "behaviour_ripasheiku", BEH_KING_GRIEVE: "behaviour_king_grieve", BEH_BOLT: "behaviour_fireball",
                   BEH_HOP: "behaviour_hop", BEH_FALL: "behaviour_fall"}
 
     # -- the dropped coin: SpriteBehavior_BounceAndExpire
@@ -764,6 +766,93 @@ class Engine:
         self.move_horiz(s, (a << 2) & 255, a >> 6)
         s.d2 = (s.d2 + 1) & 255
         self.actions(s, 0)
+
+    # -- Ripasheiku (SpriteBehavior_Ripasheiku): stands 30 updates (phase 0), walks a pixel a frame while it rises to the top of the screen (1), falls
+    #    (2), then shoots a bolt now and then for 256 updates (3) and starts over
+    def behaviour_ripasheiku(self, s: Sprite) -> None:
+        # the ROM tests Sprite_IsBehaviorNotReady as a variable (a bug), so
+        # the set-up never runs and the sprite keeps its spawn state
+        if s.phase == 0:
+            self.actions(s, 0)
+            s.d2 = (s.d2 - 1) & 255
+            if not s.d2:
+                s.phase, s.d3 = 1, 0
+            return
+        if s.phase == 1:
+            self.move_horiz_and_turn(s, 0, 1)
+            s.flags &= 0x7F
+            if s.y < 0x30:
+                s.d2, s.d3 = 0, 0xFF
+                s.phase = (s.phase + 1) & 255
+                self.actions(s, 0)
+                return
+            if s.d3 & 0x80:
+                frac, full = 0, 4
+            else:
+                t = s.d3 & 0x1F
+                a = 0x1F - t if s.d3 & 0x20 else t
+                frac, full = (a << 5) & 255, a >> 3
+            if self.move_vertical(s, frac, full):
+                return
+            s.d3 = (s.d3 + 1) & 255
+            if not s.d3 & 0x1F:
+                s.d3 = 0xFF
+            return
+        if s.phase == 2:
+            self.move_horiz_and_turn(s, 0, 1)
+            s.flags |= 0x80
+            blocked = self.move_vertical(s, (s.d3 << 2) & 255, s.d3 >> 6)
+            if not blocked:
+                low = s.d3 - 4
+                s.d3 = low & 255
+                if low >= 0:
+                    return
+            s.phase = (s.phase + 1) & 255
+            s.d2, s.d3, s.internal = 0, 0, 0
+            self.actions(s, 0)
+            return
+        if (self.counter & 0x3F) == 0x20:
+            self.cast_at(s, E_BOLT, 0 if s.flags & 1 else 0x10, 0x20)
+        self.actions(s, 0)
+        s.d2 = (s.d2 - 1) & 255
+        if not s.d2:
+            s.phase, s.d2, s.d3 = 1, 0, 0
+            self.actions(s, 0)
+
+    # -- King Grieve (SpriteBehavior_KingGrieve): phase 0 he leaps up and falls back (a step of 2 in the speed), phase 1 (60 updates) he shoots a bolt every
+    #    16 updates, phase 2 he rises to the top of the screen, phase 3 waits 30 updates; and round again (the phase counts on, only its low two bits matter)
+    def behaviour_king_grieve(self, s: Sprite) -> None:
+        if not s.flags & F_READY:
+            s.hbox, s.d3, s.d2, s.phase = 5, 0xFF, 0, 0
+            s.flags |= F_READY
+        sub = s.phase & 3
+        if sub == 0:
+            self.move_horiz(s, 0, 1)
+            s.flags |= 0x80
+            blocked = self.move_vertical(s, (s.d3 << 2) & 255, s.d3 >> 6)
+            if not blocked:
+                low = s.d3 - 2
+                s.d3 = low & 255
+                if low >= 0:
+                    return
+            s.phase = (s.phase + 1) & 255
+            s.d2 = 0x3C
+            return
+        if sub == 2:
+            s.flags &= 0x7F
+            blocked = self.move_vertical(s, 0, 1)
+            if not blocked and s.y >= 0x10:
+                return
+            s.phase = (s.phase + 1) & 255
+            s.d2 = 0x1E
+            return
+        if sub == 1 and not self.counter & 0x0F:
+            self.cast_at(s, E_BOLT, 0x30 if s.flags & 1 else 0, 4)
+        self.actions(s, 0)
+        s.d2 = (s.d2 - 1) & 255
+        if not s.d2:
+            s.phase = (s.phase + 1) & 255
+            s.d3, s.d2 = 0xFF, 0
 
     # -- the death of a boss: SpriteBehavior_BossDeath; ten steps of 8 updates, each time it jumps to the next place of two tables and
     #    (in the first four) leaves what the boss dropped
@@ -1085,6 +1174,16 @@ def appearance_offset(ent: int, phase: int, counter: int, d2: int = 0) -> int:
         return (counter >> 2) & 1 if phase == 2 else 2
     if ent == 0x23:                                  # Magman: a change every 8 updates in the odd steps (out of sight in the even ones, where it keeps the last)
         return (counter >> 3) & 1 if phase & 1 else 0
+    if ent == 0x2D:                                  # Ripasheiku: picture 0 in step 0, 3 and 1 in step 3 (a change every 32 updates), else 1 and 2 (every 8)
+        if phase == 0:
+            return 0
+        if phase == 3:
+            return 3 if counter & 0x20 else 1
+        return 2 if counter & 8 else 1
+    if ent == 0x32:                                  # King Grieve: picture 2 in the steps of 0 (mod 4), else 0, 1, 2, 1 by the counter
+        return 2 if phase & 3 == 0 else (0, 1, 2, 1)[(counter >> 3) & 3]
+    if ent == E_BOLT:                                # the bolt: a change every 4 updates
+        return (counter >> 2) & 1
     if ent == 0x2F:                                  # Borabohra: while standing the count d2 / 8 (0 to 2), then four pictures (4 to 7), a change every 8 updates
         return (counter >> 3) & 3 | 4 if phase & 1 else d2 >> 3
     if ent == 0x11:                                  # Rokusutahn: four pictures, a change every 16 updates

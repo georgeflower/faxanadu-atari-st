@@ -44,6 +44,7 @@
     .equ E_DEATH, 0x13
     .equ E_BOSS_DEATH, 0x64
     .equ E_FIREBALL, 0x54                   | Charron's fireball (cast, never placed)
+    .equ E_BOLT, 0x0A                       | the bolt of Ripasheiku and King Grieve (a fireball of 28 damage)
     .equ E_MAGIC, 0x51                      | the magic of Nash and the Execution Hood
 
     .text
@@ -96,7 +97,10 @@ enemies_load:
     move.b %d2, E_Y(%a3)
     clr.b E_YF(%a3)
     clr.b E_PHASE(%a3)
-    move.b #0xFF, E_BEH(%a3)
+    cmpi.b #0x2D, %d0                       | Ripasheiku starts in step 1 (see beh_ripasheiku)
+    bne.s 5f
+    move.b #1, E_PHASE(%a3)
+5:  move.b #0xFF, E_BEH(%a3)
     clr.b E_ARG1(%a3)
     clr.b E_INT(%a3)
     clr.w E_D3(%a3)
@@ -110,7 +114,7 @@ enemies_load:
     clr.l E_PREV(%a3)
     lea -E_BYTES(%a3), %a3
     subq.w #1, %d4
-    bpl.s 1b
+    bpl.w 1b
 9:  movem.l (%sp)+, %d0-%d4/%a0-%a3
     rts
 
@@ -223,6 +227,12 @@ en_behaviour:
     beq.w beh_boss_death
     cmpi.w #12, %d0
     beq.w beh_borabohra
+    cmpi.w #10, %d0
+    beq.w beh_ripasheiku
+    cmpi.w #15, %d0
+    beq.w beh_king_grieve
+    cmpi.w #28, %d0
+    beq.w beh_fireball
     cmpi.w #9, %d0
     beq.w beh_hop
     cmpi.w #21, %d0
@@ -1271,6 +1281,159 @@ beh_borabohra:
     bsr.w ac_face_x
     bra.w en_behaviour_end
 
+| Ripasheiku (the set-up in the ROM never runs: it tests Sprite_IsBehaviorNotReady as a variable, so it starts in step 1 and keeps the hit box it was placed with).
+| Step 0: faces the hero for d2 updates; 1: walks along (turning at a wall) and bobs up and down on a wave of d3, then climbs to the top; 2: falls on a
+| curve; 3: faces the hero for d2 updates and shoots a bolt when the count (modulo 64) is 32.
+beh_ripasheiku:
+    moveq #0, %d0
+    move.b E_PHASE(%a3), %d0
+    bne.s 1f
+    bsr.w ac_face_x
+    subq.b #1, E_D2(%a3)
+    bne.w en_behaviour_end
+    move.b #1, E_PHASE(%a3)
+    clr.b E_D3(%a3)
+    bra.w en_behaviour_end
+1:  cmpi.b #1, %d0
+    bne.w 6f
+    move.w #0x0100, %d3
+    bsr.w en_step_x
+    tst.w %d0
+    beq.s 2f
+    eori.b #1, E_FLAGS(%a3)
+2:  bclr #7, E_FLAGS(%a3)
+    cmpi.b #0x30, E_Y(%a3)
+    bcc.s 3f
+    clr.b E_D2(%a3)
+    move.b #0xFF, E_D3(%a3)
+    addq.b #1, E_PHASE(%a3)
+    bsr.w ac_face_x
+    bra.w en_behaviour_end
+3:  moveq #0, %d0
+    move.b E_D3(%a3), %d1
+    move.w #0x0400, %d3
+    tst.b %d1
+    bmi.s 5f
+    move.b %d1, %d0
+    andi.w #0x1F, %d0
+    btst #5, %d1
+    beq.s 4f
+    moveq #0x1F, %d2
+    sub.w %d0, %d2
+    move.w %d2, %d0
+4:  lsl.w #5, %d0
+    move.w %d0, %d3
+5:  bsr.w en_step_y
+    tst.w %d0
+    bne.w en_behaviour_end
+    addq.b #1, E_D3(%a3)
+    move.b E_D3(%a3), %d0
+    andi.b #0x1F, %d0
+    bne.w en_behaviour_end
+    move.b #0xFF, E_D3(%a3)
+    bra.w en_behaviour_end
+6:  cmpi.b #2, %d0
+    bne.s 9f
+    move.w #0x0100, %d3
+    bsr.w en_step_x
+    tst.w %d0
+    beq.s 7f
+    eori.b #1, E_FLAGS(%a3)
+7:  bset #7, E_FLAGS(%a3)
+    moveq #0, %d3
+    move.b E_D3(%a3), %d3
+    lsl.w #2, %d3
+    bsr.w en_step_y
+    tst.w %d0
+    bne.s 8f
+    subq.b #4, E_D3(%a3)
+    bcc.w en_behaviour_end
+8:  addq.b #1, E_PHASE(%a3)
+    clr.b E_D2(%a3)
+    clr.b E_D3(%a3)
+    clr.b E_INT(%a3)
+    bsr.w ac_face_x
+    bra.w en_behaviour_end
+9:  move.w en_counter(%pc), %d0
+    andi.w #0x3F, %d0
+    cmpi.w #0x20, %d0
+    bne.s 11f
+    moveq #E_BOLT, %d0
+    moveq #0x10, %d1
+    btst #0, E_FLAGS(%a3)
+    beq.s 10f
+    moveq #0, %d1
+10: moveq #0x20, %d2
+    bsr.w ac_cast_at
+11: bsr.w ac_face_x
+    subq.b #1, E_D2(%a3)
+    bne.w en_behaviour_end
+    move.b #1, E_PHASE(%a3)
+    clr.b E_D2(%a3)
+    clr.b E_D3(%a3)
+    bsr.w ac_face_x
+    bra.w en_behaviour_end
+
+| King Grieve: four steps that go round (only the low two bits of the step count). 0: leaps up and falls back on a curve (d3 counts down by 2); 1: faces
+| the hero for 60 updates and shoots a bolt every 16; 2: rises to the top of the screen; 3: waits 30 updates.
+beh_king_grieve:
+    btst #6, E_FLAGS(%a3)
+    bne.s 1f
+    move.b #5, E_HBOX(%a3)
+    move.b #0xFF, E_D3(%a3)
+    clr.b E_D2(%a3)
+    clr.b E_PHASE(%a3)
+    bsr.w en_ready
+1:  moveq #0, %d0
+    move.b E_PHASE(%a3), %d0
+    andi.w #3, %d0
+    bne.s 3f
+    move.w #0x0100, %d3
+    bsr.w en_step_x
+    bset #7, E_FLAGS(%a3)
+    moveq #0, %d3
+    move.b E_D3(%a3), %d3
+    lsl.w #2, %d3
+    bsr.w en_step_y
+    tst.w %d0
+    bne.s 2f
+    subq.b #2, E_D3(%a3)
+    bcc.w en_behaviour_end
+2:  addq.b #1, E_PHASE(%a3)
+    move.b #0x3C, E_D2(%a3)
+    bra.w en_behaviour_end
+3:  cmpi.w #2, %d0
+    bne.s 6f
+    bclr #7, E_FLAGS(%a3)
+    move.w #0x0100, %d3
+    bsr.w en_step_y
+    tst.w %d0
+    bne.s 4f
+    cmpi.b #0x10, E_Y(%a3)
+    bcc.w en_behaviour_end
+4:  addq.b #1, E_PHASE(%a3)
+    move.b #0x1E, E_D2(%a3)
+    bra.w en_behaviour_end
+6:  cmpi.w #1, %d0
+    bne.s 8f
+    move.w en_counter(%pc), %d1
+    andi.w #0x0F, %d1
+    bne.s 8f
+    moveq #E_BOLT, %d0
+    moveq #0, %d1
+    btst #0, E_FLAGS(%a3)
+    beq.s 7f
+    moveq #0x30, %d1
+7:  moveq #4, %d2
+    bsr.w ac_cast_at
+8:  bsr.w ac_face_x
+    subq.b #1, E_D2(%a3)
+    bne.w en_behaviour_end
+    addq.b #1, E_PHASE(%a3)
+    move.b #0xFF, E_D3(%a3)
+    clr.b E_D2(%a3)
+    bra.w en_behaviour_end
+
 beh_fall:
     bsr.w en_ready
     bsr.w en_can_move
@@ -1720,7 +1883,7 @@ en_touch:
     bcc.w 9f
     lea hud_state(%pc), %a1
     cmpi.b #E_BREAD, %d5
-    beq.s 5f
+    beq.w 5f
     cmpi.b #E_COIN, %d5
     beq.w 6f
     move.w hero_invinc(%pc), %d0            | an enemy: nothing happens while he is invincible
@@ -1755,6 +1918,8 @@ en_touch:
 4:  dbra %d3, 3b
 2:  bsr.w en_reduce_hp
     cmpi.b #E_FIREBALL, E_ENT(%a3)          | (magic is gone when it has hurt him)
+    beq.s 15f
+    cmpi.b #E_BOLT, E_ENT(%a3)
     beq.s 15f
     cmpi.b #E_MAGIC, E_ENT(%a3)
     bne.s 9f
@@ -2055,6 +2220,10 @@ draw_enemies:
     beq.w 39f
     cmpi.w #32, %d0
     beq.w 52f
+    cmpi.w #33, %d0
+    beq.w 54f
+    cmpi.w #34, %d0
+    beq.w 56f
     moveq #0, %d1
     cmpi.w #2, %d0
     bne.s 5f
@@ -2329,6 +2498,35 @@ draw_enemies:
     andi.w #3, %d0
     addq.w #4, %d0
     bra.w 7f
+54: moveq #0, %d0                           | rule 33, Ripasheiku: picture 0 in step 0, 3 or 1 in step 3 (bit 5 of the count), else 2 or 1 (bit 3)
+    move.b E_PHASE(%a3), %d1
+    beq.w 7f
+    move.w en_counter(%pc), %d2
+    cmpi.b #3, %d1
+    beq.s 55f
+    moveq #1, %d0
+    btst #3, %d2
+    beq.w 7f
+    moveq #2, %d0
+    bra.w 7f
+55: moveq #1, %d0
+    btst #5, %d2
+    beq.w 7f
+    moveq #3, %d0
+    bra.w 7f
+56: moveq #2, %d0                           | rule 34, King Grieve: picture 2 in step 0 (and 4 ...), else 0, 1, 2, 1 by the count
+    move.b E_PHASE(%a3), %d1
+    andi.b #3, %d1
+    beq.w 7f
+    move.w en_counter(%pc), %d0
+    lsr.w #3, %d0
+    andi.w #3, %d0
+    lea grieve_frames(%pc), %a1
+    move.b (%a1,%d0.w), %d0
+    bra.w 7f
+grieve_frames:
+    .byte 0, 1, 2, 1
+    .even
 18: moveq #0, %d2                           | rule 11, Charron: picture 2 in step 5, 1 in step 0 and the odd ones, else a change every 8 updates
     move.b E_PHASE(%a3), %d2
     moveq #2, %d0

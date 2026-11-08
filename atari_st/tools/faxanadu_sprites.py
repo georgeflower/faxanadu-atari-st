@@ -71,7 +71,7 @@ def appearance(rom: Rom, index: int, table: str = "TILEINFO_PLAYER_ADDRS") -> Ap
 def place(app: Appearance, x: int, y: int, flip: int, tile_base: int = 0, scroll_x: int = 0) -> list[Sprite]:
     """The sprites `Sprite_Draw` writes for a frame at hero position (x, y). `flip` is the flip mask ($40 = faces left, $80 = upside down)."""
     out = []
-    norm_x = (x + app.off_x) & 0xFFFF
+    norm_x = x + app.off_x                      # (a cell left of the edge is skipped, the ones right of it are drawn)
     norm_y = y + app.off_y + HUD_LINES
     facing_left = bool(flip & 0x40)
     if facing_left:
@@ -227,8 +227,9 @@ def sprite_layer(sprites: list[Sprite], tiles: dict[int, bytes], palettes: list[
         pal = palettes[s.attr & 3]
         for y in range(8):
             for x in range(8):
-                if px[y][x]:
-                    layer[(s.x + x, s.y + 1 + y)] = pal[px[y][x]]
+                c = px[7 - y if s.attr & 0x80 else y][x]            # (bit 7: upside down)
+                if c:
+                    layer[(s.x + x, s.y + 1 + y)] = pal[c]
     return layer
 
 
