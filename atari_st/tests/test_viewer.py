@@ -863,7 +863,7 @@ class ViewerTests(unittest.TestCase):
             s.phase = em.SPAWN_PHASE.get(ent, 0)
         return eng
 
-    def test_the_enemies_are_drawn_where_the_model_has_them(self) -> None:
+    def enemies_are_drawn(self, scenes) -> None:
         """The picture is the background, the hero and the enemies' pictures from the ROM's own frames (`enemy_model.appearance_offset`, mirrored when
         they face right), for the state the model has after the updates the viewer made (or the one before: the capture can fall between a frame's update
         and its show)."""
@@ -878,7 +878,7 @@ class ViewerTests(unittest.TestCase):
         import st_convert as sc
 
         rom = fr.Rom(ROM)
-        for area, screen, hero, vbl in self.ENEMY_SCENES:
+        for area, screen, hero, vbl in scenes:
             with self.subTest(area=area, screen=screen):
                 pal = fm.area(rom, area).palette_index
                 plan = sc.plan_for_set(rom, pal)
@@ -913,7 +913,19 @@ class ViewerTests(unittest.TestCase):
                 self.assertTrue(any(not bad for bad in worst), f"area {area} screen {screen}: {[len(b) for b in worst]} pixels differ, in {[box(b) for b in worst]}, sprites "
                                 f"{[(sp.ent, sp.x, sp.y, sp.phase, sp.d2, sp.flags) for sp in states[-1][0] if sp.ent != em.NONE]}, (got, wanted) {[(px, py, rows[py][px], expected[py][px]) for px, py in worst[-1][:6]]}")
 
-    def test_the_enemies_move_as_the_model_does(self) -> None:
+    def test_the_enemies_are_drawn_where_the_model_has_them_1(self) -> None:
+        self.enemies_are_drawn(self.ENEMY_SCENES[0::4])
+
+    def test_the_enemies_are_drawn_where_the_model_has_them_2(self) -> None:
+        self.enemies_are_drawn(self.ENEMY_SCENES[1::4])
+
+    def test_the_enemies_are_drawn_where_the_model_has_them_3(self) -> None:
+        self.enemies_are_drawn(self.ENEMY_SCENES[2::4])
+
+    def test_the_enemies_are_drawn_where_the_model_has_them_4(self) -> None:
+        self.enemies_are_drawn(self.ENEMY_SCENES[3::4])
+
+    def enemies_move(self, scenes) -> None:
         """Eolis screens 4 and 5 (two Zozuras each) and 8 (a Monodron): the hero stands still far from them (on 4 and 5 the capture is early, before a Zozura reaches him); after n updates (en_counter) every slot is
         where `enemy_model.py` (checked against the game in tests/test_enemy.py) says it is, the hops and the random turns included."""
         import enemy_data as ed
@@ -922,7 +934,7 @@ class ViewerTests(unittest.TestCase):
         import faxanadu_rom as fr
 
         rom = fr.Rom(ROM)
-        for area, screen, hero, vbl in self.ENEMY_SCENES:
+        for area, screen, hero, vbl in scenes:
             with self.subTest(area=area, screen=screen):
                 ram, word, _ = self.run_scenario(["ALL=1", f"AREA={area}", f"SCREEN={screen}", f"HERO={hero},0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], vbl, "shots_enemy")
                 n = word("en_counter")
@@ -936,6 +948,12 @@ class ViewerTests(unittest.TestCase):
                     got = (r[0], r[2], r[3], r[4], r[5], r[1], r[6], r[7], r[8], r[10], r[11], r[9], r[13], r[12], r[29], r[28])
                     want = (s.ent, s.x, s.xf, s.y, s.yf, s.flags, s.phase, s.beh, s.arg1, s.d3, s.d2, s.internal, s.bxf, s.bxfull, s.byf, s.byfull)
                     self.assertEqual(got, want, f"slot {i} after {n} updates")
+
+    def test_the_enemies_move_as_the_model_does_1(self) -> None:
+        self.enemies_move(self.ENEMY_SCENES[0::2])
+
+    def test_the_enemies_move_as_the_model_does_2(self) -> None:
+        self.enemies_move(self.ENEMY_SCENES[1::2])
 
     def test_the_sword_kills_the_zozuras_and_they_hurt_him(self) -> None:
         """Eolis screen 4, a Long Sword (it reaches a Zozura, the dagger does not), the hero faces left and swings every 24 frames while two Zozuras walk

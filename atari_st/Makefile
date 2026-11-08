@@ -27,7 +27,7 @@ MAIN_SRC := $(SRC_DIR)/main.s
 SOURCES := $(wildcard $(SRC_DIR)/*.s)
 
 .DEFAULT_GOAL := all
-.PHONY: all disk viewerdisk check clean
+.PHONY: all disk viewerdisk check pcheck clean
 
 all: $(PRG)
 
@@ -53,6 +53,11 @@ viewerdisk: viewer
 
 disk: all
 	$(PYTHON) $(TOOLS_DIR)/make_disk.py $(DISK) $(PRG)
+
+# the same tests, run at the same time in copies of the tree (JOBS=n workers, default the number of cores)
+pcheck: all
+	$(PYTHON) $(TOOLS_DIR)/pcheck.py
+	$(PYTHON) $(TOOLS_DIR)/make_prg.py --check $(PRG)
 
 check: all
 	$(PYTHON) -m unittest discover -s tests -p 'test_*.py'

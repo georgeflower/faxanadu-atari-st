@@ -20,7 +20,7 @@ Status: set-up, the ROM harness, the map data decoder and a viewer that draws on
 4. **The 16-bit branch limit wraps silently** in GNU as and ld. `tools/check_reach.py` runs on every link; do not disable it.
 5. **Budget first.** An STFM has no blitter and no hardware scroll; a frame is about 160,000 cycles at 50 Hz. Estimate the cycles of anything per-frame before writing it and measure afterwards.
 6. **No version numbers** anywhere (no VERSION, no CHANGELOG, no version line in docs). The author tags releases himself.
-7. **Commit straight to `main` and push; no pull requests** (the author's decision, Nov 2026; stacked pull requests had merged into their base branches and never reached `main`). Run `make check` first. Disk images are named `Fax###.st`, ### = the build number = the number of commits (`git rev-list --count HEAD`, three digits): `make disk` for the game, `make viewerdisk` for the viewer. Commits end with the `Co-Authored-By` line and no session link.
+7. **Commit straight to `main` and push; no pull requests** (the author's decision, Nov 2026; stacked pull requests had merged into their base branches and never reached `main`). Run `make check` first (`make pcheck` runs the same tests in parallel, `JOBS=n`, about half the time on two cores). Disk images are named `Fax###.st`, ### = the build number = the number of commits (`git rev-list --count HEAD`, three digits): `make disk` for the game, `make viewerdisk` for the viewer. Commits end with the `Co-Authored-By` line and no session link.
 8. Docs are short and plain, in the author's voice, and never name him: write "the author". One line on the AI help, no details of what was tested by hand.
 
 ## 3. Which ROM
