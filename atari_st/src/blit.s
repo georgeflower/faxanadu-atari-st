@@ -267,13 +267,13 @@ bh_tile:
     add.w %d5, %d1
     add.w %d0, %d1
     adda.w %d1, %a0                         | the table: A is 2(a0), B 4(a0), C 38(a0), D 40(a0)
-    cmpi.w #BEHIND_NONE, 2(%a0)
+    tst.w 2(%a0)
     bne.s 8f
-    cmpi.w #BEHIND_NONE, 4(%a0)
+    tst.w 4(%a0)
     bne.s 8f
-    cmpi.w #BEHIND_NONE, 38(%a0)
+    tst.w 38(%a0)
     bne.s 8f
-    cmpi.w #BEHIND_NONE, 40(%a0)
+    tst.w 40(%a0)
     bne.s 8f
     move.w #-1, 4(%a5)                      | none of the four blocks hides anything of the 16 pixels
     movem.l (%sp), %d0-%d1/%a1

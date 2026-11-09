@@ -4,7 +4,9 @@
 |
 | save_guru       the Guru's SHOW_PASSWORD: a box of two lines, Save to disk or Show mantra; d0.w = 1: show the mantra (chosen, or the disk would not take it)
 | save_title      CONTINUE on the title: with a SAVE.SAV, a box of Load game or Enter mantra; d0.w = 1: a game was read (pw_block holds it), 0: enter a mantra
-| sv_choose       a1 and a2 = two lines of text: a small box in the middle of the window; Up and Down choose, A or Start takes the line (d0.w = 0 or 1), B or Esc -1
+| sv_choose       a1, a2 (and a3) = two or three lines of text, d0.w = how many, d1.w = where the cursor starts: a small box in the middle of the window; Up and Down choose, A or Start takes the line (d0.w = its number), B or Esc -1
+| esc_key         the main loop, once a frame: Esc opens the menu (esc_menu) unless the ending has begun (then Esc leaves, as it did)
+| esc_menu        the Esc menu: Save (as the Guru's Save to disk, then the menu again), Continue (the game goes on as it was) and Exit to GEMDOS (viewer_leave)
 | sv_write        d0.w = 0 saved, -1 not (the disk is write protected or full)
 | sv_read         d0.w = 0 read (pw_block holds the state), -1 refused, -2 there is no file
 |
@@ -16,39 +18,46 @@
     .equ SV_READ, 35                        | 32 characters, the line end and one more: a longer file is refused for its length
 
     .text
-| a1, a2 = the two lines; d7.w = the one the cursor is on (drawn light on dark turned round). Keeps every register.
+| sv_lines = the lines, d5.w = how many (2 or 3), d7.w = the one the cursor is on (drawn light on dark turned round). Keeps every register.
 sv_draw:
     movem.l %d0-%d4/%d6/%a0-%a3, -(%sp)
     bsr.w text_color
     bsr.w shown_screen
-    moveq #5, %d0                           | the box of the start menu: groups 5 to 14, lines 88 to 143
+    moveq #5, %d0                           | the box of the start menu: groups 5 to 14, from line 88, 20 lines and 18 a line high (56 for two lines)
     moveq #88, %d1
     moveq #10, %d2
-    moveq #56, %d3
+    move.w %d5, %d3
+    mulu.w #18, %d3
+    addi.w #20, %d3
     bsr.w draw_box
-    moveq #0, %d6
-    tst.w %d7
-    bne.s 1f
+    lea sv_lines(%pc), %a2
+    moveq #0, %d4                           | the line
+    moveq #96, %d3                          | its y
+1:  moveq #0, %d6
+    cmp.w %d4, %d7
+    bne.s 2f
     moveq #-1, %d6
-1:  movea.l %a1, %a0
+2:  movea.l (%a2)+, %a0
     moveq #104, %d0
-    moveq #96, %d1
+    move.w %d3, %d1
     bsr.w text_string
-    moveq #0, %d6
-    tst.w %d7
-    beq.s 2f
-    moveq #-1, %d6
-2:  movea.l %a2, %a0
-    moveq #104, %d0
-    moveq #114, %d1
-    bsr.w text_string
+    addi.w #18, %d3
+    addq.w #1, %d4
+    cmp.w %d5, %d4
+    bne.s 1b
     movem.l (%sp)+, %d0-%d4/%d6/%a0-%a3
     rts
 
+| a1, a2, (a3) = the lines, d0.w = how many (2 or 3), d1.w = the one the cursor starts on. Up and Down choose, A or Start takes the line (d0.w = its number), B or Esc -1.
 sv_choose:
     movem.l %d1-%d7/%a0-%a3, -(%sp)
-    moveq #0, %d7
-    bsr.s sv_draw
+    move.w %d0, %d5
+    move.w %d1, %d7
+    lea sv_lines(%pc), %a0
+    move.l %a1, (%a0)+
+    move.l %a2, (%a0)+
+    move.l %a3, (%a0)
+    bsr.w sv_draw
 1:  bsr.w wait_vbl
     bsr.w input_poll
     lea input_state(%pc), %a0
@@ -65,8 +74,18 @@ sv_choose:
     bne.s 9f
     andi.b #0x0C, %d0                       | Up or Down
     beq.s 1b
-    eori.w #1, %d7
-    moveq #0x0B, %d0
+    btst #3, %d0
+    beq.s 3f
+    subq.w #1, %d7                          | Up
+    bpl.s 4f
+    move.w %d5, %d7
+    subq.w #1, %d7
+    bra.s 4f
+3:  addq.w #1, %d7                          | Down
+    cmp.w %d5, %d7
+    bne.s 4f
+    moveq #0, %d7
+4:  moveq #0x0B, %d0
     bsr.w sound_play_sfx
     bsr.w sv_draw
     bra.w 1b
@@ -224,6 +243,8 @@ save_guru:
     move.w cur_music(%pc), (%a0)            | the song that goes on afterwards
     lea sv_t_save(%pc), %a1
     lea sv_t_show(%pc), %a2
+    moveq #2, %d0
+    moveq #0, %d1
     bsr.w sv_choose
     tst.w %d0
     bne.s 8f                                | Show mantra, or B
@@ -250,6 +271,8 @@ save_title:
     beq.s 7f                                | no file: the entry
 1:  lea sv_t_load(%pc), %a1
     lea str_enter(%pc), %a2
+    moveq #2, %d0
+    moveq #0, %d1
     bsr.w sv_choose
     tst.w %d0
     bne.s 7f                                | Enter mantra, or B
@@ -264,6 +287,66 @@ save_title:
 9:  movem.l (%sp)+, %d1-%d7/%a0-%a3
     rts
 
+| Esc in the game (the main loop, after input_poll). The ending keeps Esc as it was: it leaves.
+esc_key:
+    movem.l %d0/%a0, -(%sp)
+    lea input_state(%pc), %a0
+    tst.b IN_QUIT(%a0)
+    beq.s 9f
+    .ifdef FLOW
+    move.w end_state(%pc), %d0
+    bne.w viewer_leave
+    .endif
+    bsr.w esc_menu
+9:  movem.l (%sp)+, %d0/%a0
+    rts
+
+| The game stands still while the menu is up. Esc again, B and Continue close it: IN_QUIT is cleared and the key waited for (at most 100 frames) until it is up,
+| so it cannot open the menu again; the screens are made again from the playfield as the player menu does. Save goes on to the menu.
+esc_menu:
+    movem.l %d0-%d7/%a0-%a3, -(%sp)
+    lea sv_song(%pc), %a0
+    move.w cur_music(%pc), (%a0)            | the song that goes on after the disk was used
+    lea input_state(%pc), %a0
+    clr.b IN_QUIT(%a0)                      | (the key that opened the menu may still be down: the keyboard does not repeat it)
+    moveq #0x18, %d0
+    bsr.w menu_sound
+1:  lea sv_t_only_save(%pc), %a1
+    lea sv_t_continue(%pc), %a2
+    lea sv_t_exit(%pc), %a3
+    moveq #3, %d0
+    moveq #1, %d1                           | on Continue
+    bsr.w sv_choose
+    tst.w %d0
+    beq.s 3f                                | Save
+    cmpi.w #2, %d0
+    beq.w viewer_leave                      | Exit to GEMDOS
+    bsr.s esc_key_up                        | Continue, B or Esc
+    bsr.w box_leave
+    movem.l (%sp)+, %d0-%d7/%a0-%a3
+    rts
+3:  bsr.w sv_write
+    lea sv_t_saved(%pc), %a0
+    tst.w %d0
+    beq.s 4f
+    lea sv_t_failed(%pc), %a0
+4:  bsr.w message_box
+    bra.s 1b
+
+| IN_QUIT is cleared (before and after the wait: a press of Esc that came meanwhile is the one that closed the menu).
+esc_key_up:
+    movem.l %d0/%d2/%a0, -(%sp)
+    lea input_state(%pc), %a0
+    moveq #99, %d2
+1:  clr.b IN_QUIT(%a0)
+    tst.b IN_KEYS+1(%a0)
+    beq.s 9f
+    bsr.w wait_vbl
+    bsr.w input_poll
+    dbra %d2, 1b
+9:  movem.l (%sp)+, %d0/%d2/%a0
+    rts
+
 sv_name:
     .asciz "SAVE.SAV"
 sv_t_save:
@@ -274,6 +357,12 @@ sv_t_saved:
     .asciz "Game saved."
 sv_t_failed:
     .asciz "Could not save."
+sv_t_only_save:
+    .asciz "Save"
+sv_t_continue:
+    .asciz "Continue"
+sv_t_exit:
+    .asciz "Exit to GEMDOS"
 sv_t_load:
     .asciz "Load game"
 sv_t_wrong:
@@ -286,3 +375,5 @@ sv_song:
     .word 0
 sv_status:
     .word 0                                 | what sv_write or sv_read answered last (tests)
+sv_lines:
+    .long 0, 0, 0                           | the lines sv_choose shows

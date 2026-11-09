@@ -135,6 +135,15 @@ start:
     move.w #0x4A, -(%sp)
     trap #1                                 | Mshrink
     lea 12(%sp), %sp
+.ifdef JUNK
+    movea.l %a3, %a0                        | JUNK (test only): TOS 1.02 does not clear the memory behind the image
+    adda.l #0x100+image_size, %a0
+    movea.l 4(%a3), %a1
+    move.l #JUNK, %d0
+9:  move.l %d0, (%a0)+
+    cmpa.l %a1, %a0
+    bcs.s 9b
+.endif
 
     clr.l -(%sp)
     move.w #32, -(%sp)
@@ -298,7 +307,11 @@ start:
     bsr.w start_menu                        | start the game, or enter a mantra
     .endif
     .endif
+    lea input_state(%pc), %a0
+    tst.b IN_QUIT(%a0)
+    bne.w viewer_leave                      | Esc on the title (or in the intro): the program ends, as it always did
 12: bsr.w input_poll
+    bsr.w esc_key                           | Esc: the menu (Save, Continue, Exit to GEMDOS; src/save.s)
     .ifdef FLOW
     bsr.w flow_tick                         | the ending's walk, boss rooms, the final boss (src/flow.s)
     .endif
@@ -336,20 +349,25 @@ start:
     .ifdef NPCS
     bsr.w npc_erase
     .endif
+    lea hero_dead(%pc), %a0                 | Player_HandleDeath is a loop of its own in the ROM: the sprites are cleared, nothing moves and nothing touches him until the death is over
+    tst.w (%a0)
+    bne.s 13f                               | (an enemy on him would start the death again and again)
     bsr.w enemies_update
     bsr.w items_tick
-    bsr.w draw_spell
+13: bsr.w draw_spell
     .ifdef NPCS
     bsr.w npc_draw                          | the people of the screen (src/town.s), under the enemies and the hero
     .endif
+    lea hero_dead(%pc), %a0
+    tst.w (%a0)
+    bne.s 14f
     bsr.w draw_enemies
+14:
     .endif
     bsr.w draw_hero
     bsr.w present_swap
-    lea input_state(%pc), %a0
-    tst.b IN_QUIT(%a0)
-    beq.s 12b
-viewer_leave:                               | (also the way out of flow_fade_out: Esc in the middle of a door's fade)
+    bra.w 12b                               | (Esc is seen at the top: esc_key)
+viewer_leave:                               | (also the way out of flow_fade_out: Esc in the middle of a door's fade, and of the Esc menu's Exit to GEMDOS)
     bsr.w frame_exit
 viewer_quit:
     movea.l orig_screen(%pc), %a0
@@ -2344,7 +2362,8 @@ draw_playfield:
 
 
 | What is on the screen a4 besides the blocks, as it stands (nothing moves while the game stands still, and the ROM's sprites stay on the screen): the boxes of the last drawing in
-| this screen are put back, then the spell, the people, the enemies and the hero are drawn again (the frame loop's order, without the updates). Here and not in items.s: the people's routines are in .text.early, out of reach from the end of .text.
+| this screen are put back, then the people, the enemies and the hero are drawn again (the frame loop's order, without the updates). The spell is not: the ROM's is off the
+| screen from the message box on (jsnes, tools/refnes/mattockspell.mjs). Here and not in items.s: the people's routines are in .text.early, out of reach from the end of .text.
 mattock_sprites:
     lea rect_slots(%pc), %a0
     move.w slot_index(%pc), %d0
@@ -2359,7 +2378,6 @@ mattock_sprites:
     .ifdef NPCS
     bsr.w npc_erase_boxes
     .endif
-    bsr.w draw_spell
     .ifdef NPCS
     bsr.w npc_draw
     .endif
@@ -2739,7 +2757,7 @@ swap_playfields:
     movem.l (%sp)+, %d0-%d1
     rts
 
-| The screen being drawn into (a4) gets the window of the playfield and the hero, and is shown (three frames). Does not touch the other one.
+| The screen being drawn into (a4) gets the window of the playfield, the people and the hero (the enemies too while box_keep is set), and is shown (three frames). Does not touch the other one.
 refresh_screens:
     bsr.w set_view
     moveq #0, %d0
@@ -2751,7 +2769,10 @@ refresh_screens:
     .ifdef NPCS
     bsr.w npc_draw
     .endif
-    bsr.w draw_hero
+    move.w box_keep(%pc), %d0
+    beq.s 1f
+    bsr.w draw_enemies                      | (the Mattock's box: the ROM keeps its enemies on the screen, and so do we, in every one of the frames the box goes in)
+1:  bsr.w draw_hero
     bra.w present_swap
 
 | view_src = the window's first line in the playfield: pf_ptr + camera * 160.
@@ -3188,6 +3209,7 @@ pkg_attach:
     move.l (%a2)+, (%a1)+                   | the numbers of doors and screens
     move.l (%a2), (%a1)                     | of edges, and the music
     bsr.w burst_make                        | (needs pkg_ptr: the four images of the Tilte explosion)
+    bsr.w behind_expand                     | (the sprites behind the background: the masks the file leaves to the block images, src/enemy.s)
     lea flag_screens(%pc), %a1              | the flags of the screens are made as they are asked for (`screen_flags`): none yet
     moveq #FLAG_SLOTS-1, %d1
 2:  move.w #-1, (%a1)+
@@ -3456,6 +3478,6 @@ sound_bin:
 sound_song:
     .space SND_SONG_MAX
 
-    .section .stack,"aw",@progbits          | the stack, 2 KB (the deepest use measured: 638 bytes), behind the song buffer: both are zeros and not in the file (make_prg.py --bss-from)
-    .space 2048
+    .section .stack,"aw",@progbits          | the stack, 4 KB, behind the song buffer: both are zeros and not in the file (make_prg.py --bss-from). It must stay 4 KB: GEMDOS's file calls (a door loads a package)
+    .space 4096                             | run on this stack in supervisor mode and TOS 1.02 needs far more than the 638 bytes the game's own calls reach; at 2 KB a door crashed on the author's TOS
 stack_end:

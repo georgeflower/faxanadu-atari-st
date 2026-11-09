@@ -267,6 +267,10 @@ flow_tick:
     .ifdef SPLASH
     bsr.w ending_play
     bsr.w splash_start
+    lea input_state(%pc), %a1
+    tst.b IN_QUIT(%a1)
+    beq.s 9f
+    FAR_JMP viewer_leave                    | Esc in the outro or on the title after it: the program ends (the Esc menu is for the running game)
     .endif
 9:  movem.l (%sp)+, %d0-%d3/%a0-%a2
     rts

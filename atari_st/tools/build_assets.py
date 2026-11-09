@@ -237,7 +237,7 @@ def main() -> int:
             "magic_anim": magic, "magic_images": magic_images,
             **(ed.package_parts(rom, area, screens, pal_index, plan) if building is None else ed.package_parts(rom, area, [None], pal_index, plan)),
             "screen_ids": bytes(screens) if building is None else b"\0",      # the ROM's number of each screen of the package (the people of a screen are placed by it; src/town.s)
-            "behind": behind.behind_part(rom, ar, screens if building is None else [], tiles_index),
+            "behind": behind.behind_part(rom, ar, screens if building is None else [], tiles_index, table, images),
             "screen_events": bytes(ed.screen_event(rom, area, sid) for sid in screens) if building is None else b"\xff",      # each screen's special event id ($FF none, 1 a boss room, 2 the final boss; src/flow.s)
         }
         counts = dict(door_count=len(doors) // DOOR_BYTES, screen_count=len(screens), edge_count=len(edges) // EDGE_BYTES, music=music)

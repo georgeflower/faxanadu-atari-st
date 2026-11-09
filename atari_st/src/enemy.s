@@ -2652,6 +2652,9 @@ en_touch:
 | Player_ReduceHP: d0.w = the damage, 8.8. The power is the HUD's byte and a fraction (hero_hpl); below nothing he is dead (the Elixir lets him live).
 en_reduce_hp:
     movem.l %d0-%d1/%a0-%a1, -(%sp)
+    lea hero_dead(%pc), %a0                 | (he is dying already: no second death)
+    tst.w (%a0)
+    bne.s 9f
     lea hud_state(%pc), %a0
     lea hero_hpl(%pc), %a1
     moveq #0, %d1
@@ -3368,21 +3371,23 @@ en_draw_done:
     rts
 
 
-| Sprites behind the background (docs: AGENTS.md, 5d, "Sprites behind the background"; tools/behind.py has the package part PKG_BEHIND: a word n, 256 bytes giving a block id its number 1 to n
-| (0: not a block that sprites go behind), a mask of 16 words that is all ones, then n masks of 16 words: a bit set where the sprite shows, clear where the block is in front of it).
+| Sprites behind the background (docs: AGENTS.md, 5d, "Sprites behind the background"; tools/behind.py has the package part PKG_BEHIND: a word o (the offset of the all-ones mask, 0: no
+| pillar block in the package), the words dn and dp, 256 bytes giving a block id its number k (0: no mask, 1 to 127 a block that sprites go behind, -1 to -128 another block that has
+| opaque pixels), then the masks of 16 words (a bit set where the sprite shows, clear where the block is in front of it) at 32 * k from the all-ones one).
 | Player_CalculateVisibility and CurrentSprite_CalculateVisibility: the block in the row of the sprite's y under its x + 4 and under its x + 12 (a byte: it wraps) has the
 | property 4, 9 or 13 -> the left (bit 0) or the right (bit 1) 8-pixel column of the sprite is drawn behind the background.
-| The screen's table behind_tab has an entry (the offset of a block's mask in PKG_BEHIND, BEHIND_NONE for a block that is none of those) for each block position, in rows of 18
-| (the column before the screen and the one after it, a row above and a row below are BEHIND_NONE too), so that a tile can look at its four blocks without range tests.
-    .equ BEHIND_NONE, 2+256
+| The screen's table behind_tab has an entry (32 * the block's k, which is the offset of its mask from the all-ones one; 0 for a block without a mask) for each block position, in rows of 18
+| (the column before the screen and the one after it, a row above and a row below are 0 too), so that a tile can look at its four blocks without range tests. A positive entry is a
+| block that sprites go behind, a negative one only hides the sprite's pixels over its opaque ones.
+    .equ BEHIND_INDEX, 6                    | the block ids' numbers in PKG_BEHIND (behind_load, behind_expand)
     .macro BEHIND_SAMPLE add, bit
     move.w %d0, %d2
     addi.w #\add, %d2
     andi.w #0xFF, %d2
     lsr.w #4, %d2
     add.w %d2, %d2
-    cmpi.w #BEHIND_NONE, 38(%a1,%d2.w)
-    beq.s 1f
+    tst.w 38(%a1,%d2.w)
+    ble.s 1f
     ori.w #\bit, %d3
 1:
     .endm
@@ -3416,17 +3421,18 @@ behind_set:
 behind_load:
     movem.l %d0-%d3/%a0-%a2, -(%sp)
     movea.l pkg_ptr+PKG_BEHIND(%pc), %a0
-    tst.w (%a0)
+    move.w (%a0), %d0
     beq.s 9f
     lea behind_tab(%pc), %a1
-    move.l #(BEHIND_NONE<<16)+BEHIND_NONE, %d1
+    moveq #0, %d1
     move.w #(15*18/2)-1, %d2
 1:  move.l %d1, (%a1)+
     dbra %d2, 1b
     lea bh_cache(%pc), %a1
     move.w #0x7FFF, (%a1)                   | (what the last tile's bytes were made from is not this screen's)
     lea bh_part(%pc), %a1
-    move.l %a0, (%a1)
+    lea (%a0,%d0.w), %a2
+    move.l %a2, (%a1)                       | the masks are reached from the all-ones one
     lea behind_tab+38(%pc), %a1             | the first block position: row 1, column 1 of the table
     move.w cur_screen(%pc), %d0
     mulu.w #208, %d0
@@ -3436,16 +3442,71 @@ behind_load:
 2:  moveq #16-1, %d2
 3:  moveq #0, %d0
     move.b (%a2)+, %d0
-    move.b 2(%a0,%d0.w), %d0                | the block's number 1 to n (0: none)
+    move.b BEHIND_INDEX(%a0,%d0.w), %d0     | the block's number k (0: none)
     beq.s 4f
-    lsl.w #5, %d0
-    addi.w #BEHIND_NONE, %d0                | (the masks follow the all-ones one)
+    ext.w %d0
+    lsl.w #5, %d0                           | (negative for a block that only hides pixels)
     move.w %d0, (%a1)
 4:  addq.l #2, %a1
     dbra %d2, 3b
     addq.l #4, %a1                          | (the table's last column and the first of the next row)
     dbra %d3, 2b
 9:  movem.l (%sp)+, %d0-%d3/%a0-%a2
+    rts
+
+| Attaching a package (pkg_attach): the masks that the file leaves as zeros are made from the block images, as many as the package part says (dn of the negative numbers, dp of the positive):
+| for each block id whose number k is in that range, the planes of the image of its first corner that the package has are ORed and inverted, a line at a time (a pixel is colour 0
+| exactly where its slot is 0: tools/behind.py only leaves a mask to this when the image says the same as the ROM's tiles). Keeps every register.
+behind_expand:
+    movem.l %d0-%d6/%a0-%a5, -(%sp)
+    movea.l pkg_ptr+PKG_BEHIND(%pc), %a0
+    move.w (%a0), %d0
+    beq.s 9f
+    lea (%a0,%d0.w), %a1                    | the all-ones mask
+    movea.l pkg_ptr+PKG_BLOCK_INDEX(%pc), %a2
+    movea.l pkg_ptr+PKG_BLOCKS(%pc), %a3
+    move.w 2(%a0), %d5                      | dn
+    move.w 4(%a0), %d6                      | dp
+    lea BEHIND_INDEX(%a0), %a4              | the block ids' numbers
+    moveq #0, %d3                           | the block id
+1:  move.b (%a4)+, %d0
+    beq.s 8f
+    ext.w %d0
+    move.w %d0, %d1
+    bpl.s 2f
+    neg.w %d1
+    cmp.w %d5, %d1
+    bra.s 3f
+2:  cmp.w %d6, %d1
+3:  bhi.s 8f                                | (its mask is in the file)
+    lsl.w #5, %d0
+    lea (%a1,%d0.w), %a5                    | where the mask goes
+    move.w %d3, %d0
+    lsl.w #3, %d0
+    lea (%a2,%d0.w), %a6                    | the block's four images in the block index
+    moveq #3, %d2
+4:  move.w (%a6)+, %d0
+    addq.w #1, %d0
+    bne.s 5f                                | (the first corner that has one)
+    dbra %d2, 4b
+    bra.s 8f
+5:  subq.w #1, %d0
+    moveq #0, %d4
+    move.w %d0, %d4
+    lsl.l #7, %d4
+    lea (%a3,%d4.l), %a6
+    moveq #16-1, %d2
+6:  move.w (%a6)+, %d0
+    or.w (%a6)+, %d0
+    or.w (%a6)+, %d0
+    or.w (%a6)+, %d0
+    not.w %d0
+    move.w %d0, (%a5)+
+    dbra %d2, 6b
+8:  addq.w #1, %d3
+    cmpi.w #256, %d3
+    bne.s 1b
+9:  movem.l (%sp)+, %d0-%d6/%a0-%a5
     rts
 
 | en_blit (src/blit.s) for a tile of a sprite that has a column behind the background (the caller tests that behind_v is not 0): the same arguments (d0 = x, d1 = line, a1 =
@@ -3553,6 +3614,6 @@ behind_v:
 behind_ox:
     .word 0                                 | its x on the screen
 bh_part:
-    .long 0                                 | PKG_BEHIND of the package (behind_load)
+    .long 0                                 | the all-ones mask of PKG_BEHIND of the package (behind_load): the masks are at 32 * their numbers from it
 behind_tab:
-    .space 15*18*2                          | the screen's block positions (a row and a column round them): the offset of the block's mask in PKG_BEHIND, or BEHIND_NONE (behind_load)
+    .space 15*18*2                          | the screen's block positions (a row and a column round them): the offset of the block's mask from the all-ones one, or 0 (behind_load)

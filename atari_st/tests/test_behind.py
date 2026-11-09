@@ -96,6 +96,56 @@ class BehindInTheRomTests(unittest.TestCase):
                 seen.add((v, column))
         self.assertEqual(seen, {(v, c) for v in range(4) for c in range(2)}, sorted(seen))
 
+    def test_the_picture_of_the_hero_over_the_pillar_equals_jsnes(self) -> None:
+        """The whole picture, not the attribute bits: the hero stands at x 168 to 200 (the pillar is x 176 to 207) in jsnes, the enemies taken away; the picture over his
+        box equals the screen drawn from the ROM's tables (`render_screen`) with the hero's pixels laid over it, those of a column that is behind left out where the background is not
+        colour 0, every block counting (`behind.opaque_screen`). With the pillar's own blocks only (the ST's definition before it had the masks of the blocks round it) it does not."""
+        import behind
+        import faxanadu_maps as fm
+        import faxanadu_rom as fr
+        import faxanadu_sprites as fs
+        import nes_palette
+        import render_screen as rs
+
+        rom = fr.Rom(ROM)
+        a = fm.area(rom, 0)
+        background = rs.render(rom, 0, 4)
+        nes, pillars = behind.opaque_screen(rom, a, 4), behind.opaque_screen(rom, a, 4, only_pillars=True)
+        places = [(x, flags) for x in (168, 172, 184, 192, 196, 200, 204) for flags in (0, 0x40)]
+        wrong_without = hidden = 0
+        for equip in ("0,255,255", "0,0,255"):
+            with tempfile.TemporaryDirectory() as tmp:
+                subprocess.run(["node", "behindshot.mjs", str(Path(tmp) / "s"), *(f"{x}:{f}" for x, f in places)], cwd=ROOT / "tools" / "refnes", check=True, capture_output=True,
+                               env={**os.environ, "EQUIP": equip})
+                for n, (x, flags) in enumerate(places):
+                    state = json.loads((Path(tmp) / f"s{n}.state.json").read_text())
+                    ppm = rs.read_ppm(Path(tmp) / f"s{n}.ppm")
+                    self.assertEqual((state["x"], state["y"]), (x, 144))
+                    left = bool(state["flags"] & 0x40)
+                    palettes = [state["sprPal"][i * 4:i * 4 + 4] for i in range(4)]
+                    parts = fs.hero_parts(rom, x, 144, state["armor"], state["shield"], state["weapon"], 0, left)
+                    tiles = fs.pattern_tiles(rom, state["armor"], state["shield"], state["weapon"])
+                    origins = [(x, 144), (x, 144), (0, 0), ((x + rom.byte("SHIELD_SPRITE_OFFSETS_X", 1 if left else 0)) & 0xFF, 152)]
+                    for result, opaque in (("nes", nes), ("pillars", pillars)):
+                        image = [row[:] for row in background]
+                        covered = set()
+                        for part, (ox, oy) in zip(parts, origins):                                  # (the shield is in front of the body, the game draws it first)
+                            if not part:
+                                continue
+                            layer = fs.sprite_layer(part, tiles, palettes)
+                            covered |= set(layer)
+                            for (px, line), c in behind.drop_behind(layer, ox, behind.halves(rom, a, 4, ox, oy), opaque).items():
+                                if line - 32 < 208:
+                                    image[line - 32][px] = nes_palette.NES_RGB[c & 0x3F]
+                        bad = [(px, line) for px, line in covered if 8 <= px < 248 and line - 32 < 200 and image[line - 32][px] != tuple(ppm[line][px])]
+                        if result == "nes":
+                            self.assertEqual(sorted(bad)[:5], [], f"hero at {x} (flags {flags:#x}), equipment {equip}: {len(bad)} pixels differ")
+                            hidden += len(covered) - sum(1 for k in covered if image[k[1] - 32][k[0]] != tuple(background[k[1] - 32][k[0]]))
+                        else:
+                            wrong_without += len(bad)
+        self.assertGreater(hidden, 100, "pixels are hidden by the pillar in these pictures")
+        self.assertGreater(wrong_without, 20, "the neighbours of the pillar hide pixels too")
+
     def test_the_arm_piece_the_weapon_and_the_shield_are_behind_by_their_own_place(self) -> None:
         """The hero strikes at every x from 160 to 215 facing either way (`behindspots.mjs`: dagger with the small shield, long sword with the large one): the sprites of the shield
         (tiles $30 to $37), of the weapon (from $38) and of the arm piece (the body's tiles at x - 8 or x + 16) have the bit exactly when the block under x + 4 or x + 12 of the
@@ -141,13 +191,178 @@ class BehindInTheRomTests(unittest.TestCase):
             self.assertGreaterEqual(len({v for p, v, _ in seen if p == part}), 2, (part, sorted(seen)))
 
 
+@unittest.skipUnless(ROM.exists(), "needs the ROM")
+class BehindPartTests(unittest.TestCase):
+    """The package part (tools/behind.py) holds, or lets the program make, the NES mask of every block a column that is behind can lie over."""
+
+    PACKAGES = ((0, 0), (1, 6), (1, 7), (2, 10), (2, 11), (5, 8), (5, 9), (6, 12), (6, 13), (6, 14))        # (area, palette set) of the disk's packages that have such blocks
+    cache: dict = {}
+
+    def part(self, rom, area: int, pal: int):
+        import behind
+        import faxanadu_maps as fm
+        import itempics
+        import st_convert as sc
+
+        if (area, pal) not in self.cache:
+            a = fm.area(rom, area)
+            screens = list(range(fm.screen_count(rom, a)))
+            _, table, images = sc.build_area_blocks(rom, area, palette_index=pal, screens=screens, extra=itempics.mattock_blocks(rom, area))
+            part = behind.behind_part(rom, a, screens, None, table, images)
+            self.cache[(area, pal)] = (a, screens, part, behind.expand(part, table, images))
+        return self.cache[(area, pal)]
+
+    def test_every_block_a_column_that_is_behind_can_lie_over_has_its_nes_mask(self) -> None:
+        import behind
+        import faxanadu_maps as fm
+        import faxanadu_rom as fr
+        import render_screen as rs
+
+        rom = fr.Rom(ROM)
+        stored = made = 0
+        for area, pal in self.PACKAGES:
+            with self.subTest(area=area, palette=pal):
+                a, screens, part, full = self.part(rom, area, pal)
+                tiles = rs.tileset(rom, a.tiles_index)
+                have = behind.masks(full)
+                props = fm.block_properties(rom, a)
+                exact_of = {b: behind.mask_of(behind.opaque_rows(rom, a, tiles, b)) for b in range(256)}
+                for sid in screens:
+                    blocks = fm.decode_screen(rom, a, sid)
+                    for r in range(fm.SCREEN_ROWS):
+                        for c in range(fm.SCREEN_COLS):
+                            if props[blocks[r * 16 + c]] not in behind.BEHIND_PROPERTIES:
+                                continue
+                            self.assertGreater(part[behind.HEADER + blocks[r * 16 + c]] & 0xFF, 0)
+                            self.assertTrue(part[behind.HEADER + blocks[r * 16 + c]] < 128, "a pillar block's number is positive")
+                            for rr, cc in behind.region(r, c):
+                                b = blocks[rr * 16 + cc]
+                                exact = exact_of[b]
+                                if props[b] in behind.BEHIND_PROPERTIES:
+                                    continue
+                                if exact == behind.ONES:
+                                    self.assertNotIn(b, have, f"block {b} has no opaque pixel")
+                                else:
+                                    self.assertEqual(have.get(b), exact, f"screen {sid} row {rr} column {cc}: block {b}")
+                                    self.assertGreaterEqual(part[behind.HEADER + b], 128, "a block that is not a pillar has a negative number")
+                for b, m in have.items():                                             # (and the pillar blocks' own masks)
+                    if props[b] in behind.BEHIND_PROPERTIES:
+                        self.assertEqual(m, exact_of[b], f"pillar block {b}")
+                o, dn, dp = (int.from_bytes(part[i:i + 2], "big") for i in (0, 2, 4))
+                made += dn + dp
+                stored += (len(part) - o - 32) // 32 + (o - behind.HEADER - 256) // 32 - dn - dp
+        self.assertGreater(made, 100, "the block images give most of the masks")
+        self.assertGreater(stored, 20, "the palette sets with a black colour that is not 0 keep theirs in the file")
+
+    def test_the_masks_the_program_makes_are_zeros_in_the_file(self) -> None:
+        import behind
+        import faxanadu_rom as fr
+
+        rom = fr.Rom(ROM)
+        a, screens, part, full = self.part(rom, 2, 11)
+        o, dn, dp = (int.from_bytes(part[i:i + 2], "big") for i in (0, 2, 4))
+        self.assertEqual((dn, dp), (31, 38), "Mist's palette set 11: no colour but 0 is black, the program makes every mask")
+        self.assertEqual(part[o + 32:o + 32 + 32 * dp] + part[o - 32 * dn:o], bytes(32 * (dn + dp)))
+        self.assertEqual(len(part), len(full))
+        self.assertEqual(part[o:o + 32], behind.ONES)
+
+    def test_the_sprites_tile_offsets_are_within_what_the_region_assumes(self) -> None:
+        """TILE_DX and TILE_DY hold for every picture a sprite can have in a screen with a pillar block: the hero's parts (each from its own place, as the program draws
+        them), the enemies that stand on such screens with what they make, the death effects, and the spells."""
+        import behind
+        import enemy_data as ed
+        import faxanadu_maps as fm
+        import faxanadu_rom as fr
+        import faxanadu_sprites as fs
+        import st_convert as sc
+
+        rom = fr.Rom(ROM)
+        base = sc.ANIM_BASE
+        found = [999, -999, 999, -999]
+
+        def note(sprites, ox: int = base, oy: int = base) -> None:
+            for sp in sprites:
+                dx, dy = sp.x - ox, sp.y + 1 - oy - 32               # (the sprite's lines are the NES screen's, 32 lines of HUD more than the playfield's)
+                found[:] = [min(found[0], dx), max(found[1], dx), min(found[2], dy), max(found[3], dy)]
+
+        shield_dx = (0, 8, 0, 8, 0, 8, 0, 8, 0, 8, 0, 8, 8, 0, 0, 0)
+        for armor in range(3):
+            for shield in (0, 255):
+                for weapon in (0, 1, 2, 3, fs.NO_ITEM):
+                    for frame in range(8):
+                        for left in (False, True):
+                            body, arm, held, shielded = fs.hero_parts(rom, base, base, armor, shield, weapon, frame, left, attacking_frame=2 if frame == 6 else -1)
+                            note(body)
+                            note(arm, base + (16 if left else -8), base)
+                            if weapon != fs.NO_ITEM:
+                                dx, dy = fs.weapon_offset(rom, armor, shield, weapon, frame, left)
+                                note(held, base + dx, base + dy)
+                            if shield < 3:
+                                note(shielded, base + shield_dx[2 * frame + (1 if left else 0)], base + 8)
+        for n in range(20):                          # the spells' pictures
+            for flip in (0, 0x40):
+                note(fs.place(fs.appearance(rom, 0x95 + n, "TILEINFO_ENTITY_ADDRS"), base, base, flip))
+        kinds = set()
+        for area in sorted({a for a, _ in self.PACKAGES}):
+            a = fm.area(rom, area)
+            for sid in range(fm.screen_count(rom, a)):
+                if any(True for _ in behind.pillar_positions(rom, a, [sid])):
+                    kinds |= {p[0] for p in ed.placements(rom, area, sid) if p[0] in ed.ENEMIES or p[0] in ed.ITEMS}
+        kinds |= {ed.SPAWNED[e] for e in kinds if e in ed.SPAWNED}
+        kinds |= {e for e in ed.EXTRAS if e != ed.E_BOSS_DEATH}
+        for ent in sorted(kinds):
+            first = rom.byte("SPRITE_APPEARANCE_PHASE_OFFSETS", ent)
+            for count in range(ed.KINDS[ent]):
+                frame = ed.ROM_FRAMES[ent][count] if ent in ed.ROM_FRAMES else count
+                for flip in (0, 0x40):
+                    for number, dx, dy, mirror in ed.death_pieces(ent, first, frame):
+                        note(fs.place(fs.appearance(rom, number, "TILEINFO_ENTITY_ADDRS"), base + dx, base + dy, flip ^ mirror), base, base)
+        self.assertGreaterEqual(found[0], behind.TILE_DX[0], found)
+        self.assertLessEqual(found[1], behind.TILE_DX[1], found)
+        self.assertGreaterEqual(found[2], behind.TILE_DY[0], found)
+        self.assertLessEqual(found[3], behind.TILE_DY[1], found)
+        self.assertEqual((found[0], found[1], found[2], found[3]), (behind.TILE_DX[0], behind.TILE_DX[1], behind.TILE_DY[0], behind.TILE_DY[1]), "the numbers are the extremes, not more")
+
+    def test_no_tile_of_a_sprite_that_is_behind_lies_over_a_block_without_a_mask(self) -> None:
+        """Independent of `region`: at every place (x, y) at which a part of a sprite is behind a block of a screen (`halves`' rule, worked out here from the screen's own rows),
+        every block that a tile can reach (from x + TILE_DX[0] to x + TILE_DX[1] + 7, and the lines likewise) has its mask in the part when it has opaque pixels."""
+        import behind
+        import faxanadu_maps as fm
+        import faxanadu_rom as fr
+        import render_screen as rs
+
+        rom = fr.Rom(ROM)
+        checked, missing = 0, []
+        for area, pal in self.PACKAGES:
+            a, screens, part, full = self.part(rom, area, pal)
+            have = behind.masks(full)
+            props = fm.block_properties(rom, a)
+            tiles = rs.tileset(rom, a.tiles_index)
+            transparent = {b for b in range(256) if behind.mask_of(behind.opaque_rows(rom, a, tiles, b)) == behind.ONES}
+            for sid in screens:
+                blocks = fm.decode_screen(rom, a, sid)
+                for r in range(fm.SCREEN_ROWS):
+                    columns = {c for c in range(fm.SCREEN_COLS) if props[blocks[r * 16 + c]] in behind.BEHIND_PROPERTIES}
+                    for x in range(256):
+                        if not columns & {((x + 4) & 0xFF) >> 4, ((x + 12) & 0xFF) >> 4}:
+                            continue
+                        for y in (16 * r, min(16 * r + 15, 207)):                      # (the rows a tile can reach are the same in between, only the extremes differ)
+                            for rr in range(max(0, (y + behind.TILE_DY[0]) >> 4), min(fm.SCREEN_ROWS - 1, (y + behind.TILE_DY[1] + 7) >> 4) + 1):
+                                for cc in range(max(0, (x + behind.TILE_DX[0]) >> 4), min(fm.SCREEN_COLS - 1, (x + behind.TILE_DX[1] + 7) >> 4) + 1):
+                                    b = blocks[rr * 16 + cc]
+                                    if b not in have and b not in transparent:
+                                        missing.append((area, pal, sid, x, y, b, rr, cc))
+                                    checked += 1
+        self.assertEqual(missing[:5], [], "(area, palette, screen, x, y, block, row, column) of a sprite that reaches a block without a mask")
+        self.assertGreater(checked, 1000)
+
+
 @unittest.skipUnless(ROM.is_file() and shutil.which("hatari") and shutil.which("m68k-linux-gnu-as") and shutil.which("ca65") and TOS.is_file(),
                      "needs the ROM, cc65, hatari, the m68k binutils and a TOS image (TOS or TOS_PAL)")
 class BehindOnTheStTests(unittest.TestCase):
     """Eolis screen 4. The hero stands at x1 and the first Zozura is put at x2 (the Hour Glass holds it still), the other taken away. The picture is the background, then
     the hero's parts (his body; with a weapon in the attack frames the arm piece and the weapon; with a shield the shield) and the Zozura's picture, each with the pixels
-    dropped that `behind.drop_behind` says for its own place (the blocks of the package part only: the neighbours of the pillar are in front on the NES as well, a few pixels
-    at the edge)."""
+    dropped that `behind.drop_behind` says for its own place, over every block's opaque pixels as on the NES (the pillar's neighbours too: a few pixels at its edge, `test_the_neighbours_of_the_pillar_count`)."""
 
     @staticmethod
     def hero_parts_at(rom, hero_x: int, hero_y: int, shield: int, weapon: int, frame: int, flip: int, palettes) -> list:
@@ -196,7 +411,7 @@ class BehindOnTheStTests(unittest.TestCase):
         hud = word.raw("hud_state", 10)
         rows = hs.decode_screen(ram, hs.video_base(log))
         camera = word("camera")
-        opaque = behind.opaque_screen(rom, a, 4, True)
+        opaque = behind.opaque_screen(rom, a, 4)
         expected = sc.expected_screen(rom, 0, 4, camera, state=dict(hp=hud[0], mp=hud[1], experience=int.from_bytes(hud[2:4], "big"), gold=int.from_bytes(hud[4:8], "big"), seconds=hud[8]))
         self.assertEqual((word("hero_x"), word("hero_frame"), word("hero_flip")), (hero_x, frame, flip))
         pictures = self.hero_parts_at(rom, hero_x, word("hero_y"), shield, weapon, frame, flip, palettes)
@@ -223,6 +438,26 @@ class BehindOnTheStTests(unittest.TestCase):
                     plain[yy][px + sc.ST_LEFT] = plan.slot[c & 0x3F]
         self.assertGreater(sum(rows[y][x] != plain[y][x] for y in range(200) for x in range(320)), least, "the pictures would be the same without the rule")
         return want_halves
+
+    def test_the_neighbours_of_the_pillar_count(self) -> None:
+        """The scenes below are not the same picture when only the pillar's own pixels hide the sprites (what the ST did before the package part held the masks of the blocks round
+        the pillar): in Eolis screen 4 the hero's body at x 168 to 200 has 3 to 8 pixels over the opaque pixels of the neighbouring blocks."""
+        import behind
+        import faxanadu_maps as fm
+        import faxanadu_rom as fr
+        import faxanadu_sprites as fs
+        import st_convert as sc
+
+        rom = fr.Rom(ROM)
+        a = fm.area(rom, 0)
+        palettes = sc.sprite_palettes(rom, a.palette_index)
+        nes, pillars = behind.opaque_screen(rom, a, 4), behind.opaque_screen(rom, a, 4, only_pillars=True)
+        differ = {}
+        for x in (168, 184, 192, 200):
+            layer = fs.sprite_layer(fs.hero_parts(rom, x, 144, 0, 255, 255, 0, False)[0], fs.pattern_tiles(rom, 0, 255, 255), palettes)
+            v = behind.halves(rom, a, 4, x, 144)
+            differ[x] = len(behind.drop_behind(layer, x, v, pillars)) - len(behind.drop_behind(layer, x, v, nes))
+        self.assertTrue(all(n > 0 for n in differ.values()), differ)
 
     def test_both_halves_of_the_hero_and_the_left_half_of_a_zozura_are_behind_the_pillar(self) -> None:
         self.assertEqual(self.scene(184, 200), [3, 1])
@@ -261,7 +496,7 @@ class BehindOnTheStTests(unittest.TestCase):
         plan = sc.plan_for_set(rom, pal)
         palettes = sc.sprite_palettes(rom, pal)
         tiles = fs.common_tiles(rom)
-        opaque = behind.opaque_screen(rom, a, 4, True)
+        opaque = behind.opaque_screen(rom, a, 4)
         seen, differ = set(), 0
         for hero_x, flip, vbl in ((80, 1, 206), (150, 1, 206), (150, 1, 210), (150, 1, 213), (150, 1, 216), (150, 1, 219), (230, 0, 207), (230, 0, 210), (230, 0, 213), (230, 0, 216), (230, 0, 220)):
             pokes = [(165, "w:hero_invinc", 30000), (170, "w:hero_invinc", 30000), (195, "mem:enemies+180", 255), (195, "mem:enemies+210", 255), (200, "joy", 0x81), (202, "joy", 0)]

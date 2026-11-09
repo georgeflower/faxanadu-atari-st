@@ -502,9 +502,13 @@ use_item:
 9:  movem.l (%sp)+, %d0-%d2/%a0-%a2
     rts
 
-| The message of an item used up (a0), then nothing is held, and sound $1A.
+| The message of an item used up (a0), then nothing is held, and sound $1A. Clobbers a1 too.
 use_spent:
+    lea box_keep(%pc), %a1
+    move.w #1, (%a1)                        | the box's screens are made with the enemies on them (refresh_screens): the ROM keeps them on the screen, they must not be off it for a frame
     bsr.w message_box
+    lea box_keep(%pc), %a1
+    clr.w (%a1)
     lea inv+INV_ITEM(%pc), %a0
     move.b #0xFF, (%a0)
     lea hud_dirty(%pc), %a0                 | the item box is empty now
@@ -517,7 +521,8 @@ use_spent:
 | 8 bits; nothing at $F0 and more) at the row of his y. It is the one the Mattock breaks when it is the first of the area's four ids in USE_MATTOCK_BLOCK_TRANSITIONS
 | (items.bin; only Trunk has a real entry: $63 becomes $85, $86, $42; in every other area the id is 0, air, and the ROM's quirk is kept: it matches there). Then:
 | the message, the Mattock is gone, sound $1A, and four times (4 frames, the block and the one below it are made the next id of the four). The game stands still
-| (the sprites stay where they were: the enemies, the people, the spell and the hero are drawn again over the new blocks). Nothing is kept: a screen is made from the package again each time it is entered,
+| (the sprites stay where they were: the enemies, the people and the hero are drawn again over the new blocks; the spell is not, the ROM's is off the screen from the
+| box on, frozen, and goes on when the game does). Nothing is kept: a screen is made from the package again each time it is entered,
 | so what was changed is put back when the screen is drawn next (mattock_restore, from draw_playfield).
 use_mattock:
     movem.l %d0-%d7/%a0-%a2, -(%sp)
@@ -560,10 +565,6 @@ use_mattock:
     movea.l pkg_ptr+PKG_SCREENS(%pc), %a2
     adda.l %d0, %a2                         | this screen's block ids
     bsr.w mattock_record
-    moveq #1, %d7                           | the box has gone and the screens were made again from the playfield (the hero and the people only): the rest comes back
-5:  bsr.w mattock_sprites
-    bsr.w present_swap
-    dbra %d7, 5b
     moveq #0, %d6                           | the step
 4:  bsr.w wait_vbl
     bsr.w wait_vbl
@@ -886,6 +887,8 @@ key_hints:
 
     .section .data
 item_ticks:
+    .word 0
+box_keep:                                   | non-zero while an item's message is up (use_spent): refresh_screens draws the enemies too when the box goes
     .word 0
 mt_count:                                   | the Mattock's changes still in the package: how many, then 4 records of 12 bytes (the screen's ids, area, palette set, place, two old ids)
     .word 0

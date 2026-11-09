@@ -245,6 +245,12 @@ class ViewerTests(unittest.TestCase):
         ram, word, _ = self.run_scenario(args, [(599, "g", 1), (600, "g", 0)], 700, "shots_hit")
         self.assertEqual((word("hero_x"), word("hero_flip")), (128 + 24, 0), "hit from the left")
 
+    def test_an_enemy_on_him_does_not_start_the_death_again(self) -> None:
+        """Player_HandleDeath is a loop of its own in the ROM: no sprite moves or touches him while he dies. The Snowman of area 1 screen 16 leaps on him at 3 power; the
+        death must run its 256 passes (a touch while dying used to start it from the beginning, for ever) and wait for the button with the message."""
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=1", "SCREEN=16", "HERO=208,144,0,255,0,0,1", "WORLD=1", "HUD=3,0,0,0,0"], [], 900, "shots_death_enemy")
+        self.assertEqual((word("hero_dead"), word("death_state")), (2, 256), "the death is over and the message waits")
+
     def test_with_no_power_left_he_dissolves_and_starts_again(self) -> None:
         """DAMAGE=80: the first H takes all the power. Player_HandleDeath's loop: 16 passes standing, then 8 phases of 8 tiles (tools in the ROM:
         Player_DrawDeathAnimation), the fade from pass 80, and at pass 256 the screen is back with the death song and the ROM's message (\"Remember your mantra\") on a box, waiting for a button; then he is
@@ -727,7 +733,7 @@ class ViewerTests(unittest.TestCase):
         import behind
         hx, hy = word(700, "hero_x"), word(700, "hero_y")
         halves = behind.halves(rom, a, 0, hx, hy)
-        opaque = behind.opaque_screen(rom, a, 0, True)
+        opaque = behind.opaque_screen(rom, a, 0)
         background = sc.expected_screen(rom, 2, 0, 40, state=dict(hp=16, mp=0, experience=0, gold=0, seconds=0))
         for y in range(200):
             for x in range(320):
@@ -992,7 +998,7 @@ class ViewerTests(unittest.TestCase):
         rom = fr.Rom(ROM)
         for area, screen, hero, vbl in scenes:
             with self.subTest(area=area, screen=screen):
-                opaque = behind.opaque_screen(rom, fm.area(rom, area), screen, True)
+                opaque = behind.opaque_screen(rom, fm.area(rom, area), screen)
                 pal = fm.area(rom, area).palette_index
                 plan = sc.plan_for_set(rom, pal)
                 palettes = sc.sprite_palettes(rom, pal)
