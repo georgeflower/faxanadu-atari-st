@@ -15,11 +15,13 @@ SECTIONS
   .text :
   {
     *(.text.boot)
+    *(.text.early)
     *(.data*)
     *(.text)
     *(.text.late)
     *(.rodata*)
     *(.herodata)
+    *(.batchdata)
     sound_start = ABSOLUTE(.);
     *(.sounddata)
     *(.stack*)

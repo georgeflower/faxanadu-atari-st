@@ -5,7 +5,9 @@ The image is plain FAT12 as TOS writes it (80 tracks, 2 sides, 9 sectors of 512 
 directory of 112 entries). It is not a boot disk: open the drive on the desktop and run FAXANADU.PRG. A Gotek or HxC reads
 it as it is, and Hatari takes it as a floppy image.
 
-    make_disk.py OUT.st FILE [FILE ...]        (each FILE is a path, stored under its upper-case 8.3 name)
+    make_disk.py OUT.st FILE [FILE ...]        (each FILE is a path, stored under its upper-case 8.3 name; NAME=PATH stores PATH as NAME)
+
+A .TXT file is stored with DOS line ends (TOS's text viewer wants them).
 """
 from __future__ import annotations
 
@@ -133,11 +135,21 @@ def main(argv: list[str]) -> int:
         print(__doc__)
         return 2
     out = Path(argv[1])
-    files = [(Path(p).name, Path(p).read_bytes()) for p in argv[2:]]
+    files = []
+    for arg in argv[2:]:
+        name, _, path = arg.partition("=")
+        if not path:
+            name, path = Path(arg).name, arg
+        data = Path(path).read_bytes()
+        if name.upper().endswith(".TXT"):
+            data = data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        files.append((name, data))
     image = build_disk(files, when=datetime.datetime.now())
     out.write_bytes(image)
     used = sum(-(-len(d) // (PER_CLUSTER * SECTOR)) * PER_CLUSTER * SECTOR for _, d in files)
     print(f"Wrote {out}: {len(files)} files, {used // 1024} KB of {TOTAL_SECTORS * SECTOR // 1024} KB used")
+    for name, data in sorted(files, key=lambda f: -len(f[1])):
+        print(f"  {name:<13}{len(data):>8} bytes")
     return 0
 
 

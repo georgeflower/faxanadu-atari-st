@@ -20,14 +20,13 @@ LISTING := $(BUILD_DIR)/faxanadu_st.lst
 # Disk images are named Fax###.st, ### = the build number = the number of commits on this branch (git rev-list --count HEAD), three digits.
 BUILD_NUMBER := $(shell printf '%03d' $$(git rev-list --count HEAD))
 DISK := $(BUILD_DIR)/Fax$(BUILD_NUMBER).st
-VIEWER_DISK := $(BUILD_DIR)/Fax$(BUILD_NUMBER).st
 
 MAIN_SRC := $(SRC_DIR)/main.s
 # main.s .includes the other modules, so one assembler run covers them all.
 SOURCES := $(wildcard $(SRC_DIR)/*.s)
 
 .DEFAULT_GOAL := all
-.PHONY: all disk viewerdisk check pcheck clean
+.PHONY: all disk viewerdisk startdisk check pcheck clean
 
 all: $(PRG)
 
@@ -46,13 +45,20 @@ $(BIN): $(ELF)
 $(PRG): $(BIN) $(TOOLS_DIR)/make_prg.py
 	$(PYTHON) $(TOOLS_DIR)/make_prg.py $< $@
 
-# A 720 KB floppy image for a Gotek, a real drive or an emulator. The disk's program starts with the menu (start, or enter a mantra).
-viewerdisk: override VIEWER_DEFS += --defsym MENU=1
-viewerdisk: viewer
-	$(PYTHON) $(TOOLS_DIR)/make_disk.py $(VIEWER_DISK) $(VIEWER_PRG) $(wildcard $(BUILD_DIR)/*.DAT)
+# The game's disk: a 720 KB floppy image for a Gotek, a real drive or an emulator. The program (FAXANADU.PRG on the disk) starts with the title
+# screen. Every area (WORLD: all of them, the buildings come with the doors) and every package the doors, edges and temples ask for goes on it, with README.TXT.
+# `make disk` and `make viewerdisk` are the same thing (viewerdisk is the old name); tests/test_disk.py checks what is on it.
+DISK_WORLD := 1,2,3,5,6,7
+DISK_DEFS := --defsym MENU=1 --defsym SPLASH=1 --defsym NPCS=1 --defsym NEWGAME=1
+disk viewerdisk: override VIEWER_DEFS += $(DISK_DEFS)
+disk viewerdisk: override ALL = 1
+disk viewerdisk: override WORLD = $(DISK_WORLD)
+disk viewerdisk: viewer
+	$(PYTHON) $(TOOLS_DIR)/make_disk.py $(DISK) FAXANADU.PRG=$(VIEWER_PRG) disk/README.TXT $(wildcard $(BUILD_DIR)/*.DAT)
 
-disk: all
-	$(PYTHON) $(TOOLS_DIR)/make_disk.py $(DISK) $(PRG)
+# the start-up check (src/main.s, 16 colour bars) on a disk
+startdisk: all
+	$(PYTHON) $(TOOLS_DIR)/make_disk.py $(BUILD_DIR)/Start$(BUILD_NUMBER).st $(PRG)
 
 # the same tests, run at the same time in copies of the tree (JOBS=n workers, default the number of cores)
 pcheck: all
@@ -113,6 +119,6 @@ viewer:
 	$(LD) $(LDFLAGS) -o $(BUILD_DIR)/viewer.elf $(BUILD_DIR)/viewer.o
 	$(PYTHON) $(TOOLS_DIR)/check_reach.py --nm $(NM) --text-base start --listing $(BUILD_DIR)/viewer.lst $(BUILD_DIR)/viewer.elf $(SRC_DIR)/viewer.s
 	$(OBJCOPY) -O binary $(BUILD_DIR)/viewer.elf $(BUILD_DIR)/viewer.bin
-	$(PYTHON) $(TOOLS_DIR)/make_prg.py $(BUILD_DIR)/viewer.bin $(VIEWER_PRG)
+	$(PYTHON) $(TOOLS_DIR)/make_prg.py $(BUILD_DIR)/viewer.bin $(VIEWER_PRG) --nm $(NM) --elf $(BUILD_DIR)/viewer.elf --bss-from sound_song
 	rm -f $(BUILD_DIR)/*.DAT
 	cp $(GENERATED)/*.DAT $(BUILD_DIR)/

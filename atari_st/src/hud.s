@@ -112,6 +112,7 @@ hud_build:
     lea 64+24(%a6), %a1
     moveq #2, %d4
     bsr.w hud_digits
+    bsr.w hud_item_picture                  | the item in hand into the item box's tiles $3C-$3F (src/menu.s)
 
     rts
 
@@ -126,7 +127,11 @@ hud_draw:
     beq.s 5f
     cmpi.b #0x0D, %d0
     beq.s 5f
-    cmp.b (%a2,%d1.w), %d0
+    cmpi.b #0x3C, %d0                       | the item box's picture: always drawn (it changes with the item in hand)
+    bcs.s 8f
+    cmpi.b #0x3F, %d0
+    bls.s 5f
+8:  cmp.b (%a2,%d1.w), %d0
     beq.s 6f
 5:  move.b %d0, (%a2,%d1.w)
     lsl.w #5, %d0

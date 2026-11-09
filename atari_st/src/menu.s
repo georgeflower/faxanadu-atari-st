@@ -343,7 +343,13 @@ menu_draw_list:
     bcc.s 9f
     moveq #0, %d0
     move.b (%a1,%d3.w), %d0
-    add.w %d4, %d0                          | the name
+    andi.w #0x1F, %d0                       | (a list entry is the number; the category bits some code leaves on it are not)
+    add.w %d4, %d0                          | the name (and the picture: the same number)
+    moveq #80, %d1
+    move.w %d3, %d2
+    lsl.w #4, %d2
+    addi.w #44, %d2
+    bsr.w item_draw                         | the picture, 16 by 16, centred on the line of the name
     moveq #96, %d1
     move.w %d3, %d2
     lsl.w #4, %d2
@@ -351,7 +357,7 @@ menu_draw_list:
     bsr.w menu_text
     cmp.w %d6, %d3
     bne.s 2f
-    moveq #80, %d1
+    moveq #72, %d1
     bsr.w menu_arrow
 2:  addq.w #1, %d3
     bra.s 1b
@@ -366,7 +372,12 @@ menu_key:
     beq.s 9f
     move.w hero_dead(%pc), %d0
     bne.s 9f
-    bsr.w player_menu
+    move.w cur_area(%pc), %d0               | GameLoop_CheckShowPlayerMenu: not on Eolis's first screen (the ROM's screen 0 of area 0, outside the walls)
+    bne.s 1f
+    move.w cur_screen(%pc), %d0
+    cmpi.w #EOLIS_START_SCREEN, %d0
+    beq.s 9f
+1:  bsr.w player_menu
 9:  movem.l (%sp)+, %d0/%a0
     rts
 
@@ -401,11 +412,14 @@ player_menu:
     bne.s 1b
     moveq #0, %d4
     bra.s 1b
-5:  cmpi.w #5, %d4                          | (the last entry, the player's status, is not made yet)
-    beq.s 1b
-    move.w %d4, %d5
+5:  cmpi.w #5, %d4                          | the last entry, the player's status: B closes the whole menu
+    bne.s 6f
+    bsr.w menu_status
+    bra.s 9f
+6:  move.w %d4, %d5
     bsr.w menu_category
-9:  bsr.w box_leave
+9:  bsr.w hud_mark                          | what he holds may have changed: the HUD's picture
+    bsr.w box_leave
     movem.l (%sp)+, %d0-%d7/%a0-%a3
     rts
 
@@ -467,6 +481,251 @@ menu_category:
 9:  movem.l (%sp)+, %d3/%d6-%d7/%a1-%a2
     rts
 
+| ---------------------------------------------------------------------------------------------------------------------- item pictures
+    .equ ITEMS_PICTURES, 112                | items.bin (tools/itempics.py): 28 palette sets x 4 slots, then 39 pictures x 4 tile numbers, the Mattock's table (32 bytes),
+    .equ ITEMS_MATTOCK, 268                 | then the tiles (16 bytes each)
+    .equ ITEMS_TILES, 300
+
+| d0.w = a tile of items.bin, a1 = where its 32 bytes go (8 lines of four plane bytes). The tile's colours 0-3 take the slots of the HUD's palette in the palette set
+| in use (the same as the HUD's own tiles). Keeps every register (a1 as it was).
+item_tile:
+    movem.l %d0-%d7/%a0-%a3, -(%sp)
+    lea items_data(%pc), %a0
+    move.w cur_pal(%pc), %d1
+    bpl.s 1f
+    moveq #0, %d1
+1:  lsl.w #2, %d1
+    lea (%a0,%d1.w), %a2                    | the slots of the four colours
+    lsl.w #4, %d0
+    lea ITEMS_TILES(%a0), %a0
+    adda.w %d0, %a0                         | the tile: 8 bytes of plane 0, then 8 of plane 1
+    moveq #7, %d1                           | the lines
+2:  moveq #0, %d2
+    move.b (%a0), %d2                       | plane 0
+    moveq #0, %d3
+    move.b 8(%a0), %d3                      | plane 1
+    addq.l #1, %a0
+    move.b %d2, %d4
+    or.b %d3, %d4
+    not.b %d4                               | the pixels of colour 0
+    move.b %d3, %d5
+    not.b %d5
+    and.b %d2, %d5                          | colour 1
+    move.b %d2, %d6
+    not.b %d6
+    and.b %d3, %d6                          | colour 2
+    and.b %d3, %d2                          | colour 3
+    moveq #0, %d7                           | the plane made
+3:  moveq #0, %d0
+    btst %d7, (%a2)
+    beq.s 4f
+    or.b %d4, %d0
+4:  btst %d7, 1(%a2)
+    beq.s 5f
+    or.b %d5, %d0
+5:  btst %d7, 2(%a2)
+    beq.s 6f
+    or.b %d6, %d0
+6:  btst %d7, 3(%a2)
+    beq.s 7f
+    or.b %d2, %d0
+7:  move.b %d0, (%a1)+
+    addq.w #1, %d7
+    cmpi.w #4, %d7
+    bne.s 3b
+    dbra %d1, 2b
+    movem.l (%sp)+, %d0-%d7/%a0-%a3
+    rts
+
+| a0 = a tile of 32 bytes (8 lines of four plane bytes), d1 = x (a multiple of 8), d2 = y, a3 = the screen: the tile is put there. Keeps every register.
+tile_put:
+    movem.l %d0-%d2/%a0-%a1, -(%sp)
+    mulu.w #STRIDE, %d2
+    movea.l %a3, %a1
+    adda.l %d2, %a1
+    move.w %d1, %d0
+    lsr.w #4, %d0
+    lsl.w #3, %d0
+    adda.w %d0, %a1                         | the group of 16 pixels
+    move.w %d1, %d0
+    lsr.w #3, %d0
+    andi.w #1, %d0
+    adda.w %d0, %a1                         | its left or right byte
+    moveq #7, %d0
+1:  move.b (%a0)+, (%a1)
+    move.b (%a0)+, 2(%a1)
+    move.b (%a0)+, 4(%a1)
+    move.b (%a0)+, 6(%a1)
+    lea STRIDE(%a1), %a1
+    dbra %d0, 1b
+    movem.l (%sp)+, %d0-%d2/%a0-%a1
+    rts
+
+| The picture of an item (2x2 tiles): d0.w = its number (0 weapons, 4 armours, 8 shields, 12 spells, 17 items, as the names are numbered), d1 = x (a multiple of 8),
+| d2 = y, a3 = the screen. Keeps every register.
+item_draw:
+    movem.l %d0-%d7/%a0-%a2, -(%sp)
+    lea -128(%sp), %sp
+    lea items_data+ITEMS_PICTURES(%pc), %a0
+    lsl.w #2, %d0
+    lea (%a0,%d0.w), %a0                    | the four tile numbers
+    movea.l %sp, %a1
+    moveq #3, %d3
+1:  moveq #0, %d0
+    move.b (%a0)+, %d0
+    bsr.w item_tile
+    lea 32(%a1), %a1
+    dbra %d3, 1b
+    movea.l %sp, %a0
+    move.w %d1, %d4
+    move.w %d2, %d5
+    moveq #0, %d3
+2:  move.w %d4, %d1
+    btst #0, %d3
+    beq.s 3f
+    addq.w #8, %d1
+3:  move.w %d5, %d2
+    btst #1, %d3
+    beq.s 4f
+    addq.w #8, %d2
+4:  bsr.w tile_put
+    lea 32(%a0), %a0
+    addq.w #1, %d3
+    cmpi.w #4, %d3
+    bne.s 2b
+    lea 128(%sp), %sp
+    movem.l (%sp)+, %d0-%d7/%a0-%a2
+    rts
+
+| The HUD's item box: the picture of the item in hand (inv INV_ITEM, the ROM's SelectedItem: 0-21, bit 7 set none) is made into the HUD's tiles $3C-$3F (blank for none).
+| Called by hud_build. Keeps every register.
+hud_item_picture:
+    movem.l %d0-%d3/%a0-%a1, -(%sp)
+    movea.l pkg_ptr+PKG_HUD_TILES(%pc), %a1
+    lea 0x3C*32(%a1), %a1
+    moveq #0, %d0
+    move.b inv+INV_ITEM(%pc), %d0
+    cmpi.b #22, %d0
+    bcc.s 8f
+    addi.w #17, %d0                         | the items start at 17
+    lea items_data+ITEMS_PICTURES(%pc), %a0
+    lsl.w #2, %d0
+    lea (%a0,%d0.w), %a0
+    moveq #3, %d3
+1:  moveq #0, %d0
+    move.b (%a0)+, %d0
+    bsr.w item_tile
+    lea 32(%a1), %a1
+    dbra %d3, 1b
+    bra.s 9f
+8:  moveq #31, %d0                          | none: four blank tiles
+2:  clr.l (%a1)+
+    dbra %d0, 2b
+9:  movem.l (%sp)+, %d0-%d3/%a0-%a1
+    rts
+
+| ---------------------------------------------------------------------------------------------------------------------- the PLAYER entry
+| PlayerMenu_ShowStatusMenu (the box x4 y8, 26 by 16 tiles, over the menu): the rank, the experience the next one needs, what he wears and the special items he
+| has. Only B ends it (A and Start do nothing), and that closes the whole menu. a3 = the screen.
+menu_status:
+    movem.l %d0-%d7/%a0-%a2, -(%sp)
+    lea -8(%sp), %sp                        | room for the five digits of the experience
+    moveq #4, %d0
+    moveq #64, %d1
+    moveq #13, %d2
+    move.w #128, %d3
+    bsr.w draw_box
+    lea status_label_texts(%pc), %a0        | the labels: from y 80, a tile row of text and a blank one between
+    moveq #0, %d3
+1:  move.w %d3, %d0
+    moveq #80, %d1
+    move.w %d3, %d2
+    lsl.w #4, %d2
+    addi.w #80, %d2
+    bsr.w menu_text
+    addq.w #1, %d3
+    cmpi.w #7, %d3
+    bne.s 1b
+    move.w hero_title(%pc), %d0             | RANK: the rank in force
+    andi.w #15, %d0
+    lea status_title_texts(%pc), %a0
+    move.w #152, %d1
+    moveq #80, %d2
+    bsr.w menu_text
+    move.w hero_next(%pc), %d0              | NEXT EXP: what the next rank needs, five digits (nothing at the last rank)
+    cmpi.w #15, %d0
+    bcc.s 4f
+    add.w %d0, %d0
+    lea title_table(%pc), %a0
+    moveq #0, %d1
+    move.w (%a0,%d0.w), %d0
+    clr.b 5(%sp)
+    moveq #4, %d3
+2:  andi.l #0xFFFF, %d0
+    divu.w #10, %d0
+    move.l %d0, %d1
+    swap %d1
+    addi.b #'0', %d1
+    move.b %d1, (%sp,%d3.w)
+    dbra %d3, 2b
+    movea.l %sp, %a0
+    move.w #152, %d0
+    moveq #96, %d1
+    moveq #0, %d6
+    bsr.w text_string
+4:  moveq #0, %d3                           | WEAPON, ARMOR, SHIELD, MAGIC: the picture at x 136 (the row above and the row of the name), the name at x 152
+5:  move.w %d3, %d1
+    bsr.w inv_selected                      | d0 = what he wears (bit 7: nothing)
+    tst.b %d0
+    bmi.s 6f
+    andi.w #0x1F, %d0
+    lea name_base(%pc), %a0
+    moveq #0, %d1
+    move.b (%a0,%d3.w), %d1
+    add.w %d1, %d0                          | its number among the names
+    move.w %d0, %d4
+    move.w %d3, %d2
+    lsl.w #4, %d2
+    addi.w #104, %d2
+    move.w #136, %d1
+    bsr.w item_draw
+    move.w %d4, %d0
+    lea menu_name_texts(%pc), %a0
+    move.w #152, %d1
+    move.w %d3, %d2
+    lsl.w #4, %d2
+    addi.w #112, %d2
+    bsr.w menu_text
+6:  addq.w #1, %d3
+    cmpi.w #4, %d3
+    bne.s 5b
+    moveq #0, %d3                           | ITEM: a picture for each special item he has, in a place of its own (8 places, 16 pixels apart)
+7:  lea special_masks(%pc), %a0
+    move.b (%a0,%d3.w), %d0
+    and.b inv+INV_SPECIAL(%pc), %d0
+    beq.s 8f
+    lea special_ids(%pc), %a0
+    moveq #0, %d0
+    move.b (%a0,%d3.w), %d0
+    andi.w #0x1F, %d0
+    addi.w #17, %d0
+    move.w %d3, %d1
+    lsl.w #4, %d1
+    addi.w #136, %d1
+    move.w #168, %d2
+    bsr.w item_draw
+8:  addq.w #1, %d3
+    cmpi.w #8, %d3
+    bne.s 7b
+9:  bsr.w menu_input                         | only B (or Esc) leaves
+    btst #8, %d0
+    bne.s 10f
+    btst #6, %d0
+    beq.s 9b
+10: lea 8(%sp), %sp
+    movem.l (%sp)+, %d0-%d7/%a0-%a2
+    rts
+
     .section .rodata
     .even
 special_ids:                                | Ring of Elf, Ruby Ring, Ring of Dworf, Demon's Ring, Elixir, Magical Rod, Pendant, Black Onyx
@@ -482,7 +741,18 @@ menu_top_texts:
     .word TEXT_TOP_0, TEXT_TOP_1, TEXT_TOP_2, TEXT_TOP_3, TEXT_TOP_4, TEXT_TOP_5
 menu_none_texts:
     .word TEXT_NONE_0, TEXT_NONE_1, TEXT_NONE_2, TEXT_NONE_3, TEXT_NONE_4
+status_label_texts:                         | RANK:, NEXT EXP:, WEAPON:, ARMOR:, SHIELD:, MAGIC:, ITEM: (9 characters each, with their blanks)
+    .word TEXT_STATUS_0, TEXT_STATUS_1, TEXT_STATUS_2, TEXT_STATUS_3, TEXT_STATUS_4, TEXT_STATUS_5, TEXT_STATUS_6
+status_title_texts:                         | the 16 ranks in capitals
+    .word TEXT_TITLE_0, TEXT_TITLE_1, TEXT_TITLE_2, TEXT_TITLE_3, TEXT_TITLE_4, TEXT_TITLE_5, TEXT_TITLE_6, TEXT_TITLE_7
+    .word TEXT_TITLE_8, TEXT_TITLE_9, TEXT_TITLE_10, TEXT_TITLE_11, TEXT_TITLE_12, TEXT_TITLE_13, TEXT_TITLE_14, TEXT_TITLE_15
 menu_name_texts:
     .word TEXT_NAME_0, TEXT_NAME_1, TEXT_NAME_2, TEXT_NAME_3, TEXT_NAME_4, TEXT_NAME_5, TEXT_NAME_6, TEXT_NAME_7, TEXT_NAME_8, TEXT_NAME_9, TEXT_NAME_10, TEXT_NAME_11, TEXT_NAME_12, TEXT_NAME_13, TEXT_NAME_14, TEXT_NAME_15, TEXT_NAME_16, TEXT_NAME_17, TEXT_NAME_18, TEXT_NAME_19, TEXT_NAME_20, TEXT_NAME_21, TEXT_NAME_22, TEXT_NAME_23, TEXT_NAME_24, TEXT_NAME_25, TEXT_NAME_26, TEXT_NAME_27, TEXT_NAME_28, TEXT_NAME_29, TEXT_NAME_30, TEXT_NAME_31, TEXT_NAME_32, TEXT_NAME_33, TEXT_NAME_34, TEXT_NAME_35, TEXT_NAME_36, TEXT_NAME_37, TEXT_NAME_38
+    .even
+    .text
+
+    .section .herodata
+items_data:                                 | tools/itempics.py: the slots of the HUD's colours by palette set, the item pictures' tile numbers, the tiles
+    .incbin "items.bin"
     .even
     .text

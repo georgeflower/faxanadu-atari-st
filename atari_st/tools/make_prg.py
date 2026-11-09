@@ -3,19 +3,25 @@ from __future__ import annotations
 
 import argparse
 import struct
+import subprocess
 from pathlib import Path
 
 HEADER_MAGIC = 0x601A
 HEADER_SIZE = 0x1C
 
 
-def build_prg(payload: bytes) -> bytes:
+def build_prg(payload: bytes, bss: int = 0) -> bytes:
+    """The PRG of a flat image. The last `bss` bytes of the image are not stored: TOS makes room for them behind the program (the header's bss length)."""
+    if bss:
+        if bss % 2 or bss > len(payload) or any(payload[len(payload) - bss:]):
+            raise SystemExit(f"the last {bss} bytes of the image must be an even number of zeros to be left out of the file")
+        payload = payload[:len(payload) - bss]
     header = struct.pack(
         ">HLLLLLLH",
         HEADER_MAGIC,
         len(payload),
         0,
-        0,
+        bss,
         0,
         0,
         0,
@@ -57,6 +63,9 @@ def main() -> None:
     parser.add_argument("input", nargs="?")
     parser.add_argument("output", nargs="?")
     parser.add_argument("--check", dest="check", type=Path)
+    parser.add_argument("--elf", type=Path, help="the linked ELF, for --bss-from")
+    parser.add_argument("--bss-from", help="a symbol of --elf: the image from there on is zeros (a buffer) and is not stored in the file")
+    parser.add_argument("--nm", default="m68k-linux-gnu-nm")
     args = parser.parse_args()
 
     if args.check is not None:
@@ -67,7 +76,16 @@ def main() -> None:
         parser.error("input and output are required unless --check is used")
 
     payload = Path(args.input).read_bytes()
-    Path(args.output).write_bytes(build_prg(payload))
+    bss = 0
+    if args.bss_from:
+        if not args.elf:
+            parser.error("--bss-from needs --elf")
+        out = subprocess.run([args.nm, str(args.elf)], check=True, capture_output=True, text=True).stdout
+        found = [int(line.split()[0], 16) for line in out.splitlines() if line.split()[-1:] == [args.bss_from]]
+        if not found:
+            parser.error(f"{args.bss_from} is not a symbol of {args.elf}")
+        bss = len(payload) - found[0]
+    Path(args.output).write_bytes(build_prg(payload, bss))
     print(f"Wrote {args.output}")
 
 

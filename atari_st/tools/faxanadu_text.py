@@ -40,6 +40,12 @@ def message(rom: fr.Rom, number: int) -> str:
     return "".join(out)
 
 
+def rank_names(rom: fr.Rom) -> list[str]:
+    """The 16 rank names the message byte `$FB` prints (`PLAYER_TITLE_STRINGS`, bank 15, 16-byte records; the text stops at the first space)."""
+    table = rom.at("PLAYER_TITLE_STRINGS", 16 * 16)
+    return [table[16 * i:16 * i + 16].split(b" ")[0].decode("ascii") for i in range(16)]
+
+
 def password_lines(rom: fr.Rom) -> tuple[str, str]:
     """The password screen's two lines: the message for a wrong password, and the request."""
     text = bytes(_bank(rom, 12)[PASSWORD_LINE:PASSWORD_LINE + 70]).split(b"\0")[0].decode("ascii")
@@ -58,3 +64,12 @@ def menu_strings(rom: fr.Rom) -> dict[str, list[str]]:
     """The player menu's texts: the six entries of the top menu, the names of every weapon, armour, shield, spell and item in one list (`ITEM_NAMES_*`: the
     weapons from 0, the armours from 4, the shields from 8, the spells from 12, the items from 17), and the five 'NO ...' lines."""
     return {"top": _records(rom, b"WEAPON ", 6), "names": _records(rom, b"HAND DAGGER", 39), "none": _records(rom, b"NO WEAPON", 5)}
+
+
+def status_strings(rom: fr.Rom) -> dict[str, list[str]]:
+    """The PLAYER entry's texts (`PLAYER_STATUS_MENU_STRINGS`, `PLAYER_STATUS_MENU_TITLES`): the seven labels as the ROM draws them (9 characters, with their
+    blanks, so they line up), and the sixteen rank names in capitals (without the blanks that clear the line)."""
+    at = rom.data.index(b"    RANK:") - 1
+    labels = [rom.data[at + 16 * i + 1:at + 16 * i + 10].decode("ascii") for i in range(7)]
+    titles = _records(rom, b"NOVICE", 16)
+    return {"labels": labels, "titles": titles}

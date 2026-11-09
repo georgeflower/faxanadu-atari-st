@@ -204,10 +204,12 @@ hero_reverse:
     rts
 
 | a0 = a NES tile (two bit planes, 8 lines), a2 = the ST colours of the palette (four bytes, colour 0 is see-through), a1 = where the image goes:
-| a line of the mask (a bit for a pixel that is drawn) and the four planes, 8 lines. a1 moves 40 bytes on.
+| the 8 lines' masks (a bit for a pixel that is drawn), then each line's four plane bytes (the format enemy_data.column_image makes, which en_blit
+| draws). a1 moves 40 bytes on.
 hero_convert:
     movem.l %d0-%d7/%a0/%a5, -(%sp)
-    lea 8(%a0), %a5
+    lea 8(%a1), %a5                         | the planes go behind the 8 mask bytes
+    move.w #7, -(%sp)
 1:  move.b (%a0)+, %d0
     move.b 7(%a0), %d1
     moveq #0, %d2
@@ -236,12 +238,14 @@ hero_convert:
     addx.b %d5, %d5
     .endr
     move.b %d6, (%a1)+
-    move.b %d2, (%a1)+
-    move.b %d3, (%a1)+
-    move.b %d4, (%a1)+
-    move.b %d5, (%a1)+
-    cmpa.l %a5, %a0
-    bne.w 1b
+    move.b %d2, (%a5)+
+    move.b %d3, (%a5)+
+    move.b %d4, (%a5)+
+    move.b %d5, (%a5)+
+    subq.w #1, (%sp)
+    bpl.w 1b
+    addq.l #2, %sp
+    lea 32(%a1), %a1
     movem.l (%sp)+, %d0-%d7/%a0/%a5
     rts
 
@@ -273,24 +277,31 @@ hero_box_part:
     bra.s 1b
 9:  rts
 
-| a5 = a pose table (0: none), a3 = the images, a4 = the screen; the pose is hero_pose_off. Clobbers d0-d7, a0, a1, a5.
+| a5 = a pose table (0: none), a4 = the screen; the pose is hero_pose_off. Clobbers d0-d7, a0, a1, a3, a5, a6.
 hero_draw_part:
     move.l %a5, %d0
     beq.s 9f
     move.w hero_pose_off(%pc), %d0
     move.w (%a5,%d0.w), %d0
     adda.w %d0, %a5
-1:  move.w (%a5)+, %d0
+    movea.l %a5, %a6
+    movea.l en_nm(%pc), %a3                 | (en_blit's table of inverted masks, from enemies_load)
+    moveq #-1, %d6                          | (en_blit's constants are not made yet)
+1:  move.w (%a6)+, %d0
     bmi.s 9f
     add.w hero_x(%pc), %d0
-    move.w hero_y(%pc), %d1                 | blit_tile clobbers d0-d7: the position comes from memory each time
+    move.w hero_y(%pc), %d1                 | en_blit clobbers d0-d7: the position comes from memory each time
     sub.w camera(%pc), %d1
-    add.w (%a5)+, %d1
-    move.w (%a5)+, %d2
+    add.w (%a6)+, %d1
+    move.w (%a6)+, %d2
     mulu.w #SPRITE_IMAGE_BYTES, %d2
-    lea (%a3,%d2.l), %a1
-    bsr.w dissolve_image
-    bsr.w blit_tile
+    movea.l hero_ram(%pc), %a1
+    lea HERO_IMAGES_AT(%a1), %a1
+    adda.l %d2, %a1
+    move.w hero_dead(%pc), %d2              | (d0 and d1 are en_blit's x and line)
+    beq.s 2f
+    bsr.w dissolve_image                    | (only while he dies)
+2:  bsr.w en_blit
     bra.s 1b
 9:  rts
 

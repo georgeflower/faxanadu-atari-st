@@ -6,6 +6,7 @@
 | Position independent, like main.s: only PC-relative addressing names our own labels.
 
     .include "assets.inc"
+    .include "iscript.inc"
 
     | MUSIC=n plays song n (0 none, 1-16 as the NES numbers them) everywhere; without it every package plays its own (PKG_MUSIC).
     .ifndef DAMAGE
@@ -20,6 +21,27 @@
     .ifndef TITLE
     .equ TITLE, 0
     .endif
+    .ifdef INTRO                            | INTRO=1 or ENDING=1 play the intro or the ending first (splash68.s), so they need the code too
+    .ifndef SPLASH
+    .equ SPLASH, 1
+    .endif
+    .endif
+    .ifdef ENDING
+    .ifndef SPLASH
+    .equ SPLASH, 1
+    .endif
+    .endif
+    .ifdef NEWGAME                          | NEWGAME=1 (the disk build): START begins the ROM's new game; it brings the whole game flow (FLOW, src/flow.s)
+    .ifndef FLOW
+    .equ FLOW, 1
+    .endif
+    .ifndef SPLASH
+    .equ SPLASH, 1
+    .endif
+    .endif
+    .equ END_FREEZE, 1                      | flow.s end_state: the final boss is dead (120 frozen frames), the hero walks to the King, the script's FINISH_GAME was run
+    .equ END_WALK, 2
+    .equ END_FINISH, 3
     .ifndef ITEM
     .equ ITEM, 0xFF                         | the item he holds at the start (a number of the ROM's item list: 7 is the J key; $FF none)
     .endif
@@ -37,9 +59,13 @@
     .if FLAG_SLOTS*416 > PACKAGE_EXPAND
     .error "build_assets.py: PACKAGE_EXPAND is too small for the flags of FLAG_SLOTS screens"
     .endif
+    .if TOWN_SPAN > SCREEN_BYTES
+    .error "TOWN.DAT no longer fits TOS's screen memory (town_buf): see the memory map in AGENTS.md"
+    .endif
     .equ REGION_BYTES, 208*160              | a whole 208-line playfield (stride 160: the same layout as the screen)
     .equ HERO_IMAGES_AT, 64*16              | hero.s: the hero's 64 tiles, then his 256 images
     .equ HERO_RAM_BYTES, HERO_IMAGES_AT+256*SPRITE_IMAGE_BYTES
+    .equ NPC_RAM_BYTES, 2*2560             | town.s: the pictures of the people of a screen (NPC_SLOTS slots of NPC_SLOT_RAM bytes), behind TOWN.DAT
     .equ BUFFER_BYTES, 2*SCREEN_BYTES+2*REGION_BYTES+HERO_RAM_BYTES+256 | two screens and two playfields, the first on a 256-byte boundary
     .equ HERO_X_MIN, 0                      | where he is at the left edge (he has walked off it): scrolls to the screen on the left
     .equ HERO_X_MAX, 241                    | and at the right edge
@@ -72,6 +98,8 @@ show_cursor:
     .asciz "\033e"
 loading_text:
     .asciz "LOADING"
+no_memory:
+    .asciz "\r\nNot enough memory: this program needs more than a 520 STFM has free.\r\nPress a key.\r\n"
 no_package:
     .asciz "\r\nThe package file (A<area>P<palette>.DAT) is not next to the program.\r\nPress a key.\r\n"
     .even
@@ -79,11 +107,24 @@ no_package:
     .text
 start:
     movea.l 4(%sp), %a3
-    lea stack_end(%pc), %sp
+    lea game_start(%pc), %sp                | the stack is the last thing in the image, out of the way of the displacements (link.ld)
+    adda.l #stack_end, %sp
 
     move.l #image_size, %d0
-    addi.l #0x100+BUFFER_BYTES+PACKAGE_SPAN, %d0 | the image, the basepage and room behind the image for the screens and the package in use with its flag tables (the packed file is read to the end of that room)
-    move.l %d0, -(%sp)
+    addi.l #0x100+BUFFER_BYTES+PACKAGE_SPAN+NPC_RAM_BYTES, %d0 | the image, the basepage and room behind the image for the screens and the package in use with its flag tables (the packed file is read to the end of that room); TOWN.DAT lies in TOS's own screen (town_buf)
+    move.l 4(%a3), %d1                      | p_hitpa: the end of the memory the program was given
+    sub.l %a3, %d1
+    cmp.l %d0, %d1
+    bcc.s 20f
+    pea no_memory(%pc)                      | not enough memory: say so and leave (Mshrink would not tell)
+    move.w #9, -(%sp)
+    trap #1                                 | Cconws
+    addq.l #6, %sp
+    move.w #8, -(%sp)
+    trap #1                                 | Cnecin
+    clr.w -(%sp)
+    trap #1                                 | Pterm0
+20: move.l %d0, -(%sp)
     move.l %a3, -(%sp)
     clr.w -(%sp)
     move.w #0x4A, -(%sp)
@@ -96,7 +137,8 @@ start:
     addq.l #6, %sp
     lea old_ssp(%pc), %a0
     move.l %d0, (%a0)
-    lea stack_end(%pc), %sp
+    lea game_start(%pc), %sp                | the stack is the last thing in the image, out of the way of the displacements (link.ld)
+    adda.l #stack_end, %sp
 
     clr.w -(%sp)
     move.l #-1, -(%sp)
@@ -136,6 +178,11 @@ start:
     move.l %a0, (%a1)
     lea pkg_buf(%pc), %a0
     move.l %d0, (%a0)                       | where a package from disk is loaded
+    addi.l #PACKAGE_SPAN, %d0
+    lea npc_buf(%pc), %a0
+    move.l %d0, (%a0)                       | and behind its room the pictures of the people of a screen (town.s)
+    lea town_buf(%pc), %a0
+    move.l orig_screen(%pc), (%a0)          | TOWN.DAT (town.s) lies in TOS's own screen memory, which nothing uses once the program shows its own screens: 32 KB the program need not have
     movea.l buf_a(%pc), %a4
 
     movea.l #PALETTE, %a2                   | keep TOS's palette, set the screen's
@@ -143,9 +190,10 @@ start:
     moveq #15, %d1
 1:  move.w (%a2)+, (%a1)+
     dbra %d1, 1b
-    moveq #PACKAGE_AREA, %d0                | the first package is read from the disk like the others
+    moveq #PACKAGE_AREA, %d0                | the first package is read from the disk like the others (its LOADING word is drawn on TOS's screen, which TOWN.DAT then takes)
     moveq #PACKAGE_PALETTE, %d1
     bsr.w load_package
+    bsr.w town_load                         | the scripts, messages and people (TOWN.DAT, once)
     move.l pkg_result(%pc), %d0
     bpl.s 5f
     pea no_package(%pc)
@@ -236,16 +284,31 @@ start:
     bsr.w hero_sync                         | the hero's images are made before the frame counter starts
     bsr.w frame_init
     bsr.w enemies_load
+    .ifdef SPLASH
+    .ifndef NO_TITLE                        | (tests: NO_TITLE=1 has the code but starts in the game)
+    bsr.w splash_start                      | the title, the intro, CONTINUE (src/splash68.s)
+    .endif
+    .else
     .ifdef MENU
     bsr.w start_menu                        | start the game, or enter a mantra
     .endif
+    .endif
 12: bsr.w input_poll
+    .ifdef FLOW
+    bsr.w flow_tick                         | the ending's walk, boss rooms, the final boss (src/flow.s)
+    .endif
     bsr.w sound_keys
     bsr.w mantra_key                        | P: shows the mantra
+    .ifdef SCRIPT
+    bsr.w script_test                       | (tests) runs the script SCRIPT once
+    .endif
     bsr.w menu_key                          | Tab (Select): the player menu
     bsr.w hero_step
     .ifndef NO_PHYSICS
     bsr.w use_item                          | Down and B: the item he holds is used
+    .ifdef NPCS
+    bsr.w npc_check                         | Up in front of a person, or a touch trigger: its script (src/town.s)
+    .endif
     .endif
     bsr.w scroll_check                      | at the edge of the screen: scrolls to the next one (and comes back when it is done)
     .ifndef NO_PHYSICS
@@ -263,9 +326,15 @@ start:
     clr.l (%a0)
     .ifndef NO_PHYSICS
     bsr.w enemies_erase
+    .ifdef NPCS
+    bsr.w npc_erase
+    .endif
     bsr.w enemies_update
     bsr.w items_tick
     bsr.w draw_spell
+    .ifdef NPCS
+    bsr.w npc_draw                          | the people of the screen (src/town.s), under the enemies and the hero
+    .endif
     bsr.w draw_enemies
     .endif
     bsr.w draw_hero
@@ -877,6 +946,11 @@ hero_respawn:
     lea hero_next(%pc), %a0                 | Player_SetInitialExpAndGold: the rank earned is the rank he has
     move.w hero_title(%pc), (%a0)
     bsr.w timers_clear                      | Game_ClearTimedItems: wing boots, hour glass, glove and ointment are lost; the mattock quest bit too
+    .ifdef FLOW
+    bsr.w temple_enter                      | Game_SpawnInTemple: inside the temple of the last Guru he met (src/flow.s)
+    movem.l (%sp)+, %d0-%d3/%a0-%a1
+    rts
+    .else
     lea hero_flip(%pc), %a0
     move.w #HERO_FLIP, (%a0)
     move.w #START_SCREEN, %d0
@@ -890,8 +964,9 @@ hero_respawn:
     move.w %d0, (%a0)
     movem.l (%sp)+, %d0-%d3/%a0-%a1
     rts
+    .endif
 
-| The dissolved hero: a1 = the image of the next tile of the hero (8 lines of a mask and four plane bytes); on return a1 is a copy with the pixels
+| The dissolved hero: a1 = the image of the next tile of the hero (the 8 mask bytes, then the 8 lines' four plane bytes, as enemy_data.column_image); on return a1 is a copy with the pixels
 | gone that Player_DrawDeathAnimation has removed so far: in each phase q a pixel a line, the one PPUBUFFER_DRAWCOMMAND_REMOVE_VERT_LINES_MASKS[(q - line) & 7]
 | says, and in the phase going on only the tiles done so far (death_state count). The ROM dissolves the pattern tiles $00-$07, the standing body's eight
 | tiles, which are the first eight of the list; the weapon and the shield (the rest) are not drawn while he dies. The masks are mirrored when he faces
@@ -939,11 +1014,23 @@ dissolve_image:
     roxl.b #1, %d5
     dbra %d3, 6b
     move.b %d5, %d0
-7:  moveq #4, %d3
-8:  move.b (%a1)+, %d5
+7:  move.b (%a1,%d2.w), %d5                | the line's mask byte, then its four plane bytes
     and.b %d0, %d5
-    move.b %d5, (%a2)+
-    dbra %d3, 8b
+    move.b %d5, (%a2,%d2.w)
+    move.w %d2, %d3
+    lsl.w #2, %d3
+    move.b 8(%a1,%d3.w), %d5
+    and.b %d0, %d5
+    move.b %d5, 8(%a2,%d3.w)
+    move.b 9(%a1,%d3.w), %d5
+    and.b %d0, %d5
+    move.b %d5, 9(%a2,%d3.w)
+    move.b 10(%a1,%d3.w), %d5
+    and.b %d0, %d5
+    move.b %d5, 10(%a2,%d3.w)
+    move.b 11(%a1,%d3.w), %d5
+    and.b %d0, %d5
+    move.b %d5, 11(%a2,%d3.w)
     addq.w #1, %d2
     cmpi.w #8, %d2
     blt.s 3b
@@ -1825,7 +1912,7 @@ climb_down:
 
 | Draws the hero in the pose his state says, into screen a4, and notes the rectangle in this screen's slot.
 draw_hero:
-    movem.l %d0-%d7/%a0-%a3/%a5, -(%sp)
+    movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
     bsr.w hero_sync
     lea death_state(%pc), %a0
     clr.w 10(%a0)                           | (dissolving: the first tile again)
@@ -1885,7 +1972,7 @@ draw_hero:
     movea.l (%a2), %a5
     bsr.w hero_draw_part
     bsr.s clear_margins
-    movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5
+    movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5-%a6
     rts
 
 | The hero (or his box) reaches into a side margin: the playfield is x 32 to 287, so what was drawn outside it is cleared again (the margins are
@@ -1928,6 +2015,7 @@ clear_box:                                  | the same for the box d0-d3 (x0, x1
 | Draws a screen's whole playfield (208 lines, stride 160, x from byte 16) into a buffer. a5 = the block ids (16 to a row), a4 = the buffer.
 | Clobbers d0-d7, a0-a3, a6.
 draw_playfield:
+    bsr.w mattock_restore                   | what the Mattock broke in this screen is whole again (items.s)
     movea.l pkg_ptr+PKG_BLOCK_INDEX(%pc), %a2
     movea.l pkg_ptr+PKG_BLOCKS(%pc), %a3
     moveq #0, %d6                           | window line
@@ -2352,6 +2440,9 @@ refresh_screens:
     moveq #1, %d0
     bsr.w copy_window_half
     bsr.w wait_vbl
+    .ifdef NPCS
+    bsr.w npc_draw
+    .endif
     bsr.w draw_hero
     bra.w present_swap
 
@@ -2489,9 +2580,13 @@ enter_screen:
     clr.w 26(%a0)
     clr.w 28(%a0)
     move.w %d0, %d3
+    .ifdef FLOW
+    bsr.w flow_fade_out                     | Screen_FadeToBlack: four steps, about 20 frames (src/flow.s)
+    .else
     moveq #6, %d7
 1:  bsr.w wait_vbl
     dbra %d7, 1b
+    .endif
     movea.l #PALETTE, %a1                   | black
     moveq #15, %d7
 2:  clr.w (%a1)+
@@ -2551,7 +2646,7 @@ enter_world:
 black_palette:
     .space 32
 
-| d0 = the screen there (not used: a building is the only screen of its package), d1 = where he stands, d3 = the building's palette set. Remembers
+| d0 = the screen there (not used: a building is the only screen of its package), d1 = where he stands, d2 = the building's id (Area_DestScreen), d3 = the building's palette set. Remembers
 | the way back (Game_EnterBuilding: area, screen, palette set and the block he stood at) and goes in facing left; the sword is put away (the
 | building's package has the hero without one).
 enter_building:
@@ -2566,6 +2661,10 @@ enter_building:
     lsr.w #4, %d2
     or.w %d2, %d0
     move.w %d0, (%a0)                       | saved_pos
+    .ifdef NPCS
+    lea building_id(%pc), %a0
+    move.w 10(%sp), (%a0)                   | (d2, the door's byte 7: the building's id, the first byte of the ROM's destination record, which the people and scripts are placed by)
+    .endif
     lea hero_flip(%pc), %a0
     clr.w (%a0)
     moveq #0, %d0
@@ -2585,6 +2684,9 @@ exit_building:
     lea hero_flip(%pc), %a0
     move.w #1, (%a0)
     bsr.w enter_world
+    .ifdef FLOW
+    bsr.w flow_exit_music                   | after a respawn the area's song, not the town's (a quirk of the ROM)
+    .endif
     movem.l (%sp)+, %d0-%d3/%a0
     rts
 
@@ -2828,22 +2930,29 @@ hud_load_state:
     move.w (%a0)+, (%a1)+
     rts
 
+    .section .text.early,"ax"
+early_base:                                 | the start of .text.early (tools/check_reach.py), where town.s and splash68.s put their code
+    .text
     .include "hud.s"
     .include "frame.s"
     .include "password.s"
     .include "text.s"
+    .include "town.s"
     .include "enemy.s"
     .include "items.s"
     .include "menu.s"
     .include "hero.s"
+    .include "blit.s"                       | (its code is in .text.late)
+    .ifdef SPLASH
+    .include "splash68.s"                   | (its code is in .text.early, in front of the variables: see link.ld)
+    .endif
+    .ifdef FLOW
+    .include "flow.s"                       | (also in .text.early)
+    .endif
 
     .section .rodata
 hud_layout:
     .incbin "hud_layout.bin"
-hud_states:
-    .incbin "hud_states.bin"
-title_table:                                | PLAYER_TITLE_EXP_NEEDED (15 words), PLAYER_TITLE_GOLD (15 words)
-    .incbin "title_table.bin"
     .even
 
     .section .data
@@ -2954,8 +3063,12 @@ weapon_x:
     .word 0, 0, 0, 0                        | weapon_update: x, y, reach x, reach y
 spell_state:
     .word -1, 0, 0, 0, 0, 0, 0, 0, 0       | the spell: type (-1 none), flags ($40 flies right, $80 falls), x, x fraction, y, y fraction, counter, phase, interrupt counter
-hero_next:
-    .word TITLE                             | NextPlayerTitle: the rank earned (the experience reached its price); a guru makes it hero_title (not inside the hero block: it is addressed by offsets)
+hero_next:                                  | NextPlayerTitle: the rank earned (the experience reached its price); a guru makes it hero_title (not inside the hero block: it is addressed by offsets)
+    .ifdef NEXT_TITLE
+    .word NEXT_TITLE                        | (tests) the rank earned at the start
+    .else
+    .word TITLE
+    .endif
 spell_hit:
     .word 0                                 | the spell has hit an enemy: the updates it flies on (Thunder 24, Fire 255) without hitting
 hero_magic:
@@ -3001,10 +3114,13 @@ jump_curve:
     .byte 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 4, 4, 4, 4, 8
 bench_result:
     .long 0
-
-    .section .data                          | the stack sits with the variables, within reach of the boot code however much data follows
-    .space 4096
-stack_end:
+en_nm:
+    .long 0                                 | enemies_load: the table of inverted masks (src/blit.s) that draw_enemies and hero_draw_part give en_blit
+hud_states:                                 | last in .data, next to the code: the start-up code and the menus reach these from either end of .text
+    .incbin "hud_states.bin"
+title_table:                                | PLAYER_TITLE_EXP_NEEDED (15 words), PLAYER_TITLE_GOLD (15 words)
+    .incbin "title_table.bin"
+    .even
 
     .section .sounddata
 sound_bin:
@@ -3012,3 +3128,7 @@ sound_bin:
     .even
 sound_song:
     .space 16384                            | SND_SONG_MAX
+
+    .section .stack,"aw",@progbits          | the stack, 4 KB, behind the song buffer: both are zeros and not in the file (make_prg.py --bss-from)
+    .space 4096
+stack_end:

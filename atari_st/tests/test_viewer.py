@@ -21,7 +21,7 @@ def ft_message(rom, number):
 
     return ft.message(rom, number)
 TOS = Path(os.environ.get("TOS") or os.environ.get("TOS_PAL") or "")
-START_DELAY = 7            # the VBLs the program takes to make the hero's images before its frame counter starts (hero.s): the scenes' times are from the start of the game
+START_DELAY = 16           # the VBLs the program takes to make the hero's images before its frame counter starts (hero.s): the scenes' times are from the start of the game
 
 
 @unittest.skipUnless(ROM.is_file() and shutil.which("hatari") and shutil.which("m68k-linux-gnu-as") and shutil.which("ca65") and TOS.is_file(),
@@ -1017,9 +1017,10 @@ class ViewerTests(unittest.TestCase):
         he gets its 120 experience, the boss death effect (entity 100) takes its place, flies about in 10 steps and leaves coins that he picks up (tests/test_enemy.py
         checks all of it against the game)."""
         pokes = [(300, "hp", 1)]
-        for v in range(310, 700, 40):
+        for v in range(310, 450, 40):
             pokes += [(v, "space", 1), (v + 3, "space", 0), (v + 14, "b", 1), (v + 17, "b", 0)]
-        ram, word, _ = self.run_scenario(["ALL=1", "AREA=6", "SCREEN=30", "HERO=120,144,0,255,1,0,1", "WORLD=1", "HUD=80,80,0,0,0"], pokes, 650, "shots_fight")
+        pokes += [(455, "joy", 4), (495, "joy", 0)]                    # (then he walks left over the coins; they stay for a while)
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=6", "SCREEN=30", "HERO=120,144,0,255,1,0,1", "WORLD=1", "HUD=80,80,0,0,0"], pokes, 560, "shots_fight")
         state = word.raw("hud_state", 10)
         self.assertEqual(int.from_bytes(state[2:4], "big"), 120)
         gold = int.from_bytes(state[4:8], "big")

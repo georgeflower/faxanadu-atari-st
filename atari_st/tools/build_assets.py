@@ -24,6 +24,7 @@ import lz
 import faxanadu_rom as fr  # noqa: E402
 import faxanadu_text as ft  # noqa: E402
 import iscripts as isc  # noqa: E402
+import itempics  # noqa: E402
 import splash  # noqa: E402
 import st_convert as sc  # noqa: E402
 
@@ -37,8 +38,9 @@ BUILDING_AREA = 4
 def door_table(rom: fr.Rom, a: fm.Area, ids: list[int], palette_index: int, world: dict[int, list[int]]) -> tuple[bytes, list[tuple]]:
     """The doors on the screens in `ids`, 8 bytes each: screen (its number in the tables), block (row * 16 + column), kind, the screen it
     leads to (its number in the tables of the area it leads to), where the hero stands there (Y/16 << 4 | X/16), the palette set there, the key
-    it needs (`Game_RunDoorRequirementHandler`'s number), the area it leads to (for a building: its number, the screen being the building's
-    own). Kinds (`Player_CheckHandleEnterDoor`): 0 another screen of this area in this palette set, 1 the same with another palette set, 2 into
+    it needs (`Game_RunDoorRequirementHandler`'s number), the area it leads to (for a building: its id, the first byte of the door's destination record,
+    which is the screen of area 4 the game puts him on (Area_DestScreen) and the one the people and scripts are placed by, src/town.s; the building's layout, palette and
+    start position come from its second byte, the type). Kinds (`Player_CheckHandleEnterDoor`): 0 another screen of this area in this palette set, 1 the same with another palette set, 2 into
     a building (destination index $20 or more; all of area 3's; the layout is the building's number, which is also the screen in the
     building area; palette, tiles and start position come from the BUILDING_ tables), 3 out to another area (index $FE and $FF: the region
     and screen from the transition tables, the area's own palette). `world` says which areas (and their screens) have data: a door
@@ -63,7 +65,7 @@ def door_table(rom: fr.Rom, a: fm.Area, ids: list[int], palette_index: int, worl
         screen, second, key, _ = fm.door_destination(rom, a, d)
         if d.destination >= 0x20 or a.index == 3:
             info = fm.building(rom, second)
-            out += bytes([source, d.block, DOOR_BUILDING, 0, info["start"], info["palette"], key, second])
+            out += bytes([source, d.block, DOOR_BUILDING, 0, info["start"], info["palette"], key, screen])
             targets.append((BUILDING_AREA, info["palette"], second))
             continue
         if screen not in ids:
@@ -90,7 +92,7 @@ def edge_table(rom: fr.Rom, a: fm.Area, ids: list[int], world: dict[int, list[in
 FLAG_ROOM = 6 * 2 * 208                  # the block flags of 6 screens (src/viewer.s: FLAG_SLOTS), made when asked for, behind the package
 PACKAGE_PARTS = ("palette", "screens", "neighbours", "blocking", "ladders", "doors", "edges", "block_index", "blocks", "hud_tiles", "hud_partial",
                  "hero_list", "hero_images", "hero_colours", "magic_anim", "magic_images", "block_flags",
-                 "enemy_places", "enemy_kinds", "enemy_anim", "enemy_images", "enemy_scripts")
+                 "enemy_places", "enemy_kinds", "enemy_anim", "enemy_images", "enemy_scripts", "screen_ids", "screen_events")
 HEADER_WORDS = ("door_count", "screen_count", "edge_count", "music")
 
 
@@ -165,6 +167,12 @@ def main() -> int:
     for key, label in (("top", "TOP"), ("names", "NAME"), ("none", "NONE")):
         for i, text in enumerate(menu[key]):
             texts[f"{label}_{i}"] = text
+    status = ft.status_strings(rom)                         # the PLAYER entry (src/menu.s): its labels and the capital rank names
+    for key, label in (("labels", "STATUS"), ("titles", "TITLE")):
+        for i, text in enumerate(status[key]):
+            texts[f"{label}_{i}"] = text
+    for i, name in enumerate(ft.rank_names(rom)):          # what the message byte $FB prints (src/town.s)
+        texts[f"RANK_{i}"] = name
     texts["GLOVE_GONE"], texts["OINTMENT_GONE"] = ft.message(rom, 0xBD), ft.message(rom, 0xBF)       # (IScripts $93 and $95)
     for name, message in (("USED_POTION", 0xAA), ("USED_MATTOCK", 0xAB), ("USED_HOURGLASS", 0xAC), ("USED_WINGS", 0xAD), ("USED_KEY", 0xAE), ("USED_ELIXIR", 0xAF),
                           ("WINGS_GONE", 0xC0), ("HOURGLASS_GONE", 0xC1), ("KEY_A", 0xA7), ("KEY_K", 0xA6), ("KEY_Q", 0xA5), ("KEY_J", 0x29), ("KEY_JO", 0xA8),
@@ -185,8 +193,15 @@ def main() -> int:
     for name, data in scripts.items():
         (args.out / name).write_bytes(data)
     (args.out / "iscript.inc").write_text(isc.equates(scripts), encoding="ascii")
+    town = isc.town_file(scripts)
+    town_small = lz.pack(town)                     # the file the program reads once at the start (src/town.s), packed and unpacked where it lies
+    (args.out / "TOWN.DAT").write_bytes(town_small)
+    town_comp = -(-len(town_small) // 4) * 4
+    town_span = max(len(town), town_comp + lz.overrun(town_small) + 4)
+    town_span += -town_span % 4
     splash.emit(args.out)                          # the title, the intro and the ending (TITLE.DAT, INTRO.DAT, OUTRO.DAT, splash.inc)
     (args.out / "hero_equip.bin").write_bytes(sc.hero_equip_assets(rom))
+    (args.out / "items.bin").write_bytes(itempics.item_file(rom))       # the item pictures of the menu and the HUD (src/menu.s)
     hero = sc.Hero(*[bool(v) if i == 6 else v for i, v in enumerate(int(t) for t in args.hero.split(","))])
 
     def package(area: int, pal_index: int, building: int | None = None) -> tuple[bytes, list[tuple], int]:
@@ -206,7 +221,8 @@ def main() -> int:
         for sid in screens:
             around += bytes(screens.index(n) if n in screens else 0xFF for n in fm.neighbours(rom, ar, sid))
         props = fm.block_properties(rom, ar)
-        plan, table, images = sc.build_area_blocks(rom, area, palette_index=pal_index, screens=screens, tiles_index=tiles_index)
+        plan, table, images = sc.build_area_blocks(rom, area, palette_index=pal_index, screens=screens, tiles_index=tiles_index,
+                                                    extra=itempics.mattock_blocks(rom, area))
         hero_list, hero_images = sc.hero_assets(rom, who, pal_index, plan, args.camera)
         magic, magic_images = sc.magic_anim_assets(rom, pal_index, plan)
         parts = {
@@ -218,6 +234,8 @@ def main() -> int:
             "hero_list": hero_list, "hero_images": hero_images, "hero_colours": sc.hero_colours(rom, pal_index, plan),
             "magic_anim": magic, "magic_images": magic_images,
             **(ed.package_parts(rom, area, screens, pal_index, plan) if building is None else ed.package_parts(rom, area, [None], pal_index, plan)),
+            "screen_ids": bytes(screens) if building is None else b"\0",      # the ROM's number of each screen of the package (the people of a screen are placed by it; src/town.s)
+            "screen_events": bytes(ed.screen_event(rom, area, sid) for sid in screens) if building is None else b"\xff",      # each screen's special event id ($FF none, 1 a boss room, 2 the final boss; src/flow.s)
         }
         counts = dict(door_count=len(doors) // DOOR_BYTES, screen_count=len(screens), edge_count=len(edges) // EDGE_BYTES, music=music)
         return make_package(parts, counts), door_targets + edge_targets, len(images)
@@ -228,7 +246,8 @@ def main() -> int:
     names, biggest, packed, over = [package_name(*first)], len(initial), len(small), lz.overrun(small)
     expand = FLAG_ROOM
     (args.out / names[0]).write_bytes(small)
-    pending, seen = list(targets), {first}
+    # (and the King's room of the ending, the temple a death leads to and the places outside the eight temples: src/flow.s)
+    pending, seen = list(targets) + [(BUILDING_AREA, 17, 0), (BUILDING_AREA, 18, 1)] + [t for t in ((0, 0), (3, 27), (2, 10)) if t[0] in world], {first}
     while pending:                                   # every package the doors and edges lead to, and those they lead to
         target = pending.pop()
         if target[:2] in seen:
@@ -249,7 +268,9 @@ def main() -> int:
         f"| generated by tools/build_assets.py from the ROM: area {args.area}, screen {args.screen}\n"
         f"    .equ CAMERA, {args.camera}\n"
         f"    .equ START_SCREEN, {ids.index(args.screen)}\n"
+        f"    .equ EOLIS_START_SCREEN, {world[0].index(0) if 0 in world and 0 in world[0] else -1}\n"
         f"    .equ AREA_INDEX, {args.area}\n"
+        f"    .equ TOWN_FILE, {len(town_small)}\n    .equ TOWN_COMP, {town_comp}\n    .equ TOWN_SPAN, {town_span}\n"
         f"    .equ PACKAGE_MAX, {-(-biggest // 4) * 4}\n    .equ PACKAGE_EXPAND, {expand}\n    .equ PACKAGE_COMP, {-(-packed // 4) * 4}\n    .equ PACKAGE_SPAN, {span}\n    .equ PACKAGE_AREA, {args.area}\n    .equ PACKAGE_PALETTE, {first[1]}\n"
         + "".join(f"    .equ PKG_{n.upper()}, {4 * i}\n" for i, n in enumerate(PACKAGE_PARTS))
         + "".join(f"    .equ PKG_{n.upper()}, {4 * len(PACKAGE_PARTS) + 2 * i}\n" for i, n in enumerate(HEADER_WORDS))

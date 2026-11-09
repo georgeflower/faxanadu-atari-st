@@ -6,7 +6,7 @@ data is complete, a big-endian word with how far back the match starts (1-32767)
 """
 from __future__ import annotations
 
-MIN_MATCH, MAX_BACK, CHAIN = 4, 32767, 96
+MIN_MATCH, MAX_BACK, CHAIN = 4, 32767, 600
 
 
 def _length(out: bytearray, n: int) -> None:
@@ -30,23 +30,42 @@ def _sequence(out: bytearray, literals: bytes, match: tuple[int, int] | None) ->
             _length(out, length)
 
 
+def _longest(data: bytes, heads: dict, pos: int, end: int) -> tuple[int, int]:
+    """The longest earlier match for the bytes at pos: (length, how far back), (0, 0) for none."""
+    best, back = 0, 0
+    for cand in reversed(heads.get(data[pos:pos + MIN_MATCH], ())[-CHAIN:]):
+        if pos - cand > MAX_BACK:
+            break
+        n = MIN_MATCH
+        while pos + n < end - 1 and data[cand + n] == data[pos + n]:
+            n += 1
+        if n > best:
+            best, back = n, pos - cand
+    return best, back
+
+
 def pack(data: bytes) -> bytes:
+    """Greedy with one step of lazy matching: a match is passed up (as a literal) when the next position has a longer one."""
     out, heads, start, pos, end = bytearray(len(data).to_bytes(4, "big")), {}, 0, 0, len(data)
     last = end - MIN_MATCH                           # the final bytes stay literals, so the last sequence has no match
+    done = 0                                         # positions before this one are in `heads`
+
+    def index(upto: int) -> None:
+        nonlocal done
+        while done < min(upto, last):
+            heads.setdefault(data[done:done + MIN_MATCH], []).append(done)
+            done += 1
+        done = max(done, upto)
+
     while pos < last:
-        best, back = 0, 0
-        chain = heads.get(data[pos:pos + MIN_MATCH], ())
-        for cand in reversed(chain[-CHAIN:]):
-            if pos - cand > MAX_BACK:
+        index(pos)
+        best, back = _longest(data, heads, pos, end)
+        while best >= MIN_MATCH and pos + 1 < last:
+            index(pos + 1)
+            longer, farther = _longest(data, heads, pos + 1, end)
+            if longer <= best:
                 break
-            n = MIN_MATCH
-            while pos + n < end - 1 and data[cand + n] == data[pos + n]:
-                n += 1
-            if n > best:
-                best, back = n, pos - cand
-        step = best if best >= MIN_MATCH else 1
-        for p in range(pos, min(pos + step, last)):
-            heads.setdefault(data[p:p + MIN_MATCH], []).append(p)
+            pos, best, back = pos + 1, longer, farther
         if best >= MIN_MATCH:
             _sequence(out, data[start:pos], (back, best))
             pos += best

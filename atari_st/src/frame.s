@@ -249,12 +249,27 @@ input_poll:
 14: lea key_map(%pc), %a0                   | ... and from the keys
 15: moveq #0, %d2
     move.b (%a0)+, %d2                      | scan code, 0 ends the table
-    beq.s 16f
+    beq.s 18f
     move.b (%a0)+, %d1
     tst.b (%a2,%d2.w)
     beq.s 15b
     or.b %d1, %d0
     bra.s 15b
+18:
+    .ifdef BATCH
+    move.w auto_pad(%pc), %d1               | (tests) the buttons pressed by themselves: 4 frames down, 4 up; 1: A, 2: B and then A
+    beq.s 16f
+    move.l frame_count(%pc), %d3
+    btst #2, %d3
+    beq.s 16f
+    cmpi.w #2, %d1
+    bne.s 17f
+    btst #3, %d3
+    bne.s 17f
+    ori.b #NES_B, %d0
+    bra.s 16f
+17: ori.b #NES_A, %d0
+    .endif
 16: move.b IN_PAD(%a1), %d1
     move.b %d0, IN_PAD(%a1)
     not.b %d1

@@ -436,7 +436,7 @@ item_actions:                               | by entity from $48: 0 nothing, 1 a
     .text
 | ---------------------------------------------------------------------------------------------------------------------------- using items
 | GameLoop_CheckUseCurrentItem: Down held and B pressed just now, not jumping or falling: the item he holds (INV_ITEM, a number of the ROM's list) is used.
-| Keys and rings do nothing here (a key is used at its door); the Mattock is not done. Clobbers nothing.
+| Keys and rings do nothing here (a key is used at its door). Clobbers nothing.
 use_item:
     movem.l %d0-%d2/%a0-%a2, -(%sp)
     move.w hero_dead(%pc), %d0
@@ -455,6 +455,8 @@ use_item:
     beq.s 1f
     cmpi.b #15, %d0
     beq.s 2f
+    cmpi.b #9, %d0
+    beq.s 3f
     cmpi.b #16, %d0
     bne.w 9f
     lea text_data+TEXT_USED_POTION(%pc), %a0    | the Red Potion: full power, a step at a time
@@ -495,6 +497,8 @@ use_item:
     move.w %d1, (%a0)
     move.w %d1, %d0
     bsr.w hud_set_time
+    bra.w 9f
+3:  bsr.w use_mattock                       | the Mattock
 9:  movem.l (%sp)+, %d0-%d2/%a0-%a2
     rts
 
@@ -503,8 +507,265 @@ use_spent:
     bsr.w message_box
     lea inv+INV_ITEM(%pc), %a0
     move.b #0xFF, (%a0)
+    lea hud_dirty(%pc), %a0                 | the item box is empty now
+    st (%a0)
     moveq #0x1A, %d0
     bra.w sound_play_sfx
+
+| ---------------------------------------------------------------------------------------------------------------------------- the Mattock
+| Player_UseMattock (tools: spec in the ROM's PRG15 L3282). One block is looked at: the one in front of the top of the hero (his x + 16 facing right, x - 1 facing left,
+| 8 bits; nothing at $F0 and more) at the row of his y. It is the one the Mattock breaks when it is the first of the area's four ids in USE_MATTOCK_BLOCK_TRANSITIONS
+| (items.bin; only Trunk has a real entry: $63 becomes $85, $86, $42; in every other area the id is 0, air, and the ROM's quirk is kept: it matches there). Then:
+| the message, the Mattock is gone, sound $1A, and four times (4 frames, the block and the one below it are made the next id of the four). The game stands still
+| (the sprites stay where they were, the hero is drawn again over the new blocks). Nothing is kept: a screen is made from the package again each time it is entered,
+| so what was changed is put back when the screen is drawn next (mattock_restore, from draw_playfield).
+use_mattock:
+    movem.l %d0-%d7/%a0-%a2, -(%sp)
+    move.w hero_x(%pc), %d1
+    move.w hero_flip(%pc), %d0
+    beq.s 1f
+    addi.w #16, %d1
+    bra.s 2f
+1:  subq.w #1, %d1
+2:  andi.w #0xFF, %d1
+    cmpi.w #0xF0, %d1
+    bcc.w 9f
+    lsr.w #4, %d1                           | the column
+    move.w hero_y(%pc), %d2
+    andi.w #0xFF, %d2
+    lsr.w #4, %d2                           | the row
+    move.w %d2, %d3
+    lsl.w #4, %d3
+    add.w %d1, %d3                          | its place in the screen's block ids (rows 13 to 15 of the ROM's buffer are zeros)
+    moveq #0, %d5
+    cmpi.w #13, %d2
+    bcc.s 3f
+    move.w cur_screen(%pc), %d0
+    mulu.w #208, %d0
+    movea.l pkg_ptr+PKG_SCREENS(%pc), %a0
+    adda.l %d0, %a0
+    move.b (%a0,%d3.w), %d5
+3:  move.w cur_area(%pc), %d0
+    andi.w #7, %d0
+    lsl.w #2, %d0
+    lea items_data+ITEMS_MATTOCK(%pc), %a1
+    cmp.b (%a1,%d0.w), %d5
+    bne.w 9f
+    move.w %d3, -(%sp)
+    lea text_data+TEXT_USED_MATTOCK(%pc), %a0
+    bsr.w use_spent                         | "I've used Mattock.", nothing in hand, sound $1A
+    move.w (%sp)+, %d3
+    move.w cur_screen(%pc), %d0
+    mulu.w #208, %d0
+    movea.l pkg_ptr+PKG_SCREENS(%pc), %a2
+    adda.l %d0, %a2                         | this screen's block ids
+    bsr.w mattock_record
+    moveq #0, %d6                           | the step
+4:  bsr.w wait_vbl
+    bsr.w wait_vbl
+    move.w cur_area(%pc), %d0
+    andi.w #7, %d0
+    lsl.w #2, %d0
+    add.w %d6, %d0
+    lea items_data+ITEMS_MATTOCK(%pc), %a1
+    move.b (%a1,%d0.w), %d4                 | the id of this step
+    move.w %d3, %d1
+    andi.w #15, %d1
+    move.w %d3, %d2
+    lsr.w #4, %d2
+    cmpi.w #13, %d2
+    bcc.s 6f
+    move.b %d4, (%a2,%d3.w)                 | the block ...
+    bsr.w mattock_draw_block
+    cmpi.w #12, %d2
+    bcc.s 6f
+    move.b %d4, 16(%a2,%d3.w)               | ... and the one under it (the same id, as the ROM's Area_SetBlocks leaves it)
+    addq.w #1, %d2
+    bsr.w mattock_draw_block
+    subq.w #1, %d2
+6:  bsr.w mattock_flags_reset
+    moveq #1, %d7                           | both screens get the new blocks, the hero is drawn again over them
+7:  bsr.w mattock_show
+    bsr.w draw_hero
+    bsr.w present_swap
+    dbra %d7, 7b
+    addq.w #1, %d6
+    cmpi.w #4, %d6
+    bne.s 4b
+9:  movem.l (%sp)+, %d0-%d7/%a0-%a2
+    rts
+
+| The block (d1 = column, d2 = row) of the screen's block ids a2 drawn into the playfield pf_ptr. Keeps every register.
+mattock_draw_block:
+    movem.l %d0-%d7/%a0-%a1, -(%sp)
+    moveq #0, %d0
+    move.w %d2, %d3
+    lsl.w #4, %d3
+    add.w %d1, %d3
+    move.b (%a2,%d3.w), %d0                 | the id
+    lsl.w #2, %d0
+    move.w %d1, %d4
+    andi.w #1, %d4
+    move.w %d2, %d5
+    andi.w #1, %d5
+    add.w %d5, %d5
+    or.w %d5, %d4                           | the corner: column parity | row parity << 1
+    add.w %d4, %d0
+    add.w %d0, %d0
+    movea.l pkg_ptr+PKG_BLOCK_INDEX(%pc), %a0
+    moveq #0, %d6
+    move.w (%a0,%d0.w), %d6                 | its image
+    cmpi.w #0xFFFF, %d6
+    beq.s 9f
+    lsl.l #7, %d6
+    movea.l pkg_ptr+PKG_BLOCKS(%pc), %a0
+    adda.l %d6, %a0
+    move.w %d2, %d3
+    lsl.w #4, %d3
+    mulu.w #STRIDE, %d3
+    movea.l pf_ptr(%pc), %a1
+    adda.l %d3, %a1
+    lea LEFT_BYTES(%a1), %a1
+    move.w %d1, %d3
+    lsl.w #3, %d3
+    adda.w %d3, %a1
+    moveq #15, %d7
+1:  move.l (%a0)+, (%a1)+
+    move.l (%a0)+, (%a1)+
+    lea STRIDE-8(%a1), %a1
+    dbra %d7, 1b
+9:  movem.l (%sp)+, %d0-%d7/%a0-%a1
+    rts
+
+| The two blocks at column d1, row d2 are copied from the playfield into the screen a4 (restore_rect does it clipped to the window). Keeps every register.
+mattock_show:
+    movem.l %d0-%d3/%a0, -(%sp)
+    move.w %d1, %d0
+    lsl.w #4, %d0
+    addi.w #32, %d0                         | x0
+    move.w %d0, %d3
+    addi.w #16, %d3                         | x1
+    move.w %d2, %d1
+    lsl.w #4, %d1
+    addi.w #HUD_LINES, %d1
+    sub.w camera(%pc), %d1                  | y0
+    move.w %d1, %d2
+    addi.w #32, %d2                         | y1 (two blocks)
+    lea -8(%sp), %sp
+    move.w %d0, (%sp)
+    move.w %d3, 2(%sp)
+    move.w %d1, 4(%sp)
+    move.w %d2, 6(%sp)
+    movea.l %sp, %a0
+    bsr.w restore_rect
+    lea 8(%sp), %sp
+    movem.l (%sp)+, %d0-%d3/%a0
+    rts
+
+mattock_flags_reset:                        | the flags of the screens are made again from the block ids when they are asked for
+    movem.l %d0/%a1, -(%sp)
+    lea flag_screens(%pc), %a1
+    moveq #FLAG_SLOTS-1, %d0
+1:  move.w #-1, (%a1)+
+    dbra %d0, 1b
+    movem.l (%sp)+, %d0/%a1
+    rts
+
+| A change to remember: a2 = the screen's block ids, d3 = the place. The four last ones are kept (area, palette set, the ids at the place and the one under it).
+mattock_record:
+    movem.l %d0-%d2/%a0-%a1, -(%sp)
+    lea mt_recs(%pc), %a0
+    move.w mt_count(%pc), %d0
+    cmpi.w #4, %d0
+    bcs.s 2f
+    lea 12(%a0), %a1                        | full: the oldest is forgotten
+    moveq #8, %d1
+1:  move.l (%a1)+, (%a0)+
+    dbra %d1, 1b
+    lea mt_recs(%pc), %a0
+    moveq #3, %d0
+2:  move.w %d0, %d2
+    addq.w #1, %d2                          | the new count
+    mulu.w #12, %d0
+    adda.w %d0, %a0
+    move.l %a2, (%a0)
+    move.w cur_area(%pc), 4(%a0)
+    move.w cur_pal(%pc), 6(%a0)
+    move.w %d3, 8(%a0)
+    clr.w 10(%a0)
+    cmpi.w #208, %d3
+    bcc.s 3f
+    move.b (%a2,%d3.w), 10(%a0)
+    cmpi.w #192, %d3
+    bcc.s 3f
+    move.b 16(%a2,%d3.w), 11(%a0)
+3:  lea mt_count(%pc), %a1
+    move.w %d2, (%a1)
+    movem.l (%sp)+, %d0-%d2/%a0-%a1
+    rts
+
+| draw_playfield is about to draw the screen whose block ids are at a5: what the Mattock changed in it is put back (newest first). Records of another package are dropped.
+| Keeps every register.
+mattock_restore:
+    movem.l %d0-%d6/%a0-%a1, -(%sp)
+    move.w mt_count(%pc), %d5
+    beq.w 9f
+    move.w cur_area(%pc), %d1
+    move.w cur_pal(%pc), %d2
+    move.l %a5, %d3
+    moveq #0, %d4                           | something was put back
+    lea mt_recs(%pc), %a0
+    move.w %d5, %d0
+    mulu.w #12, %d0
+    adda.w %d0, %a0                         | behind the last
+    move.w %d5, %d0
+    subq.w #1, %d0
+1:  lea -12(%a0), %a0
+    move.l (%a0), %d6
+    beq.s 5f                                | (done already)
+    cmp.w 4(%a0), %d1
+    bne.s 4f                                | another package: stale
+    cmp.w 6(%a0), %d2
+    bne.s 4f
+    cmp.l %d6, %d3
+    bne.s 5f                                | another screen: it stays as it is
+    movea.l %d6, %a1
+    move.w 8(%a0), %d6
+    cmpi.w #208, %d6
+    bcc.s 3f
+    move.b 10(%a0), (%a1,%d6.w)
+    cmpi.w #192, %d6
+    bcc.s 3f
+    move.b 11(%a0), 16(%a1,%d6.w)
+3:  moveq #1, %d4
+4:  clr.l (%a0)
+5:  dbra %d0, 1b
+    lea mt_recs(%pc), %a0                   | the count shrinks past the done ones at the end
+    move.w %d5, %d0
+    mulu.w #12, %d0
+    adda.w %d0, %a0
+6:  tst.w %d5
+    beq.s 7f
+    tst.l -12(%a0)
+    bne.s 7f
+    lea -12(%a0), %a0
+    subq.w #1, %d5
+    bra.s 6b
+7:  lea mt_count(%pc), %a1
+    move.w %d5, (%a1)
+    tst.w %d4
+    beq.s 9f
+    bsr.w mattock_flags_reset
+9:  movem.l (%sp)+, %d0-%d6/%a0-%a1
+    rts
+
+| The HUD is drawn again at the next frame (hud_dirty is out of reach of the code at the end of the program: menu.s asks for it here). Keeps every register.
+hud_mark:
+    movem.l %a0, -(%sp)
+    lea hud_dirty(%pc), %a0
+    st (%a0)
+    movem.l (%sp)+, %a0
+    rts
 
 | One frame in which the game stands still: the VBL, and the HUD if it changed.
 frozen_wait:
@@ -588,6 +849,8 @@ door_unlock:
     bsr.w message_box
     lea inv+INV_ITEM(%pc), %a0
     move.b #0xFF, (%a0)
+    lea hud_dirty(%pc), %a0
+    st (%a0)
     bra.s 8f
 5:  lea ring_masks-6(%pc), %a0
     move.b (%a0,%d1.w), %d0
@@ -620,6 +883,10 @@ key_hints:
     .section .data
 item_ticks:
     .word 0
+mt_count:                                   | the Mattock's changes still in the package: how many, then 4 records of 12 bytes (the screen's ids, area, palette set, place, two old ids)
+    .word 0
+mt_recs:
+    .space 48
 inv:                                        | the inventory (a new game: nothing, no glove and no ointment in force, the equipment the build gave him)
     .space INV_GLOVE
     .byte 0xFF, 0xFF, 0, HERO_ARMOUR, HERO_SHIELD & 0xFF, ITEM & 0xFF, 0

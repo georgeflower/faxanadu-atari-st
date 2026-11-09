@@ -64,12 +64,19 @@ enemies_clear:
     moveq #(2*8*8/4)-1, %d0
 2:  clr.l (%a0)+
     dbra %d0, 2b
+    .ifdef NPCS
+    bsr.w npc_clear                         | the people of the screen go too (src/town.s)
+    .endif
     movem.l (%sp)+, %d0/%a0
     rts
 
 | The enemies of the screen cur_screen, from the package, in the slots from 7 down (Screen_LoadSpriteInfo, Sprites_PopulateNextAvailableSprite).
 enemies_load:
     movem.l %d0-%d4/%a0-%a3, -(%sp)
+    lea game_start(%pc), %a0
+    adda.l #en_nm_table, %a0
+    lea en_nm(%pc), %a1
+    move.l %a0, (%a1)                       | (where en_blit finds its table of inverted masks: hero_draw_part reads it too)
     bsr.s enemies_clear
     .ifdef NO_ENEMIES                       | (the picture tests of the screens and the doors want an empty field)
     bra.w 9f
@@ -120,7 +127,10 @@ enemies_load:
     lea -E_BYTES(%a3), %a3
     subq.w #1, %d4
     bpl.w 1b
-9:  movem.l (%sp)+, %d0-%d4/%a0-%a3
+9:  .ifdef NPCS
+    bsr.w npc_load                          | and the people of the screen come (src/town.s; in a building also their palette)
+    .endif
+    movem.l (%sp)+, %d0-%d4/%a0-%a3
     rts
 
 | Puts the background back where the enemies were drawn in screen a4 (two frames ago) and forgets the boxes.
@@ -2836,7 +2846,6 @@ beh_bounce:
 draw_enemies:
     movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
     lea enemies(%pc), %a3
-    movea.l pkg_ptr+PKG_ENEMY_IMAGES(%pc), %a6
     moveq #0, %d7
 1:  cmpi.b #0xFF, E_ENT(%a3)
     beq.w 8f
@@ -2851,81 +2860,55 @@ draw_enemies:
 14:
     move.w K_POSE(%a0), %d6
     move.w K_RULE(%a0), %d0
-    beq.w 2f
-    cmpi.w #1, %d0
-    beq.w 3f
-    cmpi.w #5, %d0
-    beq.w 9f
-    cmpi.w #6, %d0
-    beq.w 11f
-    cmpi.w #7, %d0
-    beq.w 12f
-    cmpi.w #8, %d0
-    beq.w 13f
-    cmpi.w #9, %d0
-    beq.w 16f
-    cmpi.w #10, %d0
-    beq.w 17f
-    cmpi.w #11, %d0
-    beq.w 18f
-    cmpi.w #12, %d0
-    beq.w 19f
-    cmpi.w #13, %d0
-    beq.w 21f
-    cmpi.w #14, %d0
-    beq.w 23f
-    cmpi.w #15, %d0
-    beq.w 20f
-    cmpi.w #16, %d0
-    beq.w 24f
-    cmpi.w #17, %d0
-    beq.w 25f
-    cmpi.w #18, %d0
-    beq.w 26f
-    cmpi.w #19, %d0
-    beq.w 27f
-    cmpi.w #20, %d0
-    beq.w 28f
-    cmpi.w #21, %d0
-    beq.w 29f
-    cmpi.w #22, %d0
-    beq.w 30f
-    cmpi.w #23, %d0
-    beq.w 31f
-    cmpi.w #24, %d0
-    beq.w 32f
-    cmpi.w #25, %d0
-    beq.w 33f
-    cmpi.w #26, %d0
-    beq.w 34f
-    cmpi.w #27, %d0
-    beq.w 35f
-    cmpi.w #28, %d0
-    beq.w 36f
-    cmpi.w #29, %d0
-    beq.w 37f
-    cmpi.w #30, %d0
-    beq.w 38f
-    cmpi.w #31, %d0
-    beq.w 39f
-    cmpi.w #32, %d0
-    beq.w 52f
-    cmpi.w #33, %d0
-    beq.w 54f
-    cmpi.w #34, %d0
-    beq.w 56f
-    cmpi.w #35, %d0
-    beq.w 57f
-    cmpi.w #36, %d0
-    beq.w 58f
-    cmpi.w #37, %d0
-    beq.w 60f
-    cmpi.w #38, %d0
-    beq.w 61f
-    cmpi.w #39, %d0
-    beq.w 62f
     cmpi.w #40, %d0
-    beq.w 63f
+    bhi.s rule_default
+    move.w %d0, %d1
+    add.w %d1, %d1
+    move.w rule_jt(%pc,%d1.w), %d1
+    jmp rule_jt(%pc,%d1.w)
+rule_jt:                                    | the picture rule (K_RULE) to the code below that works out the frame
+    .word 2f - rule_jt
+    .word 3f - rule_jt
+    .word rule_default - rule_jt
+    .word rule_default - rule_jt
+    .word rule_default - rule_jt
+    .word 9f - rule_jt
+    .word 11f - rule_jt
+    .word 12f - rule_jt
+    .word 13f - rule_jt
+    .word 16f - rule_jt
+    .word 17f - rule_jt
+    .word 18f - rule_jt
+    .word 19f - rule_jt
+    .word 21f - rule_jt
+    .word 23f - rule_jt
+    .word 20f - rule_jt
+    .word 24f - rule_jt
+    .word 25f - rule_jt
+    .word 26f - rule_jt
+    .word 27f - rule_jt
+    .word 28f - rule_jt
+    .word 29f - rule_jt
+    .word 30f - rule_jt
+    .word 31f - rule_jt
+    .word 32f - rule_jt
+    .word 33f - rule_jt
+    .word 34f - rule_jt
+    .word 35f - rule_jt
+    .word 36f - rule_jt
+    .word 37f - rule_jt
+    .word 38f - rule_jt
+    .word 39f - rule_jt
+    .word 52f - rule_jt
+    .word 54f - rule_jt
+    .word 56f - rule_jt
+    .word 57f - rule_jt
+    .word 58f - rule_jt
+    .word 60f - rule_jt
+    .word 61f - rule_jt
+    .word 62f - rule_jt
+    .word 63f - rule_jt
+rule_default:
     moveq #0, %d1
     cmpi.w #2, %d0
     bne.s 5f
@@ -3336,21 +3319,16 @@ grieve_frames:
     add.w %d5, %d0
     move.w %d0, (%a2)
     move.w %d7, -(%sp)
-5:  move.w (%a5)+, %d0
-    bmi.s 7f
-    moveq #0, %d4
-    move.b E_X(%a3), %d4
-    add.w %d4, %d0
-    moveq #0, %d1
-    move.b E_Y(%a3), %d1
-    sub.w camera(%pc), %d1
-    add.w (%a5)+, %d1
-    move.w (%a5)+, %d2
-    mulu.w #SPRITE_IMAGE_BYTES, %d2
-    lea (%a6,%d2.l), %a1
-    bsr.w blit_tile                         | (clobbers d0-d7, a0-a2)
-    bra.s 5b
-7:  move.w (%sp)+, %d7
+    move.l %a3, -(%sp)
+    move.l pkg_ptr+PKG_ENEMY_IMAGES(%pc), -(%sp)
+    move.w %d5, -(%sp)                      | the arguments of en_tiles (src/blit.s): the enemy's x and line, the images
+    move.w %d4, -(%sp)
+    movea.l %a5, %a6
+    movea.l en_nm(%pc), %a3
+    bsr.w en_tiles
+    addq.l #8, %sp
+    movea.l (%sp)+, %a3
+    move.w (%sp)+, %d7
     lea enemy_rects(%pc), %a0               | what of it reached into a side margin is cleared again
     move.w slot_index(%pc), %d0
     lsl.w #6, %d0

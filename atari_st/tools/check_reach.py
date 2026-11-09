@@ -32,7 +32,7 @@ def symbol_addresses(nm: str, elf: Path) -> dict[str, int]:
 LISTING = re.compile(r"^\s*\d+\s+([0-9a-fA-F]{4,8})\s+(?:[0-9A-F]{2,4}\s+)*\t\s*(\S.*)$")
 SECTION = re.compile(r"^\s*\d+\s+\.(?:section\s+(\S+?)[,\s]|section\s+(\S+)$|(text|data|bss)\b)")
 BRANCH = re.compile(r"^(bsr|bra|b[a-z]{2})(?:\.([bswl]))?\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:\|.*)?$")
-PC_OPERAND = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)(?:[+-]\d+)?\(%pc[,)]")
+PC_OPERAND = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)(?:[+-][A-Za-z0-9_*+-]+)?\(%pc[,)]")   # (`sym+7*CONST(%pc)`: the symbol is the first name, not the constant)
 
 
 def check_displacements(listing: Path, symbols: dict[str, int], text_base: str = "game_start") -> tuple[list[str], int, list[tuple[int, str]]]:
@@ -43,6 +43,10 @@ def check_displacements(listing: Path, symbols: dict[str, int], text_base: str =
     can be computed (`text_base` names the symbol at offset 0 of .text: `game_start` when .text begins with the boot jump, otherwise
     the first label after the data that the linker puts in front of it). Returns the failures, how many were checked, and the tightest few (slack, where)."""
     base = {"text": symbols[text_base]}
+    if "early_base" in symbols or "early_start" in symbols:   # src/town.s, src/splash68.s: code in front of the variables (link.ld)
+        base["text.early"] = symbols.get("early_base", symbols.get("early_start"))
+    if "late_base" in symbols:                                  # src/blit.s: code behind all the rest (link.ld)
+        base["text.late"] = symbols["late_base"]
     section = "text"
     failures: list[str] = []
     checked = 0
@@ -51,17 +55,17 @@ def check_displacements(listing: Path, symbols: dict[str, int], text_base: str =
         found = SECTION.match(line)
         if found:
             name = (found.group(1) or found.group(2) or found.group(3)).lstrip(".")
-            section = name if name in ("text", "data", "bss", "rodata", "text.late") else "other"
+            section = name if name in ("text", "data", "bss", "rodata", "text.late", "text.early") else "other"
             continue
         match = LISTING.match(line)
-        if not match or section != "text":
+        if not match or section not in base:
             continue
         offset, source = int(match.group(1), 16), match.group(2).strip()
         instruction = re.sub(r"^\w+:\s*", "", source)           # a label may share the line
         branch = BRANCH.match(instruction)
         if branch and branch.group(3) in symbols:
             limit = 127 if branch.group(2) in ("b", "s") else 32767
-            distance = symbols[branch.group(3)] - (base["text"] + offset + 2)
+            distance = symbols[branch.group(3)] - (base[section] + offset + 2)
             target = branch.group(3)
         else:
             pc = PC_OPERAND.search(instruction)
@@ -70,7 +74,7 @@ def check_displacements(listing: Path, symbols: dict[str, int], text_base: str =
             # the displacement word follows the opcode, or an immediate / register mask that comes first
             extra = 2 if re.match(r"^(btst|bset|bclr|bchg|movem)\S*\s+(#|%|\{)", instruction) or \
                 re.match(r"^(btst|bset|bclr|bchg)\S*\s+#", instruction) else 0
-            distance = symbols[pc.group(1)] - (base["text"] + offset + 2 + extra)
+            distance = symbols[pc.group(1)] - (base[section] + offset + 2 + extra)
             limit, target = 32767, pc.group(1)
         checked += 1
         room = limit - distance if distance >= 0 else limit + 1 + distance

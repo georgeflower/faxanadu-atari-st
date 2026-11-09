@@ -48,6 +48,27 @@ def placements(rom: fr.Rom, area: int, screen: int) -> list[tuple[int, int, int]
     return out
 
 
+def screen_event(rom: fr.Rom, area: int, screen: int) -> int:
+    """The screen's special event id (`Screen_LoadSpecialEventID`): after the sprite list's $FF the screen's extra bytes are scanned up to the next $FF, and if
+    that is followed by $80 the byte after is the id; 0 the pushable block on the way to Mascon, 1 a boss room (music, item limits), 2 the final boss. $FF: none."""
+    b11 = rom.prg(11)
+
+    def word(addr: int) -> int:
+        return b11[addr - 0x8000] | b11[addr - 0x8000 + 1] << 8
+
+    table = word(rom.label("AREA_SPRITE_ADDRESSES").addr + 2 * area)
+    if b11[table - 0x8000 + 1] == 0xFF:
+        return 0xFF
+    p = word(table + 2 * screen)
+    while b11[p - 0x8000] != 0xFF:
+        p += 2
+    p += 1
+    for i in range(256):
+        if b11[p - 0x8000 + i] == 0xFF:
+            return b11[p - 0x8000 + i + 2] if b11[p - 0x8000 + i + 1] == 0x80 else 0xFF
+    return 0xFF
+
+
 def entity(rom: fr.Rom, ent: int) -> dict:
     """The per-kind tables: hit box type, category, hit points, experience (`ENEMY_EXPERIENCE`), the drop (`SPRITE_ENTITY_DROP_VALUES_INDEX`), the
     script address and the tiles' count."""
@@ -129,13 +150,23 @@ def script_chunk(rom: fr.Rom, start: int, base: int) -> tuple[bytes, int, dict[i
     return bytes(out), new_at[start] - base, {old: new - base for old, new in new_at.items()}
 
 
+IMAGE_BYTES = 40
+
+
+def column_image(image: bytes) -> bytes:
+    """A sprite image (`st_convert.sprite_image`: a mask byte and four plane bytes a line) as the enemies are drawn: the 8 mask bytes, then for each line the
+    four plane bytes as one long (plane 0 first), so that a whole byte column of the four planes is one `movep.l`."""
+    return bytes(image[5 * line] for line in range(8)) + b"".join(image[5 * line + 1:5 * line + 5] for line in range(8))
+
+
 def package_parts(rom: fr.Rom, area: int, screens: list[int], palette_index: int, plan) -> dict[str, bytes]:
     """The enemy data of an area's package (`screens` are the ROM's screen numbers in package order, None for a building's):
     enemy_places: a word a screen (the offset of its list from the start of the part), then the lists, each place being the entity, x and y (words), ended by -1;
     enemy_kinds: a record of KIND_BYTES for each kind in the area (and the death effect, bread and coin): entity, hit box type, hit points, the script's offset in
       enemy_scripts, its first pose (frame f facing left is pose first + 2f, facing right + 1), the rule, experience, what it drops (kind << 8 | value), the weapon's
       extents x and y, the touch box left, top, width, height, the damage it does, its category (the ROM's: 0 enemy, 1 dropped, 5 item, 7 boss) and, in the word's high byte, its magic defence (`SPRITE_ENTITY_MAGIC_DEFENSE`) (words);
-    enemy_anim, enemy_images: the poses and the 8x8 images, as for the spells; enemy_scripts: the scripts, jumps as offsets within them."""
+    enemy_anim, enemy_images: the poses and the 8x8 images (as for the spells, but each image is the 8 mask bytes and then the 8 lines as a long of the four plane
+      bytes, `column_image`; a pose lists the image's byte offset, and leaves out a tile that is see-through all over); enemy_scripts: the scripts, jumps as offsets within them."""
     import st_convert as sc
 
     lists = []
@@ -174,14 +205,16 @@ def package_parts(rom: fr.Rom, area: int, screens: list[int], palette_index: int
                         key = (ent, sp.tile, sp.attr & 3, bool(sp.attr & 0x40), bool(sp.attr & 0x80))
                         if key not in index:
                             index[key] = len(images)
-                            images.append(sc.sprite_image(tiles.get(sp.tile, bytes(16)), key[3], palettes[key[2]], plan, key[4]))
+                            images.append(column_image(sc.sprite_image(tiles.get(sp.tile, bytes(16)), key[3], palettes[key[2]], plan, key[4])))
                         entries_.append((sp.x - sc.ANIM_BASE + sc.ST_LEFT, sp.y + 1 - sc.ANIM_BASE, index[key]))
                 x0, y0 = min(e[0] for e in entries_), min(e[1] for e in entries_)
                 box = (x0, max(e[0] for e in entries_) + 8, y0, max(e[1] for e in entries_) + 8)
                 record = b"".join(v.to_bytes(2, "big", signed=True) for v in box)
-                for e in entries_:
-                    record += b"".join(v.to_bytes(2, "big", signed=True) for v in e)
+                for x, y, number in entries_:
+                    if any(images[number][:8]):                     # (a tile with nothing in it is not drawn)
+                        record += x.to_bytes(2, "big", signed=True) + y.to_bytes(2, "big", signed=True) + (number * IMAGE_BYTES).to_bytes(2, "big")
                 records.append(record + b"\xff\xff")
+    assert len(images) * IMAGE_BYTES < 0x10000, "an image's offset is one word"
     offsets, at = [], 2 * len(records)
     for record in records:
         offsets.append(at)
