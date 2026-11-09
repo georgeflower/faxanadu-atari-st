@@ -214,8 +214,8 @@ class SplashTests(unittest.TestCase):
     def test_the_intro_equals_the_model_pass_for_pass_in_the_pictures_and_the_fade(self) -> None:
         """INTRO=1: captures at passes spread over the walk and at every fade step. The sound effect of a footstep is $15 14 times (the model's passes)."""
         states = self.intro_states()
-        # (pass p is on show at about VBL p+221: the start-up unpacks TOWN.DAT first, 9 VBLs; the fade steps come at passes 635, 643, 651 and 659, the last pass is on show for one VBL only)
-        caps = [309, 339, 429, 529, 649, 769, 826, 860, 868, 876]
+        # (pass p is on show at about VBL p+225: the start-up unpacks TOWN.DAT first, 9 VBLs, and the hero's data, 4; the fade steps come at passes 635, 643, 651 and 659, the last pass is on show for one VBL only)
+        caps = [313, 343, 433, 533, 653, 773, 830, 864, 872, 880]
         run = Run(["VIEWER_DEFS=--defsym INTRO=1"], [], caps, "shots_splash_intro")
         steps = set()
         for vbl, shot in zip(caps, run.shots):

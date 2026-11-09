@@ -21,7 +21,7 @@ def ft_message(rom, number):
 
     return ft.message(rom, number)
 TOS = Path(os.environ.get("TOS") or os.environ.get("TOS_PAL") or "")
-START_DELAY = 16           # the VBLs the program takes to make the hero's images before its frame counter starts (hero.s): the scenes' times are from the start of the game
+START_DELAY = 20           # the VBLs the program takes to unpack the hero's data and make his images before its frame counter starts (hero.s): the scenes' times are from the start of the game
 
 
 @unittest.skipUnless(ROM.is_file() and shutil.which("hatari") and shutil.which("m68k-linux-gnu-as") and shutil.which("ca65") and TOS.is_file(),
@@ -450,7 +450,11 @@ class ViewerTests(unittest.TestCase):
     def test_walking_off_the_left_edge_scrolls_to_the_next_screen_in_steps_of_16_pixels(self) -> None:
         self.scroll_test(False)
 
-    def scroll_test(self, to_the_right: bool) -> None:
+    def test_walking_off_the_right_edge_scrolls_in_other_equipment(self) -> None:
+        """The same with armour 2, shield 1 and the Giant Blade put on 30 frames before: the hero's data is unpacked when it changes (src/hero.s)."""
+        self.scroll_test(True, (2, 1, 2))
+
+    def scroll_test(self, to_the_right: bool, equipment: tuple[int, int, int] | None = None) -> None:
         """He stands at the right edge of Eolis screen 1 and the stick is pushed right (poked): the picture is captured at several moments
         of the scroll; each must be the two screens side by side moved by what the program says (shown_offset), the hero as the ROM
         places him (257 - offset), and at the end the new screen with the hero at its left edge."""
@@ -479,6 +483,11 @@ class ViewerTests(unittest.TestCase):
         for v in moments:
             (work / f"cap{v}.ini").write_text(f"savebin {work / f'ram{v}.bin'} 0 $80000\nm $ff8200-$ff8260\ncont\n", encoding="utf-8")
         script = f"b VBL > 599 :once :file {work / 'go.ini'}\nb VBL > 602 :once :file {work / 'let_go.ini'}\n"
+        armour, shield, weapon = equipment or (0, 255, 0)
+        if equipment:
+            inv, weapon_word = base + sym["inv"], base + sym["hero_weapon"]
+            (work / "wear.ini").write_text(f"memwrite ${inv + 34:x} 0x{armour:02x}\nmemwrite ${inv + 35:x} 0x{shield:02x}\nmemwrite ${weapon_word:x} 0x00 0x{weapon:02x}\ncont\n", encoding="utf-8")
+            script += f"b VBL > 569 :once :file {work / 'wear.ini'}\n"
         script += "".join(f"b VBL > {v} :once :file {work / f'cap{v}.ini'}\n" for v in moments)
         log = hs.run_hatari(hatari, TOS, prg, work, moments[-1] + 1, "0", script, None)
         bases = [(int(m.group(2), 16) << 16) | (int(m.group(4), 16) << 8)
@@ -502,10 +511,10 @@ class ViewerTests(unittest.TestCase):
                 self.fail(f"offset {offset}")
             if cur == 0:
                 step = offset // 16
-                hero = sc.Hero(261 - offset if to_the_right else offset - 20, 144, 0, 255, 0, step & 1, to_the_right)
+                hero = sc.Hero(261 - offset if to_the_right else offset - 20, 144, armour, shield, weapon, step & 1, to_the_right)
                 expected = sc.expected_scroll_screen(rom, 0, 1, target, offset, to_the_right, 40, hero=hero)
             else:
-                hero = sc.Hero(1 if to_the_right else 241, 144, 0, 255, 0, 0, to_the_right)
+                hero = sc.Hero(1 if to_the_right else 241, 144, armour, shield, weapon, 0, to_the_right)
                 expected = sc.expected_scroll_screen(rom, 0, target, target, 0, True, 40, hero=hero)
             bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
             if cur == 0 and offset == 16:
@@ -947,7 +956,7 @@ class ViewerTests(unittest.TestCase):
                     (2, 4, "240,144", 284), (2, 14, "240,144", 284), (2, 19, "240,144", 284), (5, 21, "16,144", 279), (5, 35, "16,144", 279), (5, 36, "16,144", 282),
                     (2, 1, "16,144", 284), (2, 3, "144,144", 284), (2, 25, "144,144", 284), (2, 29, "208,144", 340), (2, 32, "16,144", 290), (2, 37, "64,144", 284),
                     (2, 45, "208,144", 290),
-                    (2, 33, "144,144", 290), (2, 38, "16,144", 294), (2, 30, "144,144", 290), (2, 31, "144,144", 290), (2, 42, "144,144", 300), (5, 5, "240,144", 290),
+                    (2, 33, "144,144", 290), (2, 38, "16,144", 294), (2, 30, "144,144", 290), (2, 31, "144,144", 291), (2, 42, "144,144", 300), (5, 5, "240,144", 290),
                     (5, 32, "16,144", 290), (5, 34, "16,144", 290), (5, 3, "144,144", 290), (6, 13, "144,144", 290), (6, 10, "16,160", 293), (6, 11, "144,144", 290),
                     (7, 15, "208,144", 293), (7, 16, "16,144", 290), (2, 80, "16,160", 290), (2, 81, "16,160", 290), (2, 82, "16,160", 290),
                     (6, 30, "240,144", 290), (2, 59, "240,144", 305), (6, 23, "16,144", 293), (6, 25, "240,144", 293),

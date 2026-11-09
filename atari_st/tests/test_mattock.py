@@ -219,11 +219,11 @@ class MattockTests(unittest.TestCase):
         (NPC_EXTRA: $37, a man who stands, at x 56, y 160, over the two cells that change). As the enemy's: every VBL from the box's going to the end is a stage with his pixels."""
         defs = "VIEWER_DEFS=--defsym NPCS=1 --defsym NO_ENEMIES=1 --defsym NPC_EXTRA=0x37 --defsym NPC_EXTRA_X=56 --defsym NPC_EXTRA_Y=160"
         args = ["ALL=1", "AREA=1", "SCREEN=12", "HERO=40,160,0,255,255,0,1", "WORLD=1", "HUD=80,80,0,0,0", defs]
-        pokes = [(380, "inv", 36 << 8 | 9)] + self.use_pokes(599)
-        sprites, stages, _, _ = self.crumble(args, pokes, 596, 612, 650, "shots_mattock_person")
+        pokes = [(380, "inv", 36 << 8 | 9)] + self.use_pokes(611)         # (12 frames later than the other scenes: his pose changes now and then, and the picture before the item is used and the crumble have to fall in the same one)
+        sprites, stages, _, _ = self.crumble(args, pokes, 608, 624, 662, "shots_mattock_person")
         self.assertGreater(sum(1 for (x, y) in sprites if x < 96), 20, "his pixels over the cells that change")
         self.assertGreater(len(sprites), 60, "he is drawn")
-        self.assert_sequence(stages, 612)
+        self.assert_sequence(stages, 624)
 
     def test_a_spell_in_flight_waits_and_is_not_on_the_screen_while_the_wall_crumbles(self) -> None:
         """Up and fire cast Death, then Down and fire use the Mattock while the spell flies (the ROM does not look at the spell: checked with jsnes, `tools/refnes/mattockspell.mjs`; the hero

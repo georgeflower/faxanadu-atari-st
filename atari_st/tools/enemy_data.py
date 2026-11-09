@@ -186,7 +186,8 @@ def package_parts(rom: fr.Rom, area: int, screens: list[int], palette_index: int
       enemy_scripts, its first pose (frame f facing left is pose first + 2f, facing right + 1), the rule, experience, what it drops (kind << 8 | value), the weapon's
       extents x and y, the touch box left, top, width, height, the damage it does, its category (the ROM's: 0 enemy, 1 dropped, 5 item, 7 boss) and, in the word's high byte, its magic defence (`SPRITE_ENTITY_MAGIC_DEFENSE`) (words);
     enemy_anim, enemy_images: the poses and the 8x8 images (as for the spells, but each image is the 8 mask bytes and then the 8 lines as a long of the four plane
-      bytes, `column_image`; a pose lists the image's byte offset, and leaves out a tile that is see-through all over); enemy_scripts: the scripts, jumps as offsets within them."""
+      bytes, `column_image`; a pose is the box (x0, x1, y0, y1) as four bytes, then for each tile its x and line as bytes and the image's byte offset as a word, ended by
+      $FFFF, and leaves out a tile that is see-through all over); enemy_scripts: the scripts, jumps as offsets within them."""
     import st_convert as sc
 
     lists = []
@@ -232,10 +233,12 @@ def package_parts(rom: fr.Rom, area: int, screens: list[int], palette_index: int
                         entries_.append((sp.x - sc.ANIM_BASE + sc.ST_LEFT, sp.y + 1 - sc.ANIM_BASE, index[key]))
                 x0, y0 = min(e[0] for e in entries_), min(e[1] for e in entries_)
                 box = (x0, max(e[0] for e in entries_) + 8, y0, max(e[1] for e in entries_) + 8)
-                record = b"".join(v.to_bytes(2, "big", signed=True) for v in box)
+                assert all(0 <= v < 0x80 for v in box), box       # bytes, so that a negative x ends the list
+                record = bytes(box)
                 for x, y, number in entries_:
                     if number is not None:                          # (a tile with nothing in it is not drawn)
-                        record += x.to_bytes(2, "big", signed=True) + y.to_bytes(2, "big", signed=True) + (number * IMAGE_BYTES).to_bytes(2, "big")
+                        assert 0 <= x < 0x80 and 0 <= y < 0x80, (x, y)
+                        record += bytes((x, y)) + (number * IMAGE_BYTES).to_bytes(2, "big")
                 records.append(record + b"\xff\xff")
     assert len(images) * IMAGE_BYTES < 0x10000, "an image's offset is one word"
     offsets, at, placed, shared = [], 2 * len(records), {}, []

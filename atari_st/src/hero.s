@@ -1,9 +1,12 @@
-| The hero's pictures follow what he wears. The data for every armour, weapon and shield is in the program (hero_equip.bin, tools/st_convert.py
+| The hero's pictures follow what he wears. The data for every armour, weapon and shield is in the program, packed (hero_equip.bin, tools/st_convert.py
 | hero_equip_assets): the tiles as the NES has them, and the places of the pictures in every pose. The images the screen is drawn with (40 bytes a
 | tile, in the colours of the package in use) are made here when the worn equipment or the colours change: hero_sync checks it before the hero is
-| drawn, and keeps every register.
+| drawn, and keeps every register. For that it unpacks the data (17 KB) into the second playfield, which only a scroll uses (do_scroll and do_vscroll
+| call hero_sync first, and a scroll draws the whole playfield before it uses it), and makes what is needed from it. What stays is the images and the pose
+| tables of what he wears.
 |
-| hero_ram: the 64 tiles of the NES pattern table the hero uses (16 bytes), then the images, 256 of them: tile * 4 + palette * 2 + mirrored.
+| hero_ram: the 64 tiles of the NES pattern table the hero uses (16 bytes), then the images, 256 of them: tile * 4 + palette * 2 + mirrored, then the
+| room for the pose tables (HERO_POSE_BYTES: the biggest set of one equipment, tools/st_convert.py hero_pose_bytes).
 | The poses: hero_poses holds the pose tables of the body, the piece of the arm in an attack, the weapon and the shield (0: none).
 
     .text
@@ -15,10 +18,73 @@
     .equ HD_WEAPON, 31
     .equ HD_SHIELD, 39
     .equ HD_RANGE, 42                       | 8 for (weapon, shield), the ninth for no weapon
-    .equ HD_REVERSE, 51
+    .equ HD_END, 51                         | the end of the data: an entry's length is the next entry's offset minus its own
+    .equ HERO_POSES_AT, HERO_IMAGES_AT+256*SPRITE_IMAGE_BYTES
+
+| Draws the hero in the pose his state says, into screen a4, and notes the rectangle in this screen's slot.
+| (The code is in viewer.s: draw_hero; these are its parts.)
+
+| a5 = a pose table (0: none), d6 = the pose's offset in it; d0-d3 = the box so far (x0, x1, y0, y1, relative to the hero). Clobbers d4, a5.
+hero_box_part:
+    move.l %a5, %d4
+    beq.s 9f
+    move.w (%a5,%d6.w), %d4
+    adda.w %d4, %a5
+1:  move.w (%a5)+, %d4
+    bmi.s 9f
+    cmp.w %d0, %d4
+    bge.s 2f
+    move.w %d4, %d0
+2:  cmp.w %d1, %d4
+    ble.s 3f
+    move.w %d4, %d1
+3:  move.w (%a5)+, %d4
+    cmp.w %d2, %d4
+    bge.s 4f
+    move.w %d4, %d2
+4:  cmp.w %d3, %d4
+    ble.s 5f
+    move.w %d4, %d3
+5:  addq.l #2, %a5
+    bra.s 1b
+9:  rts
+
+| a5 = a pose table (0: none), a4 = the screen; the pose is hero_pose_off. Clobbers d0-d7, a0, a1, a3, a5, a6.
+hero_draw_part:
+    move.l %a5, %d0
+    beq.s 9f
+    move.w hero_pose_off(%pc), %d0
+    move.w (%a5,%d0.w), %d0
+    adda.w %d0, %a5
+    movea.l %a5, %a6
+    movea.l en_nm(%pc), %a3                 | (en_blit's table of inverted masks, from enemies_load)
+    moveq #-1, %d6                          | (en_blit's constants are not made yet)
+1:  move.w (%a6)+, %d0
+    bmi.s 9f
+    add.w hero_x(%pc), %d0
+    move.w hero_y(%pc), %d1                 | en_blit clobbers d0-d7: the position comes from memory each time
+    sub.w camera(%pc), %d1
+    add.w (%a6)+, %d1
+    move.w (%a6)+, %d2
+    move.w %d2, %d3                         | (the image number, for dissolve_image)
+    mulu.w #SPRITE_IMAGE_BYTES, %d2
+    movea.l hero_ram(%pc), %a1
+    lea HERO_IMAGES_AT(%a1), %a1
+    adda.l %d2, %a1
+    move.w hero_dead(%pc), %d2              | (d0 and d1 are en_blit's x and line)
+    beq.s 2f
+    bsr.w dissolve_image                    | (only while he dies)
+2:  move.w behind_v(%pc), %d2
+    beq.s 3f
+    bsr.w behind_tile                       | (only when a half of him is behind the background)
+    bra.s 1b
+3:  bsr.w en_blit
+    bra.s 1b
+9:  rts
 
 hero_sync:
-    movem.l %d0-%d6/%a0-%a3, -(%sp)
+    movem.l %d0-%d7/%a0-%a5, -(%sp)
+    moveq #0, %d7                           | what is to be made: 1 the images, 2 the pose tables
     lea inv(%pc), %a0
     moveq #0, %d0
     move.b INV_ARMOUR(%a0), %d0
@@ -53,11 +119,20 @@ hero_sync:
 3:  move.l %d2, (%a0)
     move.l (%a1), 4(%a0)
     move.l 4(%a1), 8(%a0)
-    bsr.w hero_build_images
+    moveq #1, %d7
 4:  lea hero_pose_key(%pc), %a0
     cmp.l (%a0), %d0
-    beq.w 9f
+    beq.s 41f
     move.l %d0, (%a0)
+    addq.w #2, %d7
+41: tst.w %d7
+    beq.w 9f
+    bsr.w hero_unpack                       | the data, in the second playfield (hero_blob)
+    btst #0, %d7
+    beq.s 42f
+    bsr.w hero_build_images
+42: btst #1, %d7
+    beq.w 9f
     movea.l hero_blob(%pc), %a2
     move.l %d0, %d1
     swap %d1
@@ -74,43 +149,73 @@ hero_sync:
     add.w %d1, %d1
     add.w %d3, %d1                          | the body: armour * 2 + 1 with a shield
     lsl.w #2, %d1
+    movea.l hero_ram(%pc), %a4
+    lea HERO_POSES_AT(%a4), %a4             | the room the tables are kept in
     lea hero_poses(%pc), %a0
     lea HD_BODY*4(%a2), %a3
-    move.l (%a3,%d1.w), %d5
-    add.l %a2, %d5
-    move.l %d5, (%a0)+
+    adda.w %d1, %a3
+    bsr.w hero_keep
+    move.l %d5, (%a0)+                      | the body
     lea HD_ARM*4(%a2), %a3
-    move.l (%a3,%d1.w), %d5
-    add.l %a2, %d5
-    move.l %d5, (%a0)+
-    lea HD_RANGE*4(%a2), %a3
-    moveq #0, %d5
-    moveq #0, %d6                           | no weapon: no pictures, the last place and reach (all zero)
+    adda.w %d1, %a3
+    bsr.w hero_keep
+    move.l %d5, (%a0)+                      | the arm piece
     cmpi.b #4, %d4
     bcc.s 6f
     add.w %d4, %d4
     add.w %d3, %d4                          | weapon * 2 + 1 with a shield
-    lea HD_WEAPON*4(%a2), %a1
     lsl.w #2, %d4
-    move.l (%a1,%d4.w), %d5
-    add.l %a2, %d5
-    move.l (%a3,%d4.w), %d6
-    add.l %a2, %d6
+    lea HD_WEAPON*4(%a2), %a3
+    adda.w %d4, %a3
+    bsr.w hero_keep
+    move.l %d5, (%a0)+                      | the weapon
+    lea HD_RANGE*4(%a2), %a1
+    adda.w %d4, %a1
     bra.s 7f
-6:  move.l 8*4(%a3), %d6
-    add.l %a2, %d6
-7:  move.l %d5, (%a0)+                      | the weapon
-    moveq #0, %d5
+6:  clr.l (%a0)+                            | no weapon: no pictures, the last place and reach (all zero)
+    lea HD_RANGE*4+8*4(%a2), %a1
+7:  moveq #0, %d5
     cmpi.b #3, %d2
     bcc.s 8f
-    lea HD_SHIELD*4(%a2), %a1
+    lea HD_SHIELD*4(%a2), %a3
     add.w %d2, %d2
     add.w %d2, %d2
-    move.l (%a1,%d2.w), %d5
-    add.l %a2, %d5
-8:  move.l %d5, (%a0)+                      | the shield
-    move.l %d6, (%a0)                       | hero_wtab: where the weapon is and how far it reaches
-9:  movem.l (%sp)+, %d0-%d6/%a0-%a3
+    adda.w %d2, %a3
+    bsr.w hero_keep
+8:  move.l %d5, (%a0)+                      | the shield (0: none)
+    movea.l %a1, %a3
+    bsr.w hero_keep
+    move.l %d5, (%a0)                       | hero_wtab: where the weapon is and how far it reaches
+9:  movem.l (%sp)+, %d0-%d7/%a0-%a5
+    rts
+
+| a3 = an entry of the directory of the unpacked data (a2; the next entry's offset follows, so the table is the bytes between them), a4 = the next free
+| place of the room for the kept tables. Out: d5 = where the copy is, a4 moved behind it. Clobbers d6, a5.
+hero_keep:
+    move.l (%a3), %d5
+    move.l 4(%a3), %d6
+    sub.l %d5, %d6                          | its length (even)
+    lea (%a2,%d5.l), %a5
+    move.l %a4, %d5
+    lsr.w #1, %d6
+    subq.w #1, %d6
+1:  move.w (%a5)+, (%a4)+
+    dbra %d6, 1b
+    rts
+
+| Unpacks the hero's data into the second playfield (next_ptr: only a scroll uses it, and the scrolls call hero_sync first, so that this is not done while
+| it holds the screen scrolled to) and notes where it is in hero_blob. Keeps every register.
+    .if HERO_BLOB_BYTES+256 > REGION_BYTES
+    .error "the hero's data no longer fits the second playfield (hero_unpack)"
+    .endif
+hero_unpack:
+    movem.l %a0-%a1, -(%sp)
+    movea.l hero_pack(%pc), %a0
+    movea.l next_ptr(%pc), %a1
+    bsr.w unpack
+    lea hero_blob(%pc), %a0
+    move.l %a1, (%a0)
+    movem.l (%sp)+, %a0-%a1
     rts
 
 | Makes the tiles of the equipment in hero_img_key (d2: armour, shield, weapon in the bytes of the top word and the next byte) and the images from them
@@ -120,7 +225,7 @@ hero_build_images:
     movea.l hero_ram(%pc), %a5
     movea.l hero_blob(%pc), %a2
     movea.l %a5, %a0
-    move.w #(HERO_RAM_BYTES/4)-1, %d0
+    move.w #(HERO_IMAGE_BYTES/4)-1, %d0
 1:  clr.l (%a0)+
     dbra %d0, 1b
     move.l %d2, %d0
@@ -152,9 +257,18 @@ hero_build_images:
     move.l HD_SHIELD_TILES*4(%a2,%d3.w), %d0
     lea (%a2,%d0.l), %a0
     bsr.w hero_put_tiles
-4:  lea HD_REVERSE*4(%a2), %a0
-    move.l (%a0), %d0
-    lea (%a2,%d0.l), %a6                    | the table that reverses the bits of a byte
+4:  lea HERO_BLOB_BYTES(%a2), %a6           | the table that reverses the bits of a byte, made behind the unpacked data
+    movea.l %a6, %a0
+    moveq #0, %d0
+41: move.b %d0, %d1
+    moveq #0, %d3
+    moveq #7, %d2
+42: lsr.b #1, %d1
+    addx.b %d3, %d3
+    dbra %d2, 42b
+    move.b %d3, (%a0)+
+    addq.b #1, %d0
+    bne.s 41b
     lea HERO_IMAGES_AT(%a5), %a3
     movea.l %a5, %a4
     moveq #63, %d6
@@ -249,72 +363,13 @@ hero_convert:
     movem.l (%sp)+, %d0-%d7/%a0/%a5
     rts
 
-| Draws the hero in the pose his state says, into screen a4, and notes the rectangle in this screen's slot.
-| (The code is in viewer.s: draw_hero; these are its parts.)
-
-| a5 = a pose table (0: none), d6 = the pose's offset in it; d0-d3 = the box so far (x0, x1, y0, y1, relative to the hero). Clobbers d4, a5.
-hero_box_part:
-    move.l %a5, %d4
-    beq.s 9f
-    move.w (%a5,%d6.w), %d4
-    adda.w %d4, %a5
-1:  move.w (%a5)+, %d4
-    bmi.s 9f
-    cmp.w %d0, %d4
-    bge.s 2f
-    move.w %d4, %d0
-2:  cmp.w %d1, %d4
-    ble.s 3f
-    move.w %d4, %d1
-3:  move.w (%a5)+, %d4
-    cmp.w %d2, %d4
-    bge.s 4f
-    move.w %d4, %d2
-4:  cmp.w %d3, %d4
-    ble.s 5f
-    move.w %d4, %d3
-5:  addq.l #2, %a5
-    bra.s 1b
-9:  rts
-
-| a5 = a pose table (0: none), a4 = the screen; the pose is hero_pose_off. Clobbers d0-d7, a0, a1, a3, a5, a6.
-hero_draw_part:
-    move.l %a5, %d0
-    beq.s 9f
-    move.w hero_pose_off(%pc), %d0
-    move.w (%a5,%d0.w), %d0
-    adda.w %d0, %a5
-    movea.l %a5, %a6
-    movea.l en_nm(%pc), %a3                 | (en_blit's table of inverted masks, from enemies_load)
-    moveq #-1, %d6                          | (en_blit's constants are not made yet)
-1:  move.w (%a6)+, %d0
-    bmi.s 9f
-    add.w hero_x(%pc), %d0
-    move.w hero_y(%pc), %d1                 | en_blit clobbers d0-d7: the position comes from memory each time
-    sub.w camera(%pc), %d1
-    add.w (%a6)+, %d1
-    move.w (%a6)+, %d2
-    move.w %d2, %d3                         | (the image number, for dissolve_image)
-    mulu.w #SPRITE_IMAGE_BYTES, %d2
-    movea.l hero_ram(%pc), %a1
-    lea HERO_IMAGES_AT(%a1), %a1
-    adda.l %d2, %a1
-    move.w hero_dead(%pc), %d2              | (d0 and d1 are en_blit's x and line)
-    beq.s 2f
-    bsr.w dissolve_image                    | (only while he dies)
-2:  move.w behind_v(%pc), %d2
-    beq.s 3f
-    bsr.w behind_tile                       | (only when a half of him is behind the background)
-    bra.s 1b
-3:  bsr.w en_blit
-    bra.s 1b
-9:  rts
-
     .section .data
 hero_ram:
     .long 0                                 | HERO_RAM_BYTES, behind the playfields (viewer.s: start)
 hero_blob:
-    .long 0                                 | hero_equip, found from the first byte of the program (start)
+    .long 0                                 | the hero's data unpacked (in the second playfield), set by hero_unpack
+hero_pack:
+    .long 0                                 | hero_equip, the packed data, found from the first byte of the program (start)
 hero_img_key:
     .long -1, 0, 0                          | what the images are made for: armour, shield, weapon; the 8 colour bytes
 hero_pose_key:

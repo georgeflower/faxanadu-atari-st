@@ -627,17 +627,16 @@ mattock_draw_block:
     adda.l %d6, %a0
     move.w %d2, %d3
     lsl.w #4, %d3
-    mulu.w #STRIDE, %d3
+    lsl.w #7, %d3                           | * PF_STRIDE
     movea.l pf_ptr(%pc), %a1
-    adda.l %d3, %a1
-    lea LEFT_BYTES(%a1), %a1
+    adda.w %d3, %a1
     move.w %d1, %d3
     lsl.w #3, %d3
     adda.w %d3, %a1
     moveq #15, %d7
 1:  move.l (%a0)+, (%a1)+
     move.l (%a0)+, (%a1)+
-    lea STRIDE-8(%a1), %a1
+    lea PF_STRIDE-8(%a1), %a1
     dbra %d7, 1b
 9:  movem.l (%sp)+, %d0-%d7/%a0-%a1
     rts

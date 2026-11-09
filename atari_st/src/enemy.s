@@ -3321,16 +3321,20 @@ grieve_frames:
     moveq #0, %d5
     move.b E_Y(%a3), %d5
     sub.w camera(%pc), %d5
-    move.w (%a5)+, %d0
+    moveq #0, %d0
+    move.b (%a5)+, %d0                      | the pose's box: four bytes
     add.w %d4, %d0
     move.w %d0, (%a2)+
-    move.w (%a5)+, %d0
+    moveq #0, %d0
+    move.b (%a5)+, %d0
     add.w %d4, %d0
     move.w %d0, (%a2)+
-    move.w (%a5)+, %d0
+    moveq #0, %d0
+    move.b (%a5)+, %d0
     add.w %d5, %d0
     move.w %d0, (%a2)+
-    move.w (%a5)+, %d0
+    moveq #0, %d0
+    move.b (%a5)+, %d0
     add.w %d5, %d0
     move.w %d0, (%a2)
     moveq #0, %d1
@@ -3517,21 +3521,41 @@ behind_tile:
     move.w camera(%pc), %d2
     bra.w bh_tile
 
-| en_tiles for a sprite that has a column behind the background: the same arguments, each tile through behind_tile.
+| en_tiles for a sprite that has a column behind the background: the same arguments, each tile through behind_tile. That looks at the pose's next tile in the
+| form the hero's poses have (words: x, line, image), so the tile and the next one are put into en_window in that form (x is -1 when there is no next one).
 en_tiles_behind:
     moveq #-1, %d6
-1:  move.w (%a6)+, %d0
+    move.l %a6, -(%sp)                      | (behind_tile keeps a6, which then points into en_window: the list's place is kept here)
+1:  moveq #0, %d0
+    move.b (%a6)+, %d0
     bmi.s 9f
-    add.w 4(%sp), %d0
-    move.w (%a6)+, %d1
-    add.w 6(%sp), %d1
+    moveq #0, %d1
+    move.b (%a6)+, %d1
     moveq #0, %d2
     move.w (%a6)+, %d2
-    movea.l 8(%sp), %a1
+    lea en_window(%pc), %a1
+    move.w %d0, (%a1)+                      | this tile's x and line
+    move.w %d1, (%a1)+
+    move.w %d2, (%a1)+
+    moveq #-1, %d3                          | (d4-d7 are en_blit's constants for the next tile: only d0-d3 are free)
+    tst.b (%a6)
+    bmi.s 2f
+    moveq #0, %d3
+    move.b 1(%a6), %d3                      | the next tile's line and x
+    move.w %d3, 2(%a1)
+    move.b (%a6), %d3
+2:  move.w %d3, (%a1)
+    move.l %a6, (%sp)
+    add.w 8(%sp), %d0
+    add.w 10(%sp), %d1
+    movea.l 12(%sp), %a1
     adda.l %d2, %a1
+    lea en_window+6(%pc), %a6
     bsr.w behind_tile
+    movea.l (%sp), %a6
     bra.s 1b
-9:  rts
+9:  addq.l #4, %sp
+    rts
 
     .section .rodata
 magic_hit_w:                                | CAST_MAGIC_HIT_WIDTHS and ...HEIGHTS, MAGIC_DAMAGE, CAST_MAGIC_HIT_BEHAVIORS (as E_VAL: the kind in bits 7-6, the updates in the low bits)
@@ -3617,3 +3641,5 @@ bh_part:
     .long 0                                 | the all-ones mask of PKG_BEHIND of the package (behind_load): the masks are at 32 * their numbers from it
 behind_tab:
     .space 15*18*2                          | the screen's block positions (a row and a column round them): the offset of the block's mask from the all-ones one, or 0 (behind_load)
+en_window:
+    .space 10                               | en_tiles_behind: a tile and the next one of a pose as behind_tile reads them (x, line, image, next x, next line: words)

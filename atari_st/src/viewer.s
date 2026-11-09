@@ -64,9 +64,11 @@
     .if TOWN_SPAN > SCREEN_BYTES
     .error "TOWN.DAT no longer fits TOS's screen memory (town_buf): see the memory map in AGENTS.md"
     .endif
-    .equ REGION_BYTES, 208*160              | a whole 208-line playfield (stride 160: the same layout as the screen)
+    .equ PF_STRIDE, 128                     | a playfield line: the 256 pixels of the picture, with no margins (a screen's line is STRIDE bytes, 32 black pixels on each side of it)
+    .equ REGION_BYTES, 208*PF_STRIDE        | a whole 208-line playfield
     .equ HERO_IMAGES_AT, 64*16              | hero.s: the hero's 64 tiles, then his 256 images
-    .equ HERO_RAM_BYTES, HERO_IMAGES_AT+256*SPRITE_IMAGE_BYTES
+    .equ HERO_IMAGE_BYTES, HERO_IMAGES_AT+256*SPRITE_IMAGE_BYTES
+    .equ HERO_RAM_BYTES, HERO_IMAGE_BYTES+HERO_POSE_BYTES | and the room for the pose tables of what he wears (the rest of the hero's data is unpacked into the second playfield while it is needed)
     .equ NPC_KEYS, NPC_LIST_BYTES           | town.s: a person's slot holds the table and lists of poses (NPC_LIST_BYTES), the keys of the images (a word each), the images (40 bytes each);
     .equ NPC_IMAGES, NPC_KEYS+2*NPC_IMAGE_SLOTS      | the numbers are the biggest of the 18 kinds (tools/iscripts.py equates, in iscript.inc)
     .equ NPC_SLOT_RAM, NPC_IMAGES+SPRITE_IMAGE_BYTES*NPC_IMAGE_SLOTS
@@ -188,7 +190,7 @@ start:
     addi.l #HERO_RAM_BYTES, %d0
     lea game_start(%pc), %a0
     adda.l #hero_equip, %a0
-    lea hero_blob(%pc), %a1
+    lea hero_pack(%pc), %a1
     move.l %a0, (%a1)
     lea pkg_buf(%pc), %a0
     move.l %d0, (%a0)                       | where a package from disk is loaded
@@ -512,9 +514,10 @@ copy_screen:
     rts
 
 | Puts back the background where a rectangle was drawn. a0 = the rectangle: x0, x1, y0, y1 as words (ST pixels, the end exclusive),
-| a4 = the screen. Whole 16-pixel groups are copied; what is outside the screen's window (the HUD, below the last line) is not.
+| a4 = the screen. Whole 16-pixel groups are copied from the playfield (which is the 256 pixels between the margins: group g of the screen is group g - 2 of
+| the playfield); the groups in the side margins are made black; what is outside the screen's window (the HUD, below the last line) is not touched.
 restore_rect:
-    movem.l %d0-%d5/%a0-%a1, -(%sp)
+    movem.l %d0-%d6/%a0-%a3, -(%sp)
     movem.w (%a0), %d0-%d3                  | x0, x1, y0, y1
     tst.w %d0
     bpl.s 1f
@@ -529,37 +532,91 @@ restore_rect:
     ble.s 4f
     move.w #SCREEN_LINES, %d3
 4:  cmp.w %d0, %d1
-    ble.s 9f
+    ble.w 9f
     sub.w %d2, %d3                          | lines
-    ble.s 9f
+    ble.w 9f
     subq.w #1, %d3
     subq.w #1, %d1
     lsr.w #4, %d1                           | last group
     lsr.w #4, %d0                           | first group
-    sub.w %d0, %d1                          | groups - 1
+    move.w camera(%pc), %d4                 | the screen's line y is the playfield's line y - 32 + camera
+    add.w %d2, %d4
+    subi.w #HUD_LINES, %d4
+    lsl.w #7, %d4                           | * PF_STRIDE (at most 208 lines: fits a word)
+    movea.l pf_ptr(%pc), %a0
+    adda.w %d4, %a0
+    mulu.w #STRIDE, %d2
+    lea (%a4,%d2.l), %a1
+    cmpi.w #2, %d0
+    blt.s 20f
+    cmpi.w #17, %d1
+    bgt.s 20f
+    sub.w %d0, %d1                          | only the picture: groups - 1
     move.w %d1, %d4
     addq.w #1, %d4
-    lsl.w #3, %d4
+    lsl.w #3, %d4                           | bytes in a line
     move.w #STRIDE, %d5
-    sub.w %d4, %d5                          | what to add to get to the next line
+    sub.w %d4, %d5                          | what to add to get to the next line, in the screen
+    move.w #PF_STRIDE, %d6
+    sub.w %d4, %d6                          | and in the playfield
     lsl.w #3, %d0
-    mulu.w #STRIDE, %d2
-    add.l %d0, %d2                          | offset of the first group of the first line
-    lea (%a4,%d2.l), %a1
-    movea.l pf_ptr(%pc), %a0
-    adda.l %d2, %a0
-    move.w camera(%pc), %d4                 | the screen's line y is the playfield's line y - 32 + camera
-    subi.w #HUD_LINES, %d4
-    muls.w #STRIDE, %d4
-    adda.l %d4, %a0
+    adda.w %d0, %a1
+    lea -2*8(%a0,%d0.w), %a0
 5:  move.w %d1, %d0
 6:  move.l (%a0)+, (%a1)+
     move.l (%a0)+, (%a1)+
     dbra %d0, 6b
-    adda.w %d5, %a0
+    adda.w %d6, %a0
     adda.w %d5, %a1
     dbra %d3, 5b
-9:  movem.l (%sp)+, %d0-%d5/%a0-%a1
+    bra.w 9f
+20: moveq #1, %d4                           | some of it is margin: d4 = the groups of the left margin (0 and 1) - 1,
+    cmp.w %d4, %d1
+    bge.s 21f
+    move.w %d1, %d4
+21: sub.w %d0, %d4
+    moveq #18, %d6                          | d6 = the groups of the right margin (18 and 19) - 1,
+    cmp.w %d6, %d0
+    ble.s 22f
+    move.w %d0, %d6
+22: neg.w %d6
+    add.w %d1, %d6
+    moveq #17, %d5                          | d5 = the groups of the picture (2 to 17) - 1 (each a negative when there are none)
+    cmp.w %d5, %d1
+    bge.s 23f
+    move.w %d1, %d5
+23: moveq #2, %d2
+    cmp.w %d2, %d0
+    ble.s 24f
+    move.w %d0, %d2
+24: sub.w %d2, %d5
+    subq.w #2, %d2
+    lsl.w #3, %d2
+    adda.w %d2, %a0                         | the first group of the picture the rectangle has
+    lsl.w #3, %d0
+    adda.w %d0, %a1                         | and the first group of the rectangle, in the screen
+    moveq #0, %d0
+25: movea.l %a1, %a2
+    movea.l %a0, %a3
+    move.w %d4, %d1
+    bmi.s 27f
+26: move.l %d0, (%a2)+
+    move.l %d0, (%a2)+
+    dbra %d1, 26b
+27: move.w %d5, %d1
+    bmi.s 29f
+28: move.l (%a3)+, (%a2)+
+    move.l (%a3)+, (%a2)+
+    dbra %d1, 28b
+29: move.w %d6, %d1
+    bmi.s 31f
+30: move.l %d0, (%a2)+
+    move.l %d0, (%a2)+
+    dbra %d1, 30b
+31: lea STRIDE(%a1), %a1
+    lea PF_STRIDE(%a0), %a0
+    dbra %d3, 25b
+9:  movem.l (%sp)+, %d0-%d6/%a0-%a3
     rts
 
 | The pad moves the hero (a demonstration, not the game's physics): two pixels a frame, the walk frame changes every six frames.
@@ -2315,7 +2372,7 @@ clear_box:                                  | the same for the box d0-d3 (x0, x1
     dbra %d3, 4b
 9:  rts
 
-| Draws a screen's whole playfield (208 lines, stride 160, x from byte 16) into a buffer. a5 = the block ids (16 to a row), a4 = the buffer.
+| Draws a screen's whole playfield (208 lines of PF_STRIDE bytes) into a buffer. a5 = the block ids (16 to a row), a4 = the buffer.
 | Clobbers d0-d7, a0-a3, a6.
 draw_playfield:
     bsr.w mattock_restore                   | what the Mattock broke in this screen is whole again (items.s)
@@ -2333,8 +2390,8 @@ draw_playfield:
     lsl.w #4, %d1
     lea (%a5,%d1.w), %a1                    | the block ids of this row
     move.w %d6, %d3
-    mulu.w #STRIDE, %d3
-    lea LEFT_BYTES(%a4,%d3.l), %a0          | where the line goes
+    lsl.w #7, %d3                           | * PF_STRIDE
+    lea (%a4,%d3.w), %a0                    | where the line goes
     moveq #0, %d4                           | block column
 5:  moveq #0, %d5
     move.b (%a1,%d4.w), %d5                 | block id
@@ -2486,6 +2543,7 @@ scroll_check:
 | the hero is drawn and the screen shown (one frame). a4 and slot_index come back as present_swap leaves them; everything else is kept.
 do_scroll:
     movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
+    bsr.w hero_sync                         | (a change of equipment or colours unpacks the hero's data into the second playfield: not while it holds the next screen)
     bsr.w spell_clear
     bsr.w enemies_clear
     lea scroll_dir(%pc), %a0
@@ -2549,6 +2607,7 @@ do_scroll:
 | copied from a line of them that moves 16 lines every 4 frames; the last step may be shorter.
 do_vscroll:
     movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
+    bsr.w hero_sync                         | (a change of equipment or colours unpacks the hero's data into the second playfield: not while it holds the next screen)
     bsr.w spell_clear
     bsr.w enemies_clear
     move.w %d1, %d6                         | 1 down, 0 up
@@ -2623,7 +2682,7 @@ do_vscroll:
     move.w %d0, %d1
 13: add.w %d1, %d4
 11: move.w %d4, %d0
-    mulu.w #STRIDE, %d0
+    mulu.w #PF_STRIDE, %d0
     add.l %a2, %d0
     lea view_src(%pc), %a0
     move.l %d0, (%a0)
@@ -2664,8 +2723,7 @@ copy_region:
 scroll_bg_step:
     movem.l %d0-%d2/%d7/%a0-%a3, -(%sp)
     move.w camera(%pc), %d2                 | the window's lines of the playfield: the others are not needed (the new playfield replaces it)
-    mulu.w #STRIDE, %d2
-    addi.l #LEFT_BYTES, %d2
+    mulu.w #PF_STRIDE, %d2
     movea.l pf_ptr(%pc), %a0
     adda.l %d2, %a0
     movea.l next_ptr(%pc), %a1
@@ -2684,8 +2742,8 @@ scroll_bg_step:
     lea (%a1,%d2.w), %a2
     move.l (%a2)+, (%a3)+
     move.l (%a2)+, (%a3)+
-    lea STRIDE(%a0), %a0
-    lea STRIDE(%a1), %a1
+    lea PF_STRIDE(%a0), %a0
+    lea PF_STRIDE(%a1), %a1
     dbra %d7, 1b
     bra.s 9f
 4:  moveq #16, %d2                          | to the left: group 16-m of the new screen comes in at the left
@@ -2699,8 +2757,8 @@ scroll_bg_step:
     lea (%a1,%d2.w), %a2
     move.l (%a2)+, (%a0)
     move.l (%a2)+, 4(%a0)
-    lea STRIDE(%a0), %a0
-    lea STRIDE(%a1), %a1
+    lea PF_STRIDE(%a0), %a0
+    lea PF_STRIDE(%a1), %a1
     dbra %d7, 5b
 9:  movem.l (%sp)+, %d0-%d2/%d7/%a0-%a3
     rts
@@ -2708,20 +2766,28 @@ scroll_bg_step:
 | d0 = 0: the top half of the window (84 lines), 1: the bottom half: copied from view_src (the window's first line in the playfield, or
 | in two playfields one after the other while scrolling up and down) to the screen a4.
 copy_window_half:
-    movem.l %d0/%a0-%a1, -(%sp)
+    movem.l %d0-%d1/%a0-%a1, -(%sp)
     movea.l view_src(%pc), %a0
     lea HUD_LINES*STRIDE(%a4), %a1
     tst.w %d0
     beq.s 1f
-    adda.l #(WINDOW_LINES/2)*STRIDE, %a0
+    adda.l #(WINDOW_LINES/2)*PF_STRIDE, %a0
     adda.l #(WINDOW_LINES/2)*STRIDE, %a1
-1:  move.w #((WINDOW_LINES/2)*STRIDE/16)-1, %d0
-2:  move.l (%a0)+, (%a1)+
+1:  moveq #0, %d0
+    move.w #(WINDOW_LINES/2)-1, %d1
+2:  move.l %d0, (%a1)+                      | the margins are black
+    move.l %d0, (%a1)+
+    move.l %d0, (%a1)+
+    move.l %d0, (%a1)+
+    .rept PF_STRIDE/4
     move.l (%a0)+, (%a1)+
-    move.l (%a0)+, (%a1)+
-    move.l (%a0)+, (%a1)+
-    dbra %d0, 2b
-    movem.l (%sp)+, %d0/%a0-%a1
+    .endr
+    move.l %d0, (%a1)+
+    move.l %d0, (%a1)+
+    move.l %d0, (%a1)+
+    move.l %d0, (%a1)+
+    dbra %d1, 2b
+    movem.l (%sp)+, %d0-%d1/%a0-%a1
     rts
 
 | d0 = the step (1-16): the hero where the picture has moved him to (he stays where he was in the world and the picture moves under
@@ -2775,12 +2841,12 @@ refresh_screens:
 1:  bsr.w draw_hero
     bra.w present_swap
 
-| view_src = the window's first line in the playfield: pf_ptr + camera * 160.
+| view_src = the window's first line in the playfield: pf_ptr + camera * PF_STRIDE.
 set_view:
     move.l %a0, -(%sp)
     move.l %d0, -(%sp)
     move.w camera(%pc), %d0
-    mulu.w #STRIDE, %d0
+    mulu.w #PF_STRIDE, %d0
     add.l pf_ptr(%pc), %d0
     lea view_src(%pc), %a0
     move.l %d0, (%a0)
@@ -3478,6 +3544,6 @@ sound_bin:
 sound_song:
     .space SND_SONG_MAX
 
-    .section .stack,"aw",@progbits          | the stack, 4 KB, behind the song buffer: both are zeros and not in the file (make_prg.py --bss-from). It must stay 4 KB: GEMDOS's file calls (a door loads a package)
-    .space 4096                             | run on this stack in supervisor mode and TOS 1.02 needs far more than the 638 bytes the game's own calls reach; at 2 KB a door crashed on the author's TOS
+    .section .stack,"aw",@progbits          | the stack, 6 KB, behind the song buffer: both are zeros and not in the file (make_prg.py --bss-from). It must not be small: GEMDOS's file calls (a door loads a package)
+    .space 6144                             | run on this stack in supervisor mode and TOS 1.02 needs far more than the 638 bytes the game's own calls reach; at 2 KB a door crashed on the author's TOS
 stack_end:

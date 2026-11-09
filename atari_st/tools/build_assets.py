@@ -202,7 +202,11 @@ def main() -> int:
     town_span = max(len(town), town_comp + lz.overrun(town_small) + 4)
     town_span += -town_span % 4
     splash.emit(args.out)                          # the title, the intro and the ending (TITLE.DAT, INTRO.DAT, OUTRO.DAT, splash.inc)
-    (args.out / "hero_equip.bin").write_bytes(sc.hero_equip_assets(rom))
+    hero_blob = sc.hero_equip_assets(rom)
+    hero_small = lz.pack(hero_blob)                # kept packed in the program; src/hero.s unpacks it when the equipment or the colours change
+    if len(hero_small) % 2:
+        hero_small += b"\0"
+    (args.out / "hero_equip.bin").write_bytes(hero_small)
     (args.out / "items.bin").write_bytes(itempics.item_file(rom))       # the item pictures of the menu and the HUD (src/menu.s)
     hero = sc.Hero(*[bool(v) if i == 6 else v for i, v in enumerate(int(t) for t in args.hero.split(","))])
 
@@ -279,6 +283,7 @@ def main() -> int:
         + "".join(f"    .equ PKG_{n.upper()}, {4 * len(PACKAGE_PARTS) + 2 * i}\n" for i, n in enumerate(HEADER_WORDS))
         + f"    .equ PKG_SIZE, {4 * len(PACKAGE_PARTS) + 2 * len(HEADER_WORDS)}\n"
         + "".join(text_equ) +
+        f"    .equ HERO_BLOB_BYTES, {len(hero_blob)}\n    .equ HERO_POSE_BYTES, {sc.hero_pose_bytes(hero_blob)}\n"
         f"    .equ HERO_ARMOUR, {hero.armor}\n    .equ HERO_SHIELD, {hero.shield}\n    .equ HERO_WEAPON, {hero.weapon}\n"
         f"    .equ HERO_X, {hero.x}\n    .equ HERO_Y, {hero.y}\n    .equ HERO_FLIP, {int(hero.left)}\n    .equ HERO_FRAME, {hero.frame % 3}\n", encoding="ascii")
     print(f"area {args.area} screens {ids}: {n_images} block images ({n_images * sc.BLOCK_BYTES} bytes); packages {', '.join(names)} "

@@ -331,8 +331,8 @@ def _pose_table(poses: list[list[tuple[int, int, int]]]) -> bytes:
     return b"".join(o.to_bytes(2, "big") for o in offsets) + b"".join(records)
 
 
-HERO_DIRECTORY = (8, 4, 3, 8, 8, 8, 3, 9, 1)       # entries: armour tile records, weapon tile records, shield tile records, body poses, arm poses, weapon poses,
-                                                   # shield poses, weapon places and reaches (the last for none), the table that reverses the bits of a byte
+HERO_DIRECTORY = (8, 4, 3, 8, 8, 8, 3, 9)         # entries: armour tile records, weapon tile records, shield tile records, body poses, arm poses, weapon poses,
+                                                   # shield poses, weapon places and reaches (the last for none); then one more offset: the end of the blob
 
 
 def hero_equip_assets(rom: fr.Rom) -> bytes:
@@ -340,7 +340,7 @@ def hero_equip_assets(rom: fr.Rom) -> bytes:
     the package in use, when the equipment or the colours change). The blob is a directory of long offsets from its start (HERO_DIRECTORY gives the
     order: the tile records of the 8 body combinations (armour * 2 + 1 with a shield), the 4 weapons and the 3 shields; the pose tables of the body
     and of its arm piece for the 8 combinations, of the weapon for (weapon * 2 + 1 with a shield), of the 3 shields; the weapon's place and reach for
-    the 8 (weapon, shield) and for none; a table that reverses the bits of a byte), then the things they point at. A tile record is the first tile
+    the 8 (weapon, shield) and for none; the end of the blob, so that every entry's length is the next offset minus its own), then the things they point at. A tile record is the first tile
     number and the count (words) and the 16 bytes of each tile; a pose table is made by `_pose_table` for the sixteen poses (the ROM's body frame
     0-7 + 8 * the flip bit), the images numbered tile * 4 + palette * 2 + mirrored."""
     blobs: list[bytes] = []
@@ -384,14 +384,35 @@ def hero_equip_assets(rom: fr.Rom) -> bytes:
         for with_shield in (0, 1):
             blobs.append(hero_weapon_assets(rom, Hero(0, 0, 0, shield_of(with_shield), weapon)))
     blobs.append(bytes(128))
-    blobs.append(bytes(int(f"{b:08b}"[::-1], 2) for b in range(256)))
     assert len(blobs) == sum(HERO_DIRECTORY)
-    head = 4 * len(blobs)
+    head = 4 * (len(blobs) + 1)
     offsets, at = [], head
     for blob in blobs:
         offsets.append(at)
         at += len(blob)
+    offsets.append(at)
     return b"".join(o.to_bytes(4, "big") for o in offsets) + b"".join(blobs)
+
+
+def hero_pose_bytes(blob: bytes) -> int:
+    """The room the program keeps the pose tables of what the hero wears in (src/hero.s: the body, the arm piece, the weapon and the shield tables
+    of one equipment, and the weapon's places), the biggest of any: the rest of the blob is only unpacked while the equipment or the colours change."""
+    first = {name: sum(HERO_DIRECTORY[:i]) for i, name in enumerate(("armour", "weapon_tiles", "shield_tiles", "body", "arm", "weapon", "shield", "place"))}
+    offsets = [int.from_bytes(blob[4 * i:4 * i + 4], "big") for i in range(sum(HERO_DIRECTORY) + 1)]
+
+    def size(kind: str, n: int) -> int:
+        return offsets[first[kind] + n + 1] - offsets[first[kind] + n]
+
+    biggest = 0
+    for lookup in range(8):                           # armour * 2 + 1 with a shield
+        for weapon in range(5):                       # 4 weapons, 4 for none (the weapon's own tables are 0 then)
+            for shield in (range(3) if lookup & 1 else (3,)):     # 3 shields, 3 for none (the lookup says whether he has one)
+                total = size("body", lookup) + size("arm", lookup)
+                total += size("weapon", weapon * 2 + (lookup & 1)) if weapon < 4 else 0
+                total += size("shield", shield) if shield < 3 else 0
+                total += size("place", weapon * 2 + (lookup & 1)) if weapon < 4 else size("place", 8)
+                biggest = max(biggest, total)
+    return biggest + -biggest % 4
 
 
 MAGIC_FIRST_APPEARANCE, MAGIC_APPEARANCES = 0x95, 16      # the spells' pictures: Deluge 4, Thunder 2, Fire 2, Death 4, Tilte 4 (tools/magic_model.FIRST_APPEARANCE)

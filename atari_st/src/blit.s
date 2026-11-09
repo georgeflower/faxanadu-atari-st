@@ -3,14 +3,16 @@
 
     .section .text.late,"ax"
 late_base:                                  | (tools/check_reach.py checks this section's branches from here)
-| The tiles of the pose a6 points at (x, line and image offset, ended by -1) into screen a4; a3 = the table of en_blit. On the stack (above the return
-| address): the x the pose's offsets are from (a word), the line (a word), the address the images' offsets are from (a long). Clobbers everything but a4.
+| The tiles of the pose a6 points at (x and line as bytes, the image offset as a word, ended by a byte of -1) into screen a4; a3 = the table of en_blit. On the stack
+| (above the return address): the x the pose's offsets are from (a word), the line (a word), the address the images' offsets are from (a long). Clobbers everything but a4.
 en_tiles:
     moveq #-1, %d6                          | (the constants d4-d7 that en_blit keeps from tile to tile are not made yet)
-1:  move.w (%a6)+, %d0
+1:  moveq #0, %d0
+    move.b (%a6)+, %d0
     bmi.s 9f
     add.w 4(%sp), %d0
-    move.w (%a6)+, %d1
+    moveq #0, %d1
+    move.b (%a6)+, %d1
     add.w 6(%sp), %d1
     moveq #0, %d2
     move.w (%a6)+, %d2

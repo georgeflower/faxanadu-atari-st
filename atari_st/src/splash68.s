@@ -120,8 +120,7 @@ splash_start:
 far_save_title:
     FAR_JMP save_title
 
-| Back to the game: the screens are cleared (the HUD only draws what it has under its own rows), the second playfield too (the scroll counts on its
-| margins being black), the HUD is drawn again, both screens get the window and the hero, the package's palette comes back.
+| Back to the game: the screens are cleared (the HUD only draws what it has under its own rows), the HUD is drawn again, both screens get the window and the hero, the package's palette comes back.
 sp_leave:
     movem.l %d0-%d2/%a0-%a1/%a6, -(%sp)
     bsr.w sp_black_palette
@@ -129,10 +128,6 @@ sp_leave:
     bsr.w sp_clear
     movea.l buf_b(%pc), %a6
     bsr.w sp_clear
-    movea.l next_ptr(%pc), %a0
-    move.w #(REGION_BYTES/4)-1, %d0
-1:  clr.l (%a0)+
-    dbra %d0, 1b
     lea hud_shown(%pc), %a0
     moveq #(3*128/4)-1, %d2
 2:  move.l #-1, (%a0)+

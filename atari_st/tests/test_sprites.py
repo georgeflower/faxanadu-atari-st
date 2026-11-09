@@ -57,6 +57,39 @@ class HeroTests(unittest.TestCase):
                 self.assertEqual(bad[:5], [])
                 self.assertGreater(len(layer), 100)
 
+    def test_the_hero_data_is_packed_in_the_program_and_the_pose_room_holds_what_any_equipment_keeps(self) -> None:
+        """src/hero.s unpacks hero_equip (tools/lz.py) into the second playfield when what he wears changes and keeps the pose tables of that equipment in
+        HERO_POSE_BYTES: every table is a whole number of words, the directory's last offset is the length, and no equipment needs more than the room."""
+        import lz
+        import st_convert as sc
+
+        blob = sc.hero_equip_assets(self.rom)
+        self.assertEqual(lz.unpack(lz.pack(blob)), blob)
+        count = sum(sc.HERO_DIRECTORY)
+        offsets = [int.from_bytes(blob[4 * i:4 * i + 4], "big") for i in range(count + 1)]
+        self.assertEqual(offsets[0], 4 * (count + 1))
+        self.assertEqual(offsets[-1], len(blob))
+        lengths = [b - a for a, b in zip(offsets, offsets[1:])]
+        self.assertTrue(all(n > 0 and n % 2 == 0 for n in lengths), lengths)
+        body, arm, weapon, shield, place = 15, 23, 31, 39, 42       # hero.s HD_BODY, HD_ARM, HD_WEAPON, HD_SHIELD, HD_RANGE
+        room = sc.hero_pose_bytes(blob)
+        self.assertEqual(room % 4, 0)
+        most = 0
+        for armour in range(4):
+            for shield_no in (0, 1, 2, 255):
+                for weapon_no in (0, 1, 2, 3, 255):
+                    with_shield = 1 if shield_no < 3 else 0
+                    lookup = armour * 2 + with_shield
+                    need = lengths[body + lookup] + lengths[arm + lookup]
+                    if weapon_no < 4:
+                        need += lengths[weapon + weapon_no * 2 + with_shield] + lengths[place + weapon_no * 2 + with_shield]
+                    else:
+                        need += lengths[place + 8]
+                    if shield_no < 3:
+                        need += lengths[shield + shield_no]
+                    most = max(most, need)
+        self.assertEqual(most + -most % 4, room)
+
     def test_the_hero_inside_a_building_has_the_same_colours_as_outside(self) -> None:
         """A building loads the inside sprite palettes ($1D0 of bank 11, outside $1C0): they differ in palettes 2 and 3 only (the people's and the enemies'), and the hero and his spells
         draw with palettes 0 and 1, so the converter's outside palettes colour him right inside too. jsnes: the PPU's palettes outside and inside are the ROM's tables, the hero in the
