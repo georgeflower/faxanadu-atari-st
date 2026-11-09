@@ -274,6 +274,36 @@ class IScriptTests(unittest.TestCase):
         self.assertTrue(all(r[2] in range(0x34, 0x46) or r[2] == 0x4F for r in places))
 
     # --------------------------------------------------------------------------------------------------------------------------- files
+    def test_the_walk_file_has_a_record_for_each_kind_and_the_scripts_as_the_rom_has_them(self) -> None:
+        """npcwalk.bin (the people's behaviour, in the program): 18 records (hit box type, 0, the script's offset in the blob) and the blob, the ROM's scripts of the kinds as
+        `enemy_data.script_chunk` cuts them; the only address op 6 uses is the sprite's x ($BA), which is all the program's `npc_behave` does with it."""
+        import enemy_data as ed
+
+        isc = self.isc
+        data = isc.walk_file(self.rom)
+        kinds = range(isc.FIRST_NPC, isc.LAST_NPC + 1)
+        self.assertEqual(len(kinds), 18)
+        table, blob = data[:4 * len(kinds)], data[4 * len(kinds):]
+        self.assertEqual(len(data) % 2, 0)
+        expected, offsets = bytearray(), []
+        for ent in kinds:
+            chunk, entry, _ = ed.script_chunk(self.rom, self.rom.word("SPRITE_BSCRIPTS", ent), len(expected))
+            offsets.append(len(expected) + entry)
+            expected += chunk
+        self.assertEqual(blob[:len(expected)], expected)
+        self.assertLessEqual(len(blob) - len(expected), 1, "at most the byte that makes it even")
+        for i, ent in enumerate(kinds):
+            record = table[4 * i:4 * i + 4]
+            self.assertEqual((record[0], record[1], int.from_bytes(record[2:], "big")), (ed.entity(self.rom, ent)["hitbox"], 0, offsets[i]), f"entity ${ent:02X}")
+        sixes = 0
+        for ent in kinds:
+            ops, _ = ed.script_extent(self.rom, self.rom.word("SPRITE_BSCRIPTS", ent))
+            for at, length in ops:
+                if self.rom.prg(14)[at - 0x8000] == 6:
+                    sixes += 1
+                    self.assertEqual(self.rom.prg(14)[at - 0x8000 + 1:at - 0x8000 + 3], bytes([0xBA, 0]), f"entity ${ent:02X}: op 6 adds to the sprite's x")
+        self.assertEqual(sixes, 4, "the priest, the King (two) and the doctor")
+
     def test_the_files_round_trip_and_the_headers_point_at_their_parts(self) -> None:
         isc = self.isc
         data = self.files["iscript.bin"]

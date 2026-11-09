@@ -42,6 +42,8 @@
     .equ END_FREEZE, 1                      | flow.s end_state: the final boss is dead (120 frozen frames), the hero walks to the King, the script's FINISH_GAME was run
     .equ END_WALK, 2
     .equ END_FINISH, 3
+    .equ END_WALK_FRAMES, 600               | the walk to the King (about 150 frames in the ROM) times out after these; then 120 more for his message to end it
+    .equ END_WALK_GRACE, 120
     .ifndef ITEM
     .equ ITEM, 0xFF                         | the item he holds at the start (a number of the ROM's item list: 7 is the J key; $FF none)
     .endif
@@ -297,8 +299,10 @@ start:
     .ifdef FLOW
     bsr.w flow_tick                         | the ending's walk, boss rooms, the final boss (src/flow.s)
     .endif
+    .ifndef NEWGAME                         | the test keys (F keys, digits, Backspace: songs and sounds; P: the mantra; H, G: hurt; M: the next spell) are not in the disk build
     bsr.w sound_keys
     bsr.w mantra_key                        | P: shows the mantra
+    .endif
     .ifdef SCRIPT
     bsr.w script_test                       | (tests) runs the script SCRIPT once
     .endif
@@ -306,13 +310,13 @@ start:
     bsr.w hero_step
     .ifndef NO_PHYSICS
     bsr.w use_item                          | Down and B: the item he holds is used
-    .ifdef NPCS
-    bsr.w npc_check                         | Up in front of a person, or a touch trigger: its script (src/town.s)
-    .endif
     .endif
     bsr.w scroll_check                      | at the edge of the screen: scrolls to the next one (and comes back when it is done)
     .ifndef NO_PHYSICS
     bsr.w door_check                        | up in front of a door: the screen on the other side
+    .ifdef NPCS
+    bsr.w npc_check                         | Up in front of a person, or a touch trigger: its script (src/town.s); after the door: a person who walks by does not keep him out
+    .endif
     .endif
     bsr.w camera_follow                     | the window of the playfield follows him up and down
     lea rect_slots(%pc), %a0
@@ -554,7 +558,9 @@ hero_step:
     .ifndef NO_PHYSICS
     move.w hero_dead(%pc), %d1
     bne.w 70f
+    .ifndef NEWGAME
     bsr.w hurt_keys
+    .endif
     .endif
     moveq #0, %d2                           | 1 when he moves
     | The ROM's ladders, jump, fall and landing. (The picture tests, NO_PHYSICS: up or down held moves him 2 pixels, nothing else.)
@@ -758,6 +764,7 @@ hero_iframes:
 2:  move.w #0xC0, 12(%a1)
     rts
 
+    .ifndef NEWGAME                         | a test key: not in the disk build
 | Debug keys for the damage, until there are enemies: H = something hits him from the right (he turns to it and is knocked back to the left), G from
 | the left. Player_HandleTouchEnemy: nothing happens during the 60 frames of invincibility; else he loses DAMAGE power and the HUD is told.
 | a1 = hero_x. Clobbers nothing.
@@ -794,6 +801,7 @@ hurt_keys:
 3:  bsr.w death_start
 9:  movem.l (%sp)+, %d0-%d1/%a0
     rts
+    .endif
 
 | Player_ReduceHP found no power left: Player_HandleDeath starts. Every flag but the facing, the status and the invincibility are cleared, the music
 | stops. a1 = hero_x. Clobbers nothing.
@@ -1070,6 +1078,7 @@ magic_update:
     bne.w 9f
     lea spell_state(%pc), %a3
     addq.w #1, 16(%a3)                      | InterruptCounter
+    .ifndef NEWGAME                         | (a test key: not in the disk build)
     moveq #0, %d1                           | the M key: a new press chooses the next spell (none after the last) and fills the magic
     lea input_state+IN_KEYS+0x32(%pc), %a0
     tst.b (%a0)
@@ -1093,6 +1102,7 @@ magic_update:
     move.b #80, 1(%a0)
     lea hud_dirty(%pc), %a0
     st (%a0)
+    .endif
 2:  tst.w (%a3)
     bpl.w 20f                               | one on the screen: it goes on
     btst #3, 19(%a1)                        | Player_IsClimbing: can climb, not falling off beside the ladder, climbing
@@ -1161,12 +1171,16 @@ magic_step:
     lea spell_hit(%pc), %a0                 | after a hit Thunder and Fire fly on for a time (24 and 255 updates) and hit nothing more
     move.w (%a0), %d0
     beq.s 0f
+    cmpi.w #0x7FFF, %d0                     | Tilte hit an enemy last time (en_magic): CastMagic_HitHandler_Tilte made it type 11 with the counter 0, and now it is
+    beq.w 45f                               | updated as that
     subq.w #1, %d0
     move.w %d0, (%a0)
     bne.s 0f
     move.w #-1, (%a3)
     rts
 0:  move.w (%a3), %d5
+    cmpi.w #11, %d5
+    beq.w 46f
     cmpi.w #4, %d5
     beq.w 40f
     lea magic_speed(%pc), %a0               | Deluge 3, Thunder 2, Fire 4, Death 2 pixels a frame
@@ -1231,6 +1245,15 @@ magic_step:
 44: addq.w #1, 14(%a3)                      | the missile (odd phase) begins, flying up
     andi.w #0x7F, 2(%a3)
     rts
+45: clr.w (%a0)                             | the explosion: type 11, its counter 0 at the hit and 1 after this update
+    move.w #11, (%a3)
+    move.w #1, 12(%a3)
+    rts
+46: addq.w #1, 12(%a3)                      | (CastMagic_UpdateTilteAfterFirstHit) it does not move; drawn for the counter 1 to 15, gone at 16
+    cmpi.w #16, 12(%a3)
+    bcs.s 47f
+    move.w #-1, (%a3)
+47: rts
 
 | CastMagic_UpdateXPosition: d1 = pixels along its way (to the right when flag $40 is set). Out: d0 = 1 when it is off the screen (at the edge:
 | $F0, Fire $E0 to the right), d2 = what the wall check found (non-zero: a wall). a3 = spell_state. Clobbers d1, d3-d4, a2.
@@ -1347,6 +1370,8 @@ draw_spell:
     lea spell_state(%pc), %a2
     move.w (%a2), %d5
     bmi.w 9f
+    cmpi.w #11, %d5
+    beq.w draw_burst                        | Tilte after its hit: the explosion
     move.w 16(%a2), %d3                     | the interrupt counter
     moveq #0, %d6                           | the picture, counted from the first of the spells' (0x95)
     cmpi.w #1, %d5
@@ -1431,7 +1456,189 @@ draw_spell:
     lea (%a3,%d2.l), %a1
     bsr.w blit_tile
     bra.s 8b
+draw_spell_end:
 9:  movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5
+    rts
+
+| The Tilte explosion (CastMagic_FinishHandler_TilteAfterFirstHit), entered from draw_spell with a2 = spell_state and the registers saved: four pieces (poses 32 to
+| 35 of magic_anim: top left, bottom left, top right, bottom right), the counter (1 to 15) times 2 pixels from the spell's place in both directions. A piece's
+| place is a byte, as the ROM adds it: one that passes the edge comes in at the other side. They are drawn bottom right first and the box noted for the erase
+| holds all four.
+draw_burst:
+    move.w 12(%a2), %d6
+    add.w %d6, %d6                          | 2 * counter
+    move.w 4(%a2), %d0
+    move.w %d0, %d1
+    sub.w %d6, %d0
+    add.w %d6, %d1
+    andi.w #0xFF, %d0                       | the left pieces' x, the right pieces'
+    andi.w #0xFF, %d1
+    move.w 8(%a2), %d2
+    move.w %d2, %d3
+    sub.w %d6, %d2
+    add.w %d6, %d3
+    andi.w #0xFF, %d2                       | the top pieces' y, the bottom pieces'
+    andi.w #0xFF, %d3
+    movem.w %d0-%d3, -(%sp)                 | (sp): the four, then the piece counter, then each piece's place
+    movea.l pkg_ptr+PKG_MAGIC_ANIM(%pc), %a5
+    move.w 64(%a5), %d6
+    lea (%a5,%d6.w), %a1                    | pose 32: the four pieces have the same box
+    lea rect_slots(%pc), %a0
+    move.w slot_index(%pc), %d6
+    lsl.w #4, %d6
+    adda.w %d6, %a0
+    lea 8(%a0), %a0
+    move.w %d0, %d4                         | x: the smallest and the largest of the two
+    move.w %d1, %d5
+    cmp.w %d5, %d4
+    bls.s 1f
+    exg %d4, %d5
+1:  move.w (%a1)+, %d6
+    add.w %d4, %d6
+    move.w %d6, (%a0)+
+    move.w (%a1)+, %d6
+    add.w %d5, %d6
+    move.w %d6, (%a0)+
+    move.w %d2, %d4                         | y, less the camera
+    move.w %d3, %d5
+    cmp.w %d5, %d4
+    bls.s 2f
+    exg %d4, %d5
+2:  move.w camera(%pc), %d7
+    sub.w %d7, %d4
+    sub.w %d7, %d5
+    move.w (%a1)+, %d6
+    add.w %d4, %d6
+    move.w %d6, (%a0)+
+    move.w (%a1)+, %d6
+    add.w %d5, %d6
+    move.w %d6, (%a0)+
+    lea burst_buf(%pc), %a3                 | (the 16 images of burst_make: piece * 4 + the tile's place in the piece)
+    moveq #3, %d7
+    move.w %d7, -(%sp)
+3:  move.w (%sp), %d7                       | the piece: bit 0 right, bit 1 bottom
+    move.w 2(%sp), %d3
+    btst #0, %d7
+    beq.s 4f
+    move.w 4(%sp), %d3
+4:  move.w 6(%sp), %d4
+    btst #1, %d7
+    beq.s 5f
+    move.w 8(%sp), %d4
+5:  sub.w camera(%pc), %d4
+    move.w %d3, -(%sp)                      | its place: x, y
+    move.w %d4, -(%sp)
+    move.w %d7, %d0
+    lsr.w #1, %d0
+    btst #0, %d7
+    beq.s 6f
+    addq.w #2, %d0
+6:  addi.w #32, %d0                         | the pose: 32 + 2 * right + bottom
+    add.w %d0, %d0
+    movea.l pkg_ptr+PKG_MAGIC_ANIM(%pc), %a5
+    move.w (%a5,%d0.w), %d0
+    adda.w %d0, %a5
+    addq.l #8, %a5                          | (past the box)
+7:  move.w (%a5)+, %d0
+    bmi.s 8f
+    add.w 2(%sp), %d0
+    move.w (%sp), %d1
+    add.w (%a5)+, %d1
+    move.w (%a5)+, %d2
+    mulu.w #SPRITE_IMAGE_BYTES, %d2
+    lea (%a3,%d2.l), %a1
+    bsr.w blit_tile                         | (clobbers d0-d7: the place is on the stack)
+    bra.s 7b
+8:  addq.l #4, %sp
+    move.w (%sp), %d7
+    subq.w #1, %d7
+    bmi.s 9f
+    move.w %d7, (%sp)
+    bra.s 3b
+9:  lea 10(%sp), %sp
+    bra.w draw_spell_end
+
+| The Tilte explosion's pictures: one 16x16 picture (the tiles $6E to $71, the package holds its four images first in magic_images) drawn as four pieces, each the picture
+| mirrored left-right (piece 2), upside down (piece 1) or both (piece 3). The package keeps only the four, so that it stays small: pkg_attach has this make the 16 images
+| of burst_buf (piece p, place q in it: image p * 4 + q is image q ^ flags of the four, flags 0, 2, 1, 3 for p 0 to 3, mirrored as flags say). Keeps every register.
+burst_make:
+    movem.l %d0-%d7/%a0-%a2, -(%sp)
+    movea.l pkg_ptr+PKG_MAGIC_IMAGES(%pc), %a2
+    lea burst_buf(%pc), %a1
+    moveq #0, %d6
+1:  move.w %d6, %d0
+    lsr.w #1, %d0
+    btst #0, %d6
+    beq.s 2f
+    addq.w #2, %d0                          | the flags: p 0 to 3 give 0, 2, 1, 3
+2:  moveq #0, %d7
+3:  move.w %d7, %d1
+    eor.w %d0, %d1
+    mulu.w #SPRITE_IMAGE_BYTES, %d1
+    lea (%a2,%d1.l), %a0
+    bsr.s burst_flip
+    lea SPRITE_IMAGE_BYTES(%a1), %a1
+    addq.w #1, %d7
+    cmpi.w #4, %d7
+    blt.s 3b
+    addq.w #1, %d6
+    cmpi.w #4, %d6
+    blt.s 1b
+    movem.l (%sp)+, %d0-%d7/%a0-%a2
+    rts
+
+| a0 = an image of a sprite tile (blit_tile's: 8 lines of a mask byte and four plane bytes), a1 = where its copy goes, d0: bit 0 mirrors it left-right, bit 1 turns it upside down.
+| Clobbers d1-d5 (not a0 and a1).
+    .macro BREV                             | reverses the bits of each byte of d3 (d4 scratch)
+    move.l %d3, %d4
+    andi.l #0x55555555, %d4
+    add.l %d4, %d4
+    lsr.l #1, %d3
+    andi.l #0x55555555, %d3
+    or.l %d4, %d3
+    move.l %d3, %d4
+    andi.l #0x33333333, %d4
+    lsl.l #2, %d4
+    lsr.l #2, %d3
+    andi.l #0x33333333, %d3
+    or.l %d4, %d3
+    move.l %d3, %d4
+    andi.l #0x0F0F0F0F, %d4
+    lsl.l #4, %d4
+    lsr.l #4, %d3
+    andi.l #0x0F0F0F0F, %d3
+    or.l %d4, %d3
+    .endm
+burst_flip:
+    movem.l %d6/%a3/%a5, -(%sp)
+    moveq #0, %d1
+1:  move.w %d1, %d2
+    btst #1, %d0
+    beq.s 2f
+    moveq #7, %d2
+    sub.w %d1, %d2                          | the line it goes to
+2:  move.w %d1, %d5
+    add.w %d5, %d5
+    add.w %d5, %d5
+    add.w %d1, %d5                          | 5 bytes a line: the mask byte, then the four plane bytes
+    lea (%a0,%d5.w), %a3
+    move.w %d2, %d5
+    add.w %d5, %d5
+    add.w %d5, %d5
+    add.w %d2, %d5
+    lea (%a1,%d5.w), %a5
+    moveq #4, %d6
+3:  moveq #0, %d3
+    move.b (%a3)+, %d3
+    btst #0, %d0
+    beq.s 4f
+    BREV
+4:  move.b %d3, (%a5)+
+    dbra %d6, 3b
+    addq.w #1, %d1
+    cmpi.w #8, %d1
+    blt.w 1b
+    movem.l (%sp)+, %d6/%a3/%a5
     rts
 
 | Area_ScrollTo and a new screen: the spell is gone and the interrupt counter starts again. Clobbers nothing.
@@ -1957,7 +2164,14 @@ draw_hero:
     add.w %d5, %d2
     add.w %d5, %d3
     movem.w %d0-%d3, (%a0)                  | the box
-    movea.l hero_ram(%pc), %a3
+    move.w hero_x(%pc), %d0                 | which halves of him are behind the background (Player_CalculateVisibility)
+    move.w hero_y(%pc), %d1
+    bsr.w behind_set
+    move.w hero_dead(%pc), %d2
+    beq.s 1f
+    lea behind_v(%pc), %a0
+    clr.w (%a0)                             | (the dissolving body is drawn whole)
+1:  movea.l hero_ram(%pc), %a3
     lea HERO_IMAGES_AT(%a3), %a3
     lea hero_poses(%pc), %a2
     movea.l (%a2), %a5
@@ -2621,9 +2835,12 @@ enter_screen:
 
 | d0 = the screen to go to, d1 = where the hero stands there (Y/16 << 4 | X/16), d2 = the area, d3 = the palette set: the package of that area
 | and palette set is read from the disk (A<area>P<palette>.DAT, the biggest thing the viewer waits for; not when it is the one in use) and the
-| screen is entered in it. The picture goes black first; the HUD is drawn again, its tiles are in the colours of the new package.
+| screen is entered in it. The picture fades out first (FLOW) and goes black; the HUD is drawn again, its tiles are in the colours of the new package.
 enter_world:
     movem.l %d0-%d3/%a0-%a2, -(%sp)
+    .ifdef FLOW
+    bsr.w flow_fade_out                     | Screen_FadeToBlack: a building, another area, the respawn after a death (the ROM has no fade in; a black screen is not faded)
+    .endif
     lea black_palette(%pc), %a0
     movea.l #PALETTE, %a1
     moveq #15, %d0
@@ -2866,6 +3083,7 @@ pkg_attach:
     dbra %d1, 1b
     move.l (%a2)+, (%a1)+                   | the numbers of doors and screens
     move.l (%a2), (%a1)                     | of edges, and the music
+    bsr.w burst_make                        | (needs pkg_ptr: the four images of the Tilte explosion)
     lea flag_screens(%pc), %a1              | the flags of the screens are made as they are asked for (`screen_flags`): none yet
     moveq #FLAG_SLOTS-1, %d1
 2:  move.w #-1, (%a1)+
@@ -2937,6 +3155,7 @@ early_base:                                 | the start of .text.early (tools/ch
     .include "frame.s"
     .include "password.s"
     .include "text.s"
+    .include "save.s"                       | (the save file)
     .include "town.s"
     .include "enemy.s"
     .include "items.s"
@@ -3114,6 +3333,8 @@ jump_curve:
     .byte 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 4, 4, 4, 4, 8
 bench_result:
     .long 0
+burst_buf:
+    .space 16*SPRITE_IMAGE_BYTES            | the Tilte explosion's 16 images (burst_make)
 en_nm:
     .long 0                                 | enemies_load: the table of inverted masks (src/blit.s) that draw_enemies and hero_draw_part give en_blit
 hud_states:                                 | last in .data, next to the code: the start-up code and the menus reach these from either end of .text

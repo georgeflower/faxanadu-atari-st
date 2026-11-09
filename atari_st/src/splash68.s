@@ -101,10 +101,13 @@ splash_start:
 3:  moveq #8, %d0                           | CONTINUE: the ROM leaves song 8 on through the password screen
     bsr.w sound_play_music
     bsr.w sp_leave                          | the game's picture, and the entry on it as the plain menu does it
+    bsr.w far_save_title                    | a SAVE.SAV on the disk: Load game or Enter mantra (src/save.s); d0 = 1: a game was read from it
+    tst.w %d0
+    bne.s 5f
     bsr.w mantra_entry
     tst.w %d0
     beq.s 4f
-    bsr.w box_leave                         | accepted: the game begins as after a death, with what the mantra holds
+5:  bsr.w box_leave                         | accepted: the game begins as after a death, with what the mantra (or the file) holds
     lea pw_block(%pc), %a1
     bsr.w mantra_apply
     bra.s 9f
@@ -113,6 +116,9 @@ splash_start:
 8:  bsr.w start_menu
 9:  movem.l (%sp)+, %d0-%d7/%a0-%a6
     rts
+
+far_save_title:
+    FAR_JMP save_title
 
 | Back to the game: the screens are cleared (the HUD only draws what it has under its own rows), the second playfield too (the scroll counts on its
 | margins being black), the HUD is drawn again, both screens get the window and the hero, the package's palette comes back.

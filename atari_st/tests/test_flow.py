@@ -116,6 +116,52 @@ class FlowTests(unittest.TestCase):
         expected = sc.expected_screen(self.rom, 0, 0, shot.at("camera"), hero=sc.Hero(16, 144, 0, 255, 255, 0, True))
         self.assertEqual(mismatch(shot.rows, expected), [], "Eolis screen 0 with the new hero and the HUD of a new game")
 
+
+    def test_the_disk_build_has_no_test_keys(self) -> None:
+        """NEWGAME=1 (the disk build) leaves out the test keys: H and G (hurt), M (the next spell), P (the mantra in a box), F1 and the digit keys (songs and sounds)
+        do nothing in play; the same keys held for the same time do work in the build the other tests use (the control: H takes power)."""
+        keys = [(0x23, "H"), (0x22, "G"), (0x32, "M"), (0x19, "P"), (0x3B, "F1"), (0x02, "1")]
+        pokes = [(480, "joy", FIRE), (484, "joy", 0)] + [(2320, "key", k << 8 | 1) for k, _ in keys]
+        defs = "--defsym MENU=1 --defsym NPCS=1 --defsym TITLE=3 --defsym HERO_X=1 --defsym NO_ENEMIES=1"
+        run = Run(["ALL=1", "AREA=0", "SCREEN=1", f"VIEWER_DEFS=--defsym NEWGAME=1 {defs}"], pokes, [2300, 2400], "shots_flow_no_keys")
+        before, after = run.shots
+        self.assertEqual((before.at("cur_screen"), before.raw("hud_state", 1), after.raw("hud_state", 1)), (0, bytes([16]), bytes([16])), "in play, power 16")
+        self.assertEqual((after.at("hero_invinc"), after.at("hero_magic"), after.at("hero_dead")), (0, -1, 0), "H, G and M did nothing")
+        self.assertEqual((after.raw("pw_text", 1), after.raw("snd_state", 48)[46:]), (b"\0", before.raw("snd_state", 48)[46:]), "no mantra box, no sound started by a key")
+        run = Run(["ALL=1", "AREA=0", "SCREEN=1", "HUD=80,80,0,0,0", f"VIEWER_DEFS=--defsym FLOW=1 {defs.replace('--defsym MENU=1 ', '')}"], [(2320, "key", 0x2301)], [2400], "shots_flow_keys")
+        (after,) = run.shots
+        self.assertLess(after.raw("hud_state", 1)[0], 80, "the control: without NEWGAME the H key hurts")
+
+    # ------------------------------------------------------------------------------------------------------ CONTINUE
+    def test_continue_with_a_mantra_starts_the_game_in_the_temple_of_its_spawn_point(self) -> None:
+        """The disk build: Down and Start on the title take CONTINUE, a mantra for spawn point 3 (rank 2, the Hand Dagger and leather armour, the Deluge spell)
+        is typed on the entry grid and END takes it. The game begins as after a death: inside the temple of the third town (area 4, building 30's people, palette set
+        18, x 224, y 144, facing left, song 14), power and magic 80, the experience and gold of rank 2, the spell and the equipment of the mantra, the spawn point
+        kept; walking out of the room leads to Mist screen 6 at x 144, y 128 with the area's song."""
+        import password_model as pm
+        import st_convert as sc
+
+        mantra = pm.password(pm.State(3, 2, 0, 0, 0, 0, pm.UNSET, 0, pm.UNSET, weapons=[0], armors=[0], spells=[0]))
+        cont = [(480, "joy", DOWN), (484, "joy", 0), (490, "joy", FIRE), (494, "joy", 0)]
+        pokes, end = tv.ViewerTests.typing(mantra, 560)
+        out = [(end + 400, "w:hero_x", 240), (end + 401, "joy", RIGHT), (end + 404, "joy", 0)]
+        run = Run(["ALL=1", "AREA=0", "SCREEN=1", "WORLD=2", "VIEWER_DEFS=--defsym NEWGAME=1 --defsym MENU=1 --defsym NPCS=1 --defsym TITLE=3 --defsym HERO_X=1 --defsym NO_ENEMIES=1"],
+                  cont + pokes + out, [end + 300, end + 700], "shots_flow_continue")
+        inside, outside = run.shots
+        self.assertEqual((inside.at("hero_title"), inside.at("hero_next"), inside.at("hero_spawn"), inside.at("hero_magic"), inside.at("hero_weapon")), (2, 2, 3, 0, 0))
+        self.assertEqual((inside.at("cur_area"), inside.at("cur_pal"), inside.at("cur_screen")), (4, 18, 0), "the building of the temple")
+        self.assertEqual((inside.at("building_id"), inside.at("hero_x"), inside.at("hero_y"), inside.at("hero_flip")), (30, 224, 144, 0), diag(inside))
+        self.assertEqual((inside.at("cur_music"), inside.at("hero_dead")), (14, 0))
+        self.assertEqual(inside.raw("hud_state", 2), bytes([80, 80]), "power and magic 80")
+        self.assertEqual((inside.at("hud_state", 2), inside.at("hud_state", 6)), (2200, 800), "the experience and gold of rank 2")
+        self.assertEqual((inside.at("saved_area"), inside.at("saved_pal"), inside.at("saved_screen"), inside.at("saved_pos")), (2, 10, 6, 0x80 | 9))
+        state = dict(hp=80, mp=80, experience=2200, gold=800, seconds=0)
+        expected = sc.expected_screen(self.rom, 4, 1, inside.at("camera"), palette_index=18, tiles_index=6, state=state, hero=sc.Hero(224, 144, 0, 255, 255, 0, False))
+        bad = [(x, y) for y in range(200) for x in range(320) if inside.rows[y][x] != expected[y][x]]
+        self.assertTrue(bad and all(66 <= x < 114 and 118 <= y < 156 for x, y in bad), f"only the Guru differs from the plain room: {bad[:5]}")
+        self.assertEqual((outside.at("cur_area"), outside.at("cur_pal"), outside.at("cur_screen")), (2, 10, 6), diag(outside))
+        self.assertEqual((outside.at("hero_x"), outside.at("hero_y"), outside.at("hero_flip"), outside.at("cur_music")), (144, 128, 1, 5))
+
     # ------------------------------------------------------------------------------------------------------ death
     TEMPLE = ["ALL=1", "AREA=0", "SCREEN=1", "HERO=128,144,0,255,0,0,1", "HUD=80,80,0,0,0",
               "VIEWER_DEFS=--defsym DAMAGE=80 --defsym TITLE=2 --defsym FLOW=1 --defsym NO_ENEMIES=1"]
@@ -156,6 +202,22 @@ class FlowTests(unittest.TestCase):
         state = dict(hp=80, mp=80, experience=2200, gold=800, seconds=0)
         expected = sc.expected_screen(self.rom, 0, 2, outside.at("camera"), state=state, hero=sc.Hero(80, 144, 0, 255, 0, 0, True))
         self.assertEqual(mismatch(outside.rows, expected), [], "Eolis screen 2 again")
+
+    def test_the_respawn_fades_the_picture_out_in_four_steps_before_the_temple(self) -> None:
+        """Player_Spawn's Screen_FadeToBlack: after the death message the picture goes to black in four steps (a quarter darker every 5th frame), then the temple is drawn;
+        the ROM has no fade in."""
+        run = self.die(0, "1", [], [990] + list(range(1011, 1060, 3)) + [1250], "shots_flow_respawn_fade")
+        full = run.shots[0].palette
+
+        def step(n: int) -> list[int]:
+            def dim(c: int) -> int:
+                return c * (4 - n) // 4
+            return [(dim(c >> 8 & 15) << 8) | (dim(c >> 4 & 15) << 4) | dim(c & 15) for c in full]
+
+        seen = {tuple(sh.palette) for sh in run.shots[1:-1]}
+        for n in (1, 2, 3, 4):
+            self.assertIn(tuple(step(n)), seen, f"fade step {n} was on the screen")
+        self.assertEqual((run.shots[-1].at("cur_area"), run.shots[-1].at("cur_music")), (4, 14), "and then the temple")
 
     def test_spawn_point_3_is_the_temple_of_fog_and_leads_to_mist_screen_6_with_the_areas_song(self) -> None:
         """Spawn point 3 (the third town): the way out is area 2 screen 6 at x 144, y 128 in palette set 10, and the song after it is AREA_TO_MUSIC_TABLE[2] = 5."""
@@ -220,6 +282,40 @@ class FlowTests(unittest.TestCase):
         slots = [before.raw("enemies", 240)[i * 30] for i in range(8)]
         self.assertEqual((before.at("end_state"), any(k != 255 for k in slots)), (0, True), f"the boss is there {slots} {diag(before)}")
         self.assertEqual((after.at("end_state"), after.at("cur_music")), (1, 7))
+
+    FINAL = ["ALL=1", "AREA=7", "SCREEN=0", "HERO=100,144,0,255,0,0,1", "HUD=80,80,0,0,0"]
+
+    def test_esc_in_the_black_frames_of_the_ending_leaves_at_once(self) -> None:
+        """The 120 black frames before the King's room used to read no key: Esc (IN_QUIT, the byte the keyboard code sets) now ends the wait and the program leaves (its memory is
+        TOS's again at the second capture, after the wait would have ended); without it the King's room would be loaded and the hero walking."""
+        pokes = [(300, f"b:enemies+{i * 30}", 255) for i in range(8)] + [(480, "b:input_state+262", 255)]
+        run = Run([*self.FINAL, "VIEWER_DEFS=--defsym FLOW=1 --defsym SPLASH=1 --defsym NO_TITLE=1"], pokes, [470, 600], "shots_flow_ending_esc")
+        black, after = run.shots
+        self.assertEqual((black.at("end_state"), black.at("cur_area")), (1, 7), "in the black frames")
+        image = (ROOT / "build" / "viewer.bin").read_bytes()
+        at = run.sym["start"]
+        n = 8000           # (the desktop does not necessarily reuse the program's first bytes: look further in; without Esc the same 8,000 bytes are unchanged at the capture)
+        self.assertNotEqual(after.raw("start", n), image[at:at + n], "the program has left (TOS has used its memory again)")
+        self.assertEqual(black.raw("start", 48), image[at:at + 48], "and it was there before")
+
+    def test_a_walk_to_the_king_that_takes_too_long_goes_on_with_his_message(self) -> None:
+        """The walk has a time limit: end_count runs out (set to 1 here, the hero is still far from the King) and the King's script is started from where he stands;
+        A through it, then the outro. Without a person in the room (slots emptied) the outro starts at once."""
+        pokes = [(v, "key", 0x3901) for v in range(620, 3000, 40)] + [(v + 6, "key", 0x3900) for v in range(620, 3000, 40)]
+        base = ["ALL=1", "AREA=7", "SCREEN=0", "HERO=100,144,0,255,0,0,1", "HUD=80,80,0,0,0",
+                "VIEWER_DEFS=--defsym NEWGAME=1 --defsym NPCS=1 --defsym MENU=1 --defsym NO_TITLE=1 --defsym NO_ENEMIES=1"]
+        run = Run(base, pokes + [(560, "w:end_count", 1)], [555, 600, 700, 2500], "shots_flow_walk_timeout")
+        room, started, message, outro = run.shots
+        self.assertEqual((room.at("end_state"), room.at("cur_area"), room.at("end_stage")), (2, 4, 0), f"the King's room, walking {diag(room)}")
+        self.assertEqual((started.at("end_state"), started.at("end_stage")), (2, 1), "the time ran out: the message")
+        self.assertGreater(message.at("hero_x"), 0x60, "he never walked to the King")
+        self.assertEqual((outro.at("end_state"), outro.at("sp_phase")), (0, 3), "FINISH_GAME: the outro plays")
+        empty = [(556, "b:npc_slots", 255), (556, "b:npc_slots+16", 255), (560, "w:end_count", 1)]
+        run = Run(base, empty, [555, 600, 800], "shots_flow_walk_timeout2")
+        room, waiting, outro = run.shots
+        self.assertEqual((room.at("end_state"), room.at("end_stage")), (2, 0))
+        self.assertEqual((waiting.at("end_state"), waiting.at("end_stage")), (0, 1), f"no King: nothing to start, the outro follows at once {diag(waiting)}")
+        self.assertEqual((outro.at("end_state"), outro.at("sp_phase")), (0, 3), "and plays")
 
     def test_the_final_boss_leads_to_the_ending_the_kings_room_the_message_the_outro_and_the_title(self) -> None:
         """Evil Fortress screen 0 (special event 2): when no sprite is left the song is Eolis's, the game stands 120 frames, the screen fades (4 steps) and stays black for

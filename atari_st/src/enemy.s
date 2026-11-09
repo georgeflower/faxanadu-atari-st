@@ -45,6 +45,7 @@
     .equ E_BREAD, 1                         | the entities that are not enemies: bread and a coin (drops), the death effect
     .equ E_COIN, 2
     .equ E_DEATH, 0x13
+    .equ E_MAGIC_DEATH, 0x14                | what a kill by magic leaves: the same behaviour (8 is 7 in the ROM), another picture
     .equ E_BOSS_DEATH, 0x64
     .equ E_FIREBALL, 0x54                   | Charron's fireball (cast, never placed)
     .equ E_BOLT, 0x0A                       | the bolt of Ripasheiku and King Grieve (a fireball of 28 damage)
@@ -78,6 +79,7 @@ enemies_load:
     lea en_nm(%pc), %a1
     move.l %a0, (%a1)                       | (where en_blit finds its table of inverted masks: hero_draw_part reads it too)
     bsr.s enemies_clear
+    bsr.w behind_load                       | (the sprites behind the background: this screen's block table)
     .ifdef NO_ENEMIES                       | (the picture tests of the screens and the doors want an empty field)
     bra.w 9f
     .endif
@@ -255,6 +257,8 @@ en_behaviour:
     cmpi.w #2, %d0
     beq.w beh_bounce
     cmpi.w #7, %d0
+    beq.w beh_death
+    cmpi.w #8, %d0                          | (the magic kill's effect: the same function)
     beq.w beh_death
     cmpi.w #62, %d0
     beq.w beh_boss_death
@@ -2360,7 +2364,7 @@ en_magic:
     move.l %a0, E_PREV(%a3)
     cmpi.b #7, K_CAT+1(%a0)
     beq.s 21f
-    moveq #E_DEATH, %d0
+    moveq #E_MAGIC_DEATH, %d0               | Sprite_ShowNormalEnemyDeathByMagic: entity $14, not the sword's $13
     bra.s 22f
 21: moveq #E_BOSS_DEATH, %d0
 22: move.b %d0, %d5
@@ -2373,13 +2377,17 @@ en_magic:
     bclr #6, E_FLAGS(%a3)
 20: lea spell_state(%pc), %a1
     move.w (%a1), %d5
-    cmpi.w #1, %d5                          | Thunder and Fire go on, harmless; the others are gone
+    cmpi.w #1, %d5                          | Thunder and Fire go on, harmless; Tilte explodes (from the next update, see magic_step); the others are gone
     beq.s 23f
     cmpi.w #2, %d5
     beq.s 24f
+    cmpi.w #4, %d5
+    beq.s 25f
     move.w #-1, (%a1)
     bra.s 9f
 23: move.w #24, spell_hit-spell_state(%a1)
+    bra.s 9f
+25: move.w #0x7FFF, spell_hit-spell_state(%a1)
     bra.s 9f
 24: move.w #255, spell_hit-spell_state(%a1)
 9:  movem.l (%sp)+, %d0-%d7/%a0-%a2
@@ -2510,6 +2518,8 @@ en_touch:
     movem.l %d0-%d5/%a0-%a2, -(%sp)
     move.b E_ENT(%a3), %d5
     cmpi.b #E_DEATH, %d5
+    beq.w 9f
+    cmpi.b #E_MAGIC_DEATH, %d5
     beq.w 9f
     cmpi.b #E_BOSS_DEATH, %d5
     beq.w 9f
@@ -2744,6 +2754,8 @@ en_stale_flip:
     cmpi.b #E_COIN, %d0
     beq.s 5f
     cmpi.b #E_DEATH, %d0
+    beq.s 5f
+    cmpi.b #E_MAGIC_DEATH, %d0
     beq.s 5f
     cmpi.b #E_BOSS_DEATH, %d0
     beq.s 5f
@@ -3318,6 +3330,10 @@ grieve_frames:
     move.w (%a5)+, %d0
     add.w %d5, %d0
     move.w %d0, (%a2)
+    moveq #0, %d1
+    move.b E_Y(%a3), %d1
+    move.w %d4, %d0
+    bsr.w behind_set                        | which halves of it are over a block that sprites go behind (behind_v)
     move.w %d7, -(%sp)
     move.l %a3, -(%sp)
     move.l pkg_ptr+PKG_ENEMY_IMAGES(%pc), -(%sp)
@@ -3325,7 +3341,13 @@ grieve_frames:
     move.w %d4, -(%sp)
     movea.l %a5, %a6
     movea.l en_nm(%pc), %a3
+    move.w behind_v(%pc), %d0
+    bne.s en_draw_behind
     bsr.w en_tiles
+    bra.s en_draw_done
+en_draw_behind:
+    bsr.w en_tiles_behind
+en_draw_done:
     addq.l #8, %sp
     movea.l (%sp)+, %a3
     move.w (%sp)+, %d7
@@ -3344,6 +3366,205 @@ grieve_frames:
     blt.w 1b
     movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5-%a6
     rts
+
+
+| Sprites behind the background (docs: AGENTS.md, Enemies, "behind"; tools/behind.py has the package part PKG_BEHIND: a word n, 256 bytes giving a block id its number 1 to n
+| (0: not a block that sprites go behind), then n masks of 16 words, the pixels of a block that are not colour 0).
+| Player_CalculateVisibility and CurrentSprite_CalculateVisibility: the block in the row of the sprite's y under its x + 4 and under its x + 12 (a byte: it wraps) has the
+| property 4, 9 or 13 -> the left (bit 0) or the right (bit 1) 8-pixel column of the sprite is drawn behind the background.
+| In: d0.w = the sprite's x, d1.w = its y (the world's). Out: behind_v and behind_ox (the sprite's x on the screen). Keeps every register.
+    .macro BEHIND_SAMPLE add, bit
+    move.w %d0, %d2
+    addi.w #\add, %d2
+    andi.w #0xFF, %d2
+    lsr.w #4, %d2
+    or.w %d1, %d2                           | the block's position (row * 16 + column)
+    cmpi.w #208, %d2
+    bcc.s 1f
+    add.w %d2, %d2
+    tst.w (%a1,%d2.w)
+    beq.s 1f
+    ori.w #\bit, %d3
+1:
+    .endm
+behind_set:
+    movem.l %d0-%d4/%a0-%a1, -(%sp)
+    moveq #0, %d3
+    move.w %d0, %d4
+    addi.w #LEFT_BYTES*2, %d4               | the sprite's x on the screen
+    movea.l pkg_ptr+PKG_BEHIND(%pc), %a0
+    tst.w (%a0)
+    beq.s 8f
+    cmpi.w #208, %d1
+    bcc.s 8f
+    andi.w #0xF0, %d1
+    lea behind_tab(%pc), %a1
+    BEHIND_SAMPLE 4, 1
+    BEHIND_SAMPLE 12, 2
+8:  lea behind_v(%pc), %a0
+    move.w %d3, (%a0)+
+    move.w %d4, (%a0)
+    movem.l (%sp)+, %d0-%d4/%a0-%a1
+    rts
+
+| The screen's table for behind_set and behind_image: for each of the 208 block positions the offset in PKG_BEHIND of the block's 16 mask words, 0 for a block that is none
+| of those. Made for every way into a screen (enemies_load), nothing to do when the package has no such block. Keeps every register.
+behind_load:
+    movem.l %d0-%d2/%a0-%a2, -(%sp)
+    movea.l pkg_ptr+PKG_BEHIND(%pc), %a0
+    tst.w (%a0)
+    beq.s 9f
+    lea behind_tab(%pc), %a1
+    move.w cur_screen(%pc), %d0
+    mulu.w #208, %d0
+    movea.l pkg_ptr+PKG_SCREENS(%pc), %a2
+    adda.l %d0, %a2
+    move.w #207, %d2
+1:  moveq #0, %d0
+    move.b (%a2)+, %d0
+    move.b 2(%a0,%d0.w), %d0                | the block's number 1 to n (0: none)
+    beq.s 2f
+    subq.w #1, %d0
+    lsl.w #5, %d0
+    addi.w #2+256, %d0
+2:  move.w %d0, (%a1)+
+    dbra %d2, 1b
+9:  movem.l (%sp)+, %d0-%d2/%a0-%a2
+    rts
+
+| a1 = the image of a sprite tile (8 mask bytes, then 8 longs of four plane bytes), d0 = its x and d1 = its line on the screen (en_blit's). When its column is one that is
+| behind the background (behind_v, behind_ox: the caller tests that behind_v is not 0) a1 comes back as a copy in behind_buf with the pixels gone that lie over a pixel of the
+| background that is not colour 0, if there are any (a block of a screen is in front of the sprite only where PKG_BEHIND knows it: the pixels of the blocks next to it are not
+| tested). The tile covers parts of four blocks at most: their mask pointers (a0 top left, a5 top right, a6 bottom left, a3 bottom right; a block that is none: behind_zero)
+| are found once, then each of the 8 lines takes its 8 pixels out of two words. Keeps all else.
+    .macro BEHIND_PTR dest                  | d2 = a block column, d5 = a block row (signed): \dest = its masks
+    moveq #0, %d3
+    cmpi.w #16, %d2
+    bcc.s 1f
+    cmpi.w #13, %d5
+    bcc.s 1f
+    move.w %d5, %d3
+    lsl.w #4, %d3
+    add.w %d2, %d3
+    add.w %d3, %d3
+    move.w (%a3,%d3.w), %d3
+1:  tst.w %d3
+    beq.s 2f
+    lea (%a2,%d3.w), \dest
+    bra.s 3f
+2:  lea behind_zero(%pc), \dest
+3:
+    .endm
+behind_image:
+    movem.l %d0-%d7/%a0/%a2-%a3/%a5-%a6, -(%sp)
+    move.w behind_v(%pc), %d2
+    move.w %d0, %d3
+    sub.w behind_ox(%pc), %d3
+    asr.w #3, %d3
+    andi.w #1, %d3
+    btst %d3, %d2
+    beq.w 9f                                | this column is in front
+    subi.w #LEFT_BYTES*2, %d0               | the tile's x in the world
+    move.w %d0, %d6
+    asr.w #4, %d6                           | its block column
+    andi.w #15, %d0                         | and where in the block
+    add.w camera(%pc), %d1
+    subi.w #HUD_LINES, %d1                  | the world's line of the tile's first line
+    move.w %d1, %d7
+    asr.w #4, %d7                           | its block row
+    andi.w #15, %d1                         | and the line in the block
+    movea.l pkg_ptr+PKG_BEHIND(%pc), %a2
+    lea behind_tab(%pc), %a3
+    move.w %d6, %d2
+    move.w %d7, %d5
+    BEHIND_PTR %a0
+    addq.w #1, %d2
+    BEHIND_PTR %a5
+    subq.w #1, %d2
+    addq.w #1, %d5
+    BEHIND_PTR %a6
+    addq.w #1, %d2
+    BEHIND_PTR %a3                          | (last: it takes the place of the table's address)
+    lea behind_zero(%pc), %a2
+    cmpa.l %a2, %a0
+    bne.s 1f
+    cmpa.l %a2, %a5
+    bne.s 1f
+    cmpa.l %a2, %a6
+    bne.s 1f
+    cmpa.l %a2, %a3
+    beq.w 9f                                | no block of the part under it
+1:  lea behind_buf(%pc), %a2                | first the 8 lines' hidden pixels (those of the background that are not colour 0), a byte each, into the copy's mask bytes
+    moveq #24, %d6
+    sub.w %d0, %d6                          | the shift that brings a line's 8 pixels to the low byte
+    moveq #16, %d7
+    sub.w %d1, %d7                          | the lines of the tile in the block row (the rest are in the row below)
+    moveq #8, %d2
+    cmp.w %d2, %d7
+    ble.s 11f
+    move.w %d2, %d7
+11: sub.w %d7, %d2
+    move.w %d1, %d3
+    add.w %d3, %d3
+    moveq #0, %d5                           | (the OR of them all)
+    subq.w #1, %d7
+12: move.w (%a0,%d3.w), %d4
+    swap %d4
+    move.w (%a5,%d3.w), %d4
+    lsr.l %d6, %d4
+    move.b %d4, (%a2)+
+    or.b %d4, %d5
+    addq.w #2, %d3
+    dbra %d7, 12b
+    subq.w #1, %d2
+    bmi.s 15f
+    moveq #0, %d3
+14: move.w (%a6,%d3.w), %d4
+    swap %d4
+    move.w (%a3,%d3.w), %d4
+    lsr.l %d6, %d4
+    move.b %d4, (%a2)+
+    or.b %d4, %d5
+    addq.w #2, %d3
+    dbra %d2, 14b
+15: tst.b %d5
+    beq.w 9f                                | nothing of the tile is hidden: it is drawn as it is
+    movea.l en_nm(%pc), %a0                 | then each line: what stays of its mask and of its four plane bytes
+    lea behind_buf(%pc), %a6
+    lea 8(%a1), %a5
+    lea 8(%a6), %a3
+    moveq #7, %d7
+16: moveq #0, %d2
+    move.b (%a6), %d2
+    add.w %d2, %d2
+    add.w %d2, %d2
+    move.l (%a0,%d2.w), %d2                 | the inverse of the hidden bits in each of four bytes
+    move.b (%a1)+, %d3
+    and.b %d2, %d3
+    move.b %d3, (%a6)+
+    and.l (%a5)+, %d2
+    move.l %d2, (%a3)+
+    dbra %d7, 16b
+    lea behind_buf(%pc), %a1
+9:  movem.l (%sp)+, %d0-%d7/%a0/%a2-%a3/%a5-%a6
+    rts
+
+| en_tiles (src/blit.s) for a sprite that has a column behind the background: the same arguments, each tile's image passed through behind_image.
+en_tiles_behind:
+    moveq #-1, %d6
+1:  move.w (%a6)+, %d0
+    bmi.s 9f
+    add.w 4(%sp), %d0
+    move.w (%a6)+, %d1
+    add.w 6(%sp), %d1
+    moveq #0, %d2
+    move.w (%a6)+, %d2
+    movea.l 8(%sp), %a1
+    adda.l %d2, %a1
+    bsr.w behind_image
+    bsr.w en_blit
+    bra.s 1b
+9:  rts
 
     .section .rodata
 magic_hit_w:                                | CAST_MAGIC_HIT_WIDTHS and ...HEIGHTS, MAGIC_DAMAGE, CAST_MAGIC_HIT_BEHAVIORS (as E_VAL: the kind in bits 7-6, the updates in the low bits)
@@ -3417,3 +3638,14 @@ en_blocks:
     .long 0                                 | this screen's flags of the blocks he cannot walk through
 en_ids:
     .long 0                                 | its block ids
+behind_v:
+    .word 0                                 | the halves of the sprite being drawn that are behind the background: bit 0 the left one, bit 1 the right one
+behind_ox:
+    .word 0                                 | its x on the screen
+    .even
+behind_buf:
+    .space 40                               | the image of a tile behind the background (behind_image)
+behind_zero:
+    .space 32                               | 16 mask words of nothing
+behind_tab:
+    .space 208*2                            | the screen's block positions: the offset of the block's masks in PKG_BEHIND, or 0 (behind_load)

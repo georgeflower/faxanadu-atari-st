@@ -20,8 +20,8 @@ ROM = ROOT.parent / "ext" / "Faxanadu_Europe.nes"
 import test_viewer as tv  # noqa: E402
 
 INV_BYTES, BJ_STATE, BO_SIZE, TRACE = 38, 58, 92, 16
-POLICY = {"A": 1, "BA": 2}
-FRAMES = 100000                         # the frames the whole list takes (257 jobs: 89,000), the capture waits for them
+POLICY = {"A": 1, "BA": 2, "SA": 3}
+FRAMES = 120000                         # the frames the whole list takes (325 jobs: about 100,000), the capture waits for them
 
 # (script, state, buttons). A state is the name of one of iscript_model.PRESETS or a dict: {base: a preset, and the changes}.
 JOBS: list[tuple[int, object, str]] = []
@@ -40,6 +40,8 @@ for ident in (0x78, 0x1C, 0x29, 0x3D, 0x4C, 0x69):                              
     JOBS += [(ident, "fresh", "A"), (ident, "rich", "A"), (ident, "full", "A")]
 for ident in (0x0C, 0x0D, 0x19, 0x1A, 0x1D, 0x28, 0x2B, 0x39, 0x3B, 0x3C, 0x48, 0x4A, 0x57, 0x66, 0x68, 0x75, 0x77):  # shops: buy the first, sell the first
     JOBS += [(ident, "rich", "A"), (ident, "full", "A"), (ident, "fresh", "A"), (ident, "mid", "A"), (ident, "rich", "BA")]
+for ident in (0x0C, 0x0D, 0x19, 0x1A, 0x1D, 0x28, 0x2B, 0x39, 0x3B, 0x3C, 0x48, 0x4A, 0x57, 0x66, 0x68, 0x75, 0x77):  # the same shops, Sell chosen (the buy-or-sell menu falls through to SELL_MENU)
+    JOBS += [(ident, "rich", "SA"), (ident, "full", "SA"), (ident, "fresh", "SA"), (ident, "mid", "SA")]
 for ident in (0x01, 0x05, 0x08, 0x13, 0x17, 0x1B, 0x30, 0x40, 0x60, 0x70):                  # others: the King (gold), ranks, the keys' people
     JOBS += [(ident, "fresh", "A"), (ident, "rich", "A"), (ident, "full", "A")]
 

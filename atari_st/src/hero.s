@@ -301,7 +301,10 @@ hero_draw_part:
     move.w hero_dead(%pc), %d2              | (d0 and d1 are en_blit's x and line)
     beq.s 2f
     bsr.w dissolve_image                    | (only while he dies)
-2:  bsr.w en_blit
+2:  move.w behind_v(%pc), %d2
+    beq.s 3f
+    bsr.w behind_image                      | (only when a half of him is behind the background)
+3:  bsr.w en_blit
     bra.s 1b
 9:  rts
 

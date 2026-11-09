@@ -427,9 +427,16 @@ op_add_item:
     moveq #2, %d0
     bra.w tb_wait_a
 
-| $14 SHOW_PASSWORD: his mantra in the text area (16 characters to a line), until A.
+| $14 SHOW_PASSWORD: a small box asks Save to disk or Show mantra (save.s: the game is saved in SAVE.SAV, or the disk would not take it); the mantra goes in the text
+| area (16 characters to a line) until A. The box took the place of the text box and the portrait: they are drawn again.
 op_password:
-    lea pw_block(%pc), %a1
+    bsr.w far_save_guru
+    move.w %d0, -(%sp)
+    bsr.w town_reopen
+    tst.w (%sp)+
+    bne.s 1f
+    rts                                     | saved: the script goes on
+1:  lea pw_block(%pc), %a1
     bsr.w pw_build
     movea.l %a1, %a0
     lea pw_text(%pc), %a1
@@ -471,6 +478,8 @@ far_item_draw:
     FAR_JMP item_draw
 far_menu_text:
     FAR_JMP menu_text
+far_save_guru:
+    FAR_JMP save_guru
 
 | d0.b = an item, d2 = y, a3 = the screen: its picture at x 128 and its name at x 152. Keeps every register.
 far_item_row:
@@ -902,7 +911,7 @@ op_open_shop:
     bsr.w tb_message
     bra.w shop_end
 
-| $11 SELL_MENU a: the items in his pack that the shop list names, at half the list's price (the worn item is not in the pack). None: message $12 and the script ends; else
+| $11 SELL_MENU a: the items in his pack (the last first, as the ROM) that the shop list names, at half the list's price (the worn item is not in the pack). None: message $12 and the script ends; else
 | "Which one would you like to sell?", the shop box, a choice (B ends the script): the item goes and the price is added 10 gold a frame (then 60 frames).
 op_sell_menu:
     bsr.w shop_list_at
@@ -912,9 +921,9 @@ op_sell_menu:
     lea shop_items(%pc), %a0
     lea shop_costs(%pc), %a1
     moveq #0, %d2                           | the entries found
-    moveq #0, %d5
-1:  cmp.w %d3, %d5
-    bcc.s 5f
+    move.w %d3, %d5                         | the pack from its last entry to its first (the ROM lists them so: tools/iscript_model.py, checked in jsnes)
+1:  subq.w #1, %d5
+    bmi.s 5f
     moveq #0, %d0
     move.b (%a3,%d5.w), %d0
     ori.b #0x80, %d0                        | the item in the pack
@@ -937,8 +946,7 @@ op_sell_menu:
     addq.w #1, %d2
     cmpi.w #8, %d2
     bcc.s 5f
-4:  addq.w #1, %d5
-    bra.s 1b
+4:  bra.s 1b
 5:  lea shop_count(%pc), %a0
     move.w %d2, (%a0)
     tst.w %d2
@@ -975,6 +983,13 @@ op_buy_sell:
     bsr.w tb_instant
     lea shop_cursor(%pc), %a0
     clr.w (%a0)                             | the arrow's line: 0 buy, 1 sell
+    .ifdef BATCH
+    move.w auto_pad(%pc), %d0
+    cmpi.w #3, %d0                          | (tests) the buttons "SA": Sell is chosen, so the arrow starts on the second line and A takes it
+    bne.s 5f
+    move.w #1, (%a0)
+5:
+    .endif
     bsr.s bs_arrow
 1:  bsr.w town_tick
     lea input_state(%pc), %a0
@@ -1512,7 +1527,7 @@ script_test:
     rts
 
     .ifdef BATCH
-| (BATCH=n, for the tests/test_iscript_batch.py) runs the n jobs of batch.bin one after the other. A job: the script's number, the buttons (auto_pad: 1 A, 2 B then A) and the
+| (BATCH=n, for the tests/test_iscript_batch.py) runs the n jobs of batch.bin one after the other. A job: the script's number, the buttons (auto_pad: 1 A, 2 B then A, 3 A with Sell chosen in the buy-or-sell menu) and the
 | hero's state (the inventory block, hud_state, the five words hero_title, hero_next, hero_spawn, hero_weapon, hero_magic). After it the state, the number of actions
 | run, each with the byte after it (a message's number), are in batch_out (the first 16; BO_SIZE bytes a job); batch_done counts the jobs that are through (batch_frames: when the last was).
     .equ BJ_STATE, INV_BYTES+10+10
@@ -1607,28 +1622,34 @@ batch_trace:                                | d0.b = the action about to run
     .endif
 
 | ------------------------------------------------------------------------------------------------------------------ the people
-| The people of a screen (TOWN.DAT's npc.bin, tools/iscripts.py describes it): standing where the ROM puts them, drawn like the enemies are (each frame the box of
-| the last drawing in this screen is put back from the playfield, then they are drawn; the hero comes last, over them). They are not drawn during a scroll (the
-| ROM does not draw its sprites then either): `npc_clear` is called with `enemies_clear`, `npc_load` at the end of `enemies_load`, so every way into a screen has it.
+| The people of a screen (TOWN.DAT's npc.bin, tools/iscripts.py describes it): standing where the ROM puts them, behaving as the ROM's scripts say, and drawn like the
+| enemies are (each frame the box of the last drawing in this screen is put back from the playfield, then they are drawn; the hero comes last, over them). They are not
+| drawn during a scroll (the ROM does not draw its sprites then either): `npc_clear` is called with `enemies_clear`, `npc_load` at the end of `enemies_load`, so every way into
+| a screen has it.
 |
 | A screen's people: the records of npc.bin's places with this area and screen (area 4: the building's id from the door; elsewhere the ROM's number of the screen,
-| from the package's screen_ids). Up alone, newly pressed, with the hero's box over a person's box (`Player_CheckHandlePressUpOnNPC`) runs the script of the record
-| ($FF: nothing); the intro trigger (entity $4F, no picture) runs its script when the hero touches it, once in a game.
+| from the package's screen_ids). Up alone, newly pressed, with the hero's box over a person's (`Player_CheckHandlePressUpOnNPC`; the box is where the person is now: he
+| walks) runs the script of the record ($FF: nothing), unless the same Up opens a door (the door comes first, as in the ROM: the main loop calls `door_check` before
+| `npc_check`, and `npc_load` sets `npc_fresh` so that the pass that loaded a screen does not look); the intro trigger (entity $4F, no picture) runs its script when the hero touches it, once in a game.
+|
+| Behaviour. A person is a slot of the enemies' layout (E_xxx, enemy.s) with a few fields more, and the enemies' engine runs him: `npc_update` (once a frame, after the boxes
+| of the last drawing are put back) is `Sprites_UpdateAll` for a person: the ops of his script (`en_ops`, and op 6, which adds a value to his x: the priest and the doctor
+| stand 4 and 8 pixels on, the King 8 when the hero is near) and then the behaviour (Move toward 0, Walk 4, Hop 9, Fall 21, which here is waiting: a countdown; they turn
+| at a wall, fall off a ledge, as the enemies do). The scripts are the ROM's bytes (npcwalk.bin: tools/iscripts.py `walk_file`; the program's own data, TOWN.DAT has no room),
+| tools/npc_model.py is the same in Python and tests/test_npc.py checks that against the game: every kind, every frame. Nothing hurts a person or touches him.
 |
 | The pictures are made when the screen is entered: every (tile, attribute) a person's poses use becomes an image of the blitter's form (a mask and four planes a line)
-| in the palette set's slots (`tile_convert`), the poses become lists of (dx, dy, image) in the person's slot of npc_ram (behind TOWN.DAT). Which pose: the frame
-| comes from the kind's rule (0: two frames by the counter, 1: walking, here only frame 0, 2: the King's, two frames by the counter), the pose is 2 * frame + mirrored.
+| in the palette set's slots (`tile_convert`), the poses become lists of (dx, dy, image) in the person's slot of npc_ram (behind TOWN.DAT). Which pose, as the kind's update
+| handler does (`npc_draw`): the frame comes from the kind's rule (0: two frames by the counter, 1: walking: 0, 1, 0, 2 by the counter, 0 while the phase is 2, 2 the King's: two
+| frames by the counter, two more from the second phase), the mirror rule (0 never, 1 always, 2 when he faces right), the pose is 2 * frame + mirrored.
     .ifdef NPCS
     .equ NPC_SLOTS, 2
-    .equ NPC_REC, 16
-    .equ N_ENT, 0                           | the entity ($FF: the slot is empty)
-    .equ N_SCRIPT, 1                        | the script's number ($FF: none)
-    .equ N_X, 2                             | word: x on the playfield
-    .equ N_Y, 4                             | word: y
-    .equ N_KIND, 6                          | long: the kind's record in npc.bin (0: a trigger)
-    .equ N_RAM, 10                          | long: the slot's room in npc_ram
-    .equ N_FLAGS, 14                        | bit 0: faces right
-    .equ N_POSE, 15                         | the pose last drawn (2 * frame + mirrored)
+    .equ NPC_REC, 40                        | a slot: the enemies' (E_BYTES, enemy.s: 30 bytes) and at the end the fields of a person
+    .equ N_RAM, NPC_REC-8                   | long: the slot's room in npc_ram
+    .equ N_SCRIPT, NPC_REC-4                | the script's number ($FF: none)
+    .equ N_POSE, NPC_REC-3                  | the pose last drawn (2 * frame + mirrored)
+    .equ NPC_WALK_TABLE, 18*4               | npcwalk.bin: a record of four bytes a kind (the hit box type, 0, the script's offset), then the scripts
+    .equ NPC_FIRST, 0x34                    | the first kind
     .equ NPC_SLOT_RAM, 2560                 | a slot's room: the table and lists of poses (up to 640 bytes), the 44 keys (words), the images (40 bytes each)
     .equ NPC_KEYS, 640
     .equ NPC_IMAGES, 720
@@ -1640,8 +1661,8 @@ npc_clear:
     movem.l %d0/%a0, -(%sp)
     lea npc_slots(%pc), %a0
     moveq #NPC_SLOTS-1, %d0
-1:  move.b #0xFF, N_ENT(%a0)
-    clr.l N_KIND(%a0)
+1:  move.b #0xFF, E_ENT(%a0)
+    clr.l E_KIND(%a0)
     lea NPC_REC(%a0), %a0
     dbra %d0, 1b
     lea npc_rects(%pc), %a0
@@ -1655,6 +1676,8 @@ npc_clear:
 npc_load:
     movem.l %d0-%d7/%a0-%a3, -(%sp)
     bsr.s npc_clear
+    lea npc_fresh(%pc), %a0
+    move.w #1, (%a0)
     move.l town_ptr(%pc), %d0
     beq.w 9f
     movea.l %d0, %a3
@@ -1699,7 +1722,8 @@ npc_load:
 9:  movem.l (%sp)+, %d0-%d7/%a0-%a3
     rts
 
-| a2 = a place (area, screen, entity, script, x, y), d5 = the slot for it: the slot is filled and d5 goes up by one (a person that is not known is skipped). Keeps the rest.
+| a2 = a place (area, screen, entity, script, x, y), d5 = the slot for it: the slot is filled as `enemies_load` fills an enemy's (behaviour ready, the script at its start,
+| the hit box type the wall tests use) and d5 goes up by one (a person that is not known is skipped). Keeps the rest.
 npc_place:
     movem.l %d0-%d4/%a0-%a3, -(%sp)
     move.l %a2, %d4
@@ -1707,8 +1731,12 @@ npc_place:
     move.b 2(%a2), %d0                      | the entity
     lea npc_slots(%pc), %a3
     move.w %d5, %d1
-    lsl.w #4, %d1
+    mulu.w #NPC_REC, %d1
     adda.w %d1, %a3
+    movea.l %a3, %a0
+    moveq #NPC_REC/4-1, %d1
+1:  clr.l (%a0)+                            | (E_KIND 0: a trigger, no picture)
+    dbra %d1, 1b
     cmpi.w #NPC_TRIGGER, %d0
     bne.s 2f
     move.w npc_intro_done(%pc), %d1
@@ -1725,21 +1753,22 @@ npc_place:
     beq.s 4f
     dbra %d2, 3b
     bra.w 9f                                | no such kind
-4:  move.l %a2, N_KIND(%a3)
+4:  move.l %a2, E_KIND(%a3)
 5:  movea.l %d4, %a2
-    move.b %d0, N_ENT(%a3)
+    move.b %d0, E_ENT(%a3)
     move.b 3(%a2), N_SCRIPT(%a3)
-    moveq #0, %d1
-    move.b 4(%a2), %d1
-    move.w %d1, N_X(%a3)
-    moveq #0, %d1
-    move.b 5(%a2), %d1
-    move.w %d1, N_Y(%a3)
-    clr.b N_FLAGS(%a3)
-    clr.b N_POSE(%a3)
-    move.l N_KIND(%a3), %d0
+    move.b 4(%a2), E_X(%a3)                 | (the flags, the fractions, the phase, the countdown are 0)
+    move.b 5(%a2), E_Y(%a3)
+    move.b #0xFF, E_BEH(%a3)
+    move.l E_KIND(%a3), %d1
     beq.s 6f
-    movea.l %d0, %a2
+    lea game_start(%pc), %a0                | npcwalk.bin, the program's own data: a record a kind
+    adda.l #npc_walk, %a0
+    subi.w #NPC_FIRST, %d0
+    lsl.w #2, %d0
+    move.b (%a0,%d0.w), E_HBOX(%a3)
+    move.w 2(%a0,%d0.w), E_SCRIPT(%a3)
+    movea.l %d1, %a2
     move.w %d5, %d1
     mulu.w #NPC_SLOT_RAM, %d1
     move.l npc_buf(%pc), %d3
@@ -1927,29 +1956,107 @@ npc_erase:
 2:  addq.l #8, %a0
     dbra %d0, 1b
     movem.l (%sp)+, %d0/%a0
+    bra.w npc_update                        | (then the people move: once a frame, here, between the box going and the next drawing)
+
+| Sprites_UpdateAll for the people: the slots in order (the first of the screen is the ROM's slot 7), each its script's ops and its behaviour. The behaviours look at the
+| screen's blocks as the enemies' do (en_blocks: enemies_update sets it later in the frame; the people go first). Nothing is done on a screen without people.
+npc_update:
+    movem.l %d0-%d7/%a0-%a5, -(%sp)
+    lea npc_slots(%pc), %a3
+    moveq #NPC_SLOTS-1, %d7
+    moveq #0, %d5
+1:  tst.l E_KIND(%a3)
+    beq.s 2f
+    cmpi.b #0xFF, E_ENT(%a3)
+    beq.s 2f
+    moveq #1, %d5                           | (someone is there)
+2:  lea NPC_REC(%a3), %a3
+    dbra %d7, 1b
+    tst.w %d5
+    beq.s 9f
+    move.w cur_screen(%pc), %d0
+    bsr.w screen_flags                      | (as enemies_update: the screen's flags, its block ids)
+    lea en_blocks(%pc), %a1
+    move.l %a2, (%a1)+
+    mulu.w #208, %d0
+    movea.l pkg_ptr+PKG_SCREENS(%pc), %a0
+    adda.l %d0, %a0
+    move.l %a0, (%a1)
+    lea game_start(%pc), %a5
+    adda.l #npc_walk+NPC_WALK_TABLE, %a5    | the scripts
+    lea npc_slots(%pc), %a3
+    moveq #NPC_SLOTS-1, %d7
+3:  tst.l E_KIND(%a3)
+    beq.s 4f
+    cmpi.b #0xFF, E_ENT(%a3)
+    beq.s 4f
+    bsr.s npc_behave
+4:  lea NPC_REC(%a3), %a3
+    dbra %d7, 3b
+9:  movem.l (%sp)+, %d0-%d7/%a0-%a5
     rts
+
+| Sprites_UpdateBehavior for the person in a3 (a5 = the scripts): the ops (op 6, add to x, is here; the others are the enemies', which stop at it), then the behaviour.
+| The behaviours end by storing the script's offset (en_behaviour_end).
+npc_behave:
+    moveq #0, %d6
+    move.w E_SCRIPT(%a3), %d6
+1:  cmpi.b #6, (%a5,%d6.w)
+    bne.s 2f
+    move.b 3(%a5,%d6.w), %d0                | BScript_Op_AddToSpriteData (the address is CurrentSprites_XPos_Full: it is the only one used)
+    add.b %d0, E_X(%a3)
+    addq.w #4, %d6
+    bra.s 1b
+2:  bsr.w en_ops
+    cmpi.b #6, (%a5,%d6.w)
+    beq.s 1b
+    moveq #0, %d0
+    move.b E_BEH(%a3), %d0
+    andi.w #0x7F, %d0
+    beq.w beh_move_toward
+    cmpi.w #4, %d0
+    beq.w beh_walk
+    cmpi.w #9, %d0
+    beq.w beh_hop
+    cmpi.w #21, %d0
+    beq.w beh_fall
+    bra.w en_behaviour_end
 
 | The people drawn into the screen a4, their boxes noted for npc_erase.
 npc_draw:
     movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
     lea npc_slots(%pc), %a3
     moveq #0, %d7                           | the slot
-1:  cmpi.b #0xFF, N_ENT(%a3)
+1:  cmpi.b #0xFF, E_ENT(%a3)
     beq.w 8f
-    movea.l N_KIND(%a3), %a2
+    movea.l E_KIND(%a3), %a2
     move.l %a2, %d0
     beq.w 8f                                | (a trigger has no picture)
-    moveq #0, %d0                           | the frame
-    cmpi.b #1, 2(%a2)
-    beq.s 3f                                | the walkers stand still: their walk is not here
-    move.w en_counter(%pc), %d0
-    lsr.w #4, %d0
-    andi.w #1, %d0
+    moveq #0, %d0                           | the frame: the kind's update handler
+    move.w en_counter(%pc), %d1
+    move.b 2(%a2), %d2                      | the rule: 0 two frames by the counter, 1 the walkers', 2 the King's
+    cmpi.b #1, %d2
+    bne.s 31f
+    cmpi.b #2, E_PHASE(%a3)                 | (frame 0 while the phase is 2)
+    beq.s 3f
+    lsr.w #3, %d1
+    andi.w #3, %d1
+    lea npc_walk_frames(%pc), %a0
+    move.b (%a0,%d1.w), %d0
+    bra.s 3f
+31: cmpi.b #2, %d2
+    bne.s 32f
+    cmpi.b #2, E_PHASE(%a3)                 | the King: two more frames from the second phase on
+    bne.s 32f
+    moveq #2, %d0
+32: lsr.w #4, %d1
+    andi.w #1, %d1
+    add.w %d1, %d0
 3:  moveq #0, %d2
     move.b 3(%a2), %d2                      | the mirror rule: 0 never, 1 always, 2 when it faces right
     cmpi.b #2, %d2
     bne.s 4f
-    move.b N_FLAGS(%a3), %d2
+    move.b E_FLAGS(%a3), %d2
     andi.w #1, %d2
 4:  add.w %d0, %d0
     add.w %d2, %d0                          | the pose
@@ -1966,8 +2073,10 @@ npc_draw:
     move.w %d7, %d0
     lsl.w #3, %d0
     adda.w %d0, %a2                         | this person's box in this screen
-    move.w N_X(%a3), %d4
-    move.w N_Y(%a3), %d5
+    moveq #0, %d4
+    move.b E_X(%a3), %d4
+    moveq #0, %d5
+    move.b E_Y(%a3), %d5
     sub.w camera(%pc), %d5
     move.w (%a5)+, %d0
     add.w %d4, %d0
@@ -1985,8 +2094,10 @@ npc_draw:
 5:  move.w (%a5)+, %d0
     cmpi.w #NPC_END, %d0
     beq.s 7f
-    move.w N_X(%a3), %d4                    | (blit_tile clobbers d0-d7)
-    move.w N_Y(%a3), %d5
+    moveq #0, %d4                           | (blit_tile clobbers d0-d7)
+    move.b E_X(%a3), %d4
+    moveq #0, %d5
+    move.b E_Y(%a3), %d5
     sub.w camera(%pc), %d5
     add.w %d4, %d0
     move.w (%a5)+, %d1
@@ -2017,17 +2128,22 @@ npc_draw:
 | 0, 0, 16, 192): (hero x + 11 - (x + left)) < width + 11 and (hero y + 27 - (y + top)) < height + 27, unsigned. Up alone and newly pressed runs the person's script
 | (not $FF); touching the trigger runs its script (once in a game).
 npc_check:
-    movem.l %d0-%d6/%a0-%a3, -(%sp)
-    move.w hero_dead(%pc), %d0
+    movem.l %d0-%d7/%a0-%a3, -(%sp)
+    lea npc_fresh(%pc), %a0
+    tst.w (%a0)
+    beq.s 0f
+    clr.w (%a0)                             | (the people were loaded in this pass: a door, a scroll: Up was for that)
+    bra.w 9f
+0:  move.w hero_dead(%pc), %d0
     bne.w 9f
     lea input_state(%pc), %a0
     moveq #0, %d6
     move.b IN_PAD_NEW(%a0), %d6
     lea npc_slots(%pc), %a3
     moveq #NPC_SLOTS-1, %d4
-1:  cmpi.b #0xFF, N_ENT(%a3)
+1:  cmpi.b #0xFF, E_ENT(%a3)
     beq.w 8f
-    movea.l N_KIND(%a3), %a0
+    movea.l E_KIND(%a3), %a0
     move.l %a0, %d0
     bne.s 2f
     moveq #0, %d1                           | the trigger
@@ -2045,25 +2161,29 @@ npc_check:
     move.b 7(%a0), %d0                      | height
 3:  move.w hero_x(%pc), %d5
     addi.w #11, %d5
-    sub.w N_X(%a3), %d5
+    moveq #0, %d7
+    move.b E_X(%a3), %d7                    | (where he is now: a person walks)
+    sub.w %d7, %d5
     sub.w %d1, %d5
     addi.w #11, %d3
     cmp.w %d3, %d5
     bcc.s 8f
     move.w hero_y(%pc), %d5
     addi.w #27, %d5
-    sub.w N_Y(%a3), %d5
+    moveq #0, %d7
+    move.b E_Y(%a3), %d7
+    sub.w %d7, %d5
     sub.w %d2, %d5
     addi.w #27, %d0
     cmp.w %d0, %d5
     bcc.s 8f
-    move.l N_KIND(%a3), %d0                 | his box is over this one
+    move.l E_KIND(%a3), %d0                 | his box is over this one
     bne.s 5f
     lea npc_intro_done(%pc), %a0            | the trigger: once
     move.w #1, (%a0)
     moveq #0, %d0
     move.b N_SCRIPT(%a3), %d0
-    move.b #0xFF, N_ENT(%a3)
+    move.b #0xFF, E_ENT(%a3)
     bra.s 6f
 5:  cmpi.w #0x08, %d6                       | Up and nothing else
     bne.s 8f
@@ -2075,7 +2195,7 @@ npc_check:
     bra.s 9f
 8:  lea NPC_REC(%a3), %a3
     dbra %d4, 1b
-9:  movem.l (%sp)+, %d0-%d6/%a0-%a3
+9:  movem.l (%sp)+, %d0-%d7/%a0-%a3
     rts
 
 | In a building: the building palette with the people's colours added (npc.bin) replaces the package's palette (the package is in memory: every later load of its
@@ -2120,6 +2240,10 @@ conv_poses:
     .word 0, 0                              | npc_convert: how many poses, the one being made
 npc_intro_done:
     .word 0                                 | the intro trigger has run (once in a game)
+npc_fresh:
+    .word 0                                 | `npc_load` ran since the last `npc_check`
+npc_walk_frames:
+    .byte 0, 1, 0, 2                        | the walkers' frames by the counter (SpriteUpdateHandler_NPC_Walking)
 building_id:
     .word 0                                 | the building he is in: its id from the door (src/viewer.s enter_building)
 portrait_k:
@@ -2188,4 +2312,11 @@ batch_out:
     .section .data
     .endif
     .even
+    .ifdef NPCS
+    .section .herodata
+    .even
+npc_walk:                                   | npcwalk.bin (tools/iscripts.py `walk_file`): the people's behaviour scripts; reached as game_start + npc_walk (it is out of the early code's reach)
+    .incbin "npcwalk.bin"
+    .even
+    .endif
     .text

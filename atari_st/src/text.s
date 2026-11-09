@@ -382,6 +382,7 @@ mantra_apply:
     movem.l (%sp)+, %d0-%d3/%a0-%a3
     rts
 
+    .ifndef NEWGAME                         | a test key: not in the disk build
 | The P key shows the mantra (the ROM shows it when a Guru of a temple meditates with him; there are no Gurus yet).
 mantra_key:
     movem.l %d0-%d1/%a0, -(%sp)
@@ -402,6 +403,7 @@ mantra_key:
     bsr.w mantra_show
 9:  movem.l (%sp)+, %d0-%d1/%a0
     rts
+    .endif
 
 | ------------------------------------------------------------------------------------------------------------------ entering a mantra
     .equ ENT_X, 96                          | the left of the grid and of the text

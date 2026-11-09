@@ -36,6 +36,7 @@ F_HIDDEN = 0x10                # SPRITE_FLAGS_VISIBLE, which Sprite_SetVisible s
 BUZZ_Y = (0x00, 0x00, 0x80, 0x40, 0x00, 0x40, 0x80, 0x00)        # SPRITE_BEHAVIOR_BUZZ_AROUND_Y_FRAC and ..._X_FRAC (the whole pixels of the vertical step)
 BUZZ_Y_FULL = (2, 1, 0, 0, 0, 0, 0, 1)
 E_BREAD, E_COIN, E_DEATH, E_BOSS_DEATH, E_FIREBALL = 1, 2, 0x13, 0x64, 0x54
+E_MAGIC_DEATH = 0x14           # the death effect of a kill by magic: the same behaviour (8 is 7), another picture
 
 # SPRITE_BEHAVIOR_HOP_* (indexed by the hop kind, the third script byte), SPRITE_BEHAVIOR_HOP_PEAK_TICKS and SPRITES_MAYBE_GRAVITY (by gravity)
 HOP_START = (0x40, 0x20, 0x10, 0x08, 0x10)
@@ -944,7 +945,7 @@ class Engine:
         if not self.counter & 3:
             s.internal = 0 if s.internal + 1 >= 3 else s.internal + 1
 
-    BEHAVIOURS = {BEH_SHADOW_EURA: "behaviour_shadow_eura", BEH_AIMED: "behaviour_aimed", BEH_ZORUGERIRU: "behaviour_zorugeriru", BEH_ROCK: "behaviour_rock", BEH_PAKUKAME: "behaviour_pakukame", BEH_LILITH: "behaviour_lilith", BEH_ZORADOHNA: "behaviour_zoradohna", BEH_MOVE_VERTICALLY: "behaviour_move_vertically", BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_BIHORUDA: "behaviour_bihoruda", BEH_GAWAINE: "behaviour_gawaine", BEH_NAGA: "behaviour_naga", BEH_NECRON: "behaviour_necron", BEH_NASH: "behaviour_nash", BEH_FLASH: "behaviour_flash", BEH_BEES: "behaviour_bees", BEH_MAGMAN: "behaviour_magman", BEH_TAMAZUTSU: "behaviour_tamazutsu", BEH_ISHIISU: "behaviour_ishiisu", BEH_HOOD: "behaviour_hood", BEH_YAREEKA: "behaviour_yareeka", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death", BEH_BOSS_DEATH: "behaviour_boss_death", BEH_BORABOHRA: "behaviour_borabohra", BEH_RIPASHEIKU: "behaviour_ripasheiku", BEH_KING_GRIEVE: "behaviour_king_grieve", BEH_BOLT: "behaviour_fireball",
+    BEHAVIOURS = {BEH_SHADOW_EURA: "behaviour_shadow_eura", BEH_AIMED: "behaviour_aimed", BEH_ZORUGERIRU: "behaviour_zorugeriru", BEH_ROCK: "behaviour_rock", BEH_PAKUKAME: "behaviour_pakukame", BEH_LILITH: "behaviour_lilith", BEH_ZORADOHNA: "behaviour_zoradohna", BEH_MOVE_VERTICALLY: "behaviour_move_vertically", BEH_MOVE: "behaviour_move_toward", BEH_WAVE: "behaviour_wave", BEH_FIREBALL: "behaviour_fireball", BEH_FINISH: "behaviour_finish", BEH_BUZZ: "behaviour_buzz", BEH_BIHORUDA: "behaviour_bihoruda", BEH_GAWAINE: "behaviour_gawaine", BEH_NAGA: "behaviour_naga", BEH_NECRON: "behaviour_necron", BEH_NASH: "behaviour_nash", BEH_FLASH: "behaviour_flash", BEH_BEES: "behaviour_bees", BEH_MAGMAN: "behaviour_magman", BEH_TAMAZUTSU: "behaviour_tamazutsu", BEH_ISHIISU: "behaviour_ishiisu", BEH_HOOD: "behaviour_hood", BEH_YAREEKA: "behaviour_yareeka", BEH_WAIT: "behaviour_wait", BEH_BOUNCE: "behaviour_bounce", BEH_WALK: "behaviour_walk", BEH_DEATH: "behaviour_death", 8: "behaviour_death", BEH_BOSS_DEATH: "behaviour_boss_death", BEH_BORABOHRA: "behaviour_borabohra", BEH_RIPASHEIKU: "behaviour_ripasheiku", BEH_KING_GRIEVE: "behaviour_king_grieve", BEH_BOLT: "behaviour_fireball",
                   BEH_HOP: "behaviour_hop", BEH_FALL: "behaviour_fall", 41: "behaviour_ointment", 42: "behaviour_glove", 43: "behaviour_battle_suit",
                   44: "behaviour_battle_helmet", 45: "behaviour_dragon_slayer", 46: "behaviour_mattock", 47: "behaviour_wing_boots", 48: "behaviour_black_onyx",
                   49: "behaviour_pendant", 50: "behaviour_random_item", 51: "behaviour_random_item", 52: "behaviour_random_item", 53: "behaviour_random_item",
@@ -1524,6 +1525,13 @@ class Engine:
                 self.ip += 1
                 self.finish(s)
                 continue
+            if op == 6:                                            # add a value to a byte of the sprite's data (BScript_Op_AddToSpriteData): run whenever it is reached;
+                where, value = self.byte(self.ip + 1) | self.byte(self.ip + 2) << 8, self.byte(self.ip + 3)      # the people use it on CurrentSprites_XPos_Full ($BA) only
+                if where != 0xBA:
+                    raise NotImplementedError(f"script op 6 on address {where:#x}")
+                s.x = (s.x + value) & 255
+                self.ip += 4
+                continue
             if op == 7:                                            # set the phase
                 if not ready:
                     return
@@ -1703,7 +1711,7 @@ def flip_masks(slots: list, counter: int, hero_flags: int) -> list:
         if ent == NONE or hit & 2:                  # (a sprite that blinks is not drawn)
             continue
         if ent not in STALE_FLIP:
-            last = 0 if ent in (E_BREAD, E_COIN, E_DEATH, E_BOSS_DEATH) else flip_mask(flags, ent) ^ flip_extra(ent, counter)
+            last = 0 if ent in (E_BREAD, E_COIN, E_DEATH, E_MAGIC_DEATH, E_BOSS_DEATH) else flip_mask(flags, ent) ^ flip_extra(ent, counter)
         out[i] = last
     return out
 

@@ -20,6 +20,9 @@ ROM = ROOT.parent / "ext" / "Faxanadu_Europe.nes"
 # the scripts of every kind: a shop, a seller of items, a doctor, quest scripts, the marks, a guru, the Battle Suit branch, Fraternal, the last temple
 SAMPLE = (0x0C, 0x1A, 0x0B, 0x2A, 0x25, 0x26, 0x27, 0x24, 0x02, 0x7B, 0x1C, 0x55, 0x74, 0x78, 0x43, 0x4B, 0x03)
 PLAN = (("fresh", "A"), ("mid", "A"), ("full", "A"), ("rich", "BA"), ("elixir", "A"))
+# the shops with the buy-or-sell menu, Sell chosen (the cursor down, then A) on states with something to sell and with nothing
+SELL_SHOPS = (0x0C, 0x1A, 0x28, 0x3C, 0x57)
+SELL_PLAN = (("fresh", "SA"), ("mid", "SA"), ("full", "SA"), ("rich", "SA"))
 
 
 def labels(s) -> dict:
@@ -64,12 +67,11 @@ class ModelTests(unittest.TestCase):
             if ident == 0x79:                                                       # (the password script: it waits for a typed password)
                 continue
             for state in self.im.PRESETS.values():
-                for buttons in ("A", "BA"):
+                for buttons in ("A", "BA", "SA"):
                     actions, _messages, _after = self.im.run(self.script, ident, state, buttons)
                     seen |= {self.script.byte(a) for a in actions}
         self.assertTrue(seen <= set(range(0x18)) - {0x16}, "an action outside the language")
-        self.assertNotIn(0x11, seen, "the model has no rule for choosing Sell yet")
-        self.assertTrue({0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x12, 0x13, 0x17} <= seen, f"unused {sorted(seen)}")
+        self.assertTrue({0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x17} <= seen, f"unused {sorted(seen)}")
 
     # the item scripts $80-$97 are not talked to: the pickup, use and expiry code of the ROM runs them (Player_PickUp*, Player_Use*, Game_Dec*Duration), each a message and END
     PICKUP = {0x48: 0x92, 0x49: 0x8E, 0x4A: 0x8F, 0x4B: 0x87, 0x4C: 0x91, 0x4D: 0x86, 0x4E: 0x94, 0x50: 0x88, 0x55: 0x89, 0x56: 0x8A, 0x57: 0x90, 0x58: 0x8B, 0x59: 0x8C, 0x5A: 0x8D,
@@ -108,6 +110,7 @@ class RomTests(unittest.TestCase):
 
         script = im.Script(fr.Rom(ROM))
         jobs = [{"id": ident, "state": labels(im.PRESETS[name]), "policy": buttons, "preset": name} for ident in SAMPLE for name, buttons in PLAN]
+        jobs += [{"id": ident, "state": labels(im.PRESETS[name]), "policy": buttons, "preset": name} for ident in SELL_SHOPS for name, buttons in SELL_PLAN]
         with tempfile.TemporaryDirectory() as tmp:
             path, out = Path(tmp) / "jobs.json", Path(tmp) / "out.json"
             path.write_text(json.dumps(jobs), encoding="utf-8")

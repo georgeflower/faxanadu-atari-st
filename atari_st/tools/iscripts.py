@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import hashlib
 
+import enemy_data as ed
 import faxanadu_rom as fr
 import faxanadu_sprites as fs
 import faxanadu_text as ft
@@ -358,6 +359,19 @@ def npc_kind(rom: fr.Rom, ent: int) -> bytes:
             poses += b"\x80"
     out = head + body + b"".join(o.to_bytes(2, "big") for o in offsets) + bytes(poses)
     return out + b"\0" * (len(out) & 1)
+
+
+def walk_file(rom: fr.Rom) -> bytes:
+    """npcwalk.bin, what the people's behaviour needs (it is part of the program, not of TOWN.DAT, which has no room left): a record of four bytes for each of the 18
+    kinds (entity - $34): the hit box type (`SPRITE_ENTITIES_HITBOX_TYPES`, which the wall tests use), 0 and the word offset of the kind's script in the blob that follows;
+    then the blob: the ROM's behaviour scripts of the kinds (`SPRITE_BSCRIPTS`, bank 14), each cut out with `enemy_data.script_chunk` (only what it reaches, jumps rebased to offsets
+    in the blob). The ops are those of the enemies' scripts and op 6, which adds a value to the sprite's x (`BScript_Op_AddToSpriteData`)."""
+    blob, records = bytearray(), []
+    for ent in range(FIRST_NPC, LAST_NPC + 1):
+        chunk, entry, _ = ed.script_chunk(rom, rom.word("SPRITE_BSCRIPTS", ent), len(blob))
+        records.append(bytes([ed.entity(rom, ent)["hitbox"], 0]) + (len(blob) + entry).to_bytes(2, "big"))
+        blob += chunk
+    return b"".join(records) + bytes(blob) + b"\0" * (len(blob) & 1)
 
 
 def parse_npc_kind(data: bytes) -> dict:

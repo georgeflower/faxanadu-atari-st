@@ -395,33 +395,48 @@ def hero_equip_assets(rom: fr.Rom) -> bytes:
 
 
 MAGIC_FIRST_APPEARANCE, MAGIC_APPEARANCES = 0x95, 16      # the spells' pictures: Deluge 4, Thunder 2, Fire 2, Death 4, Tilte 4 (tools/magic_model.FIRST_APPEARANCE)
+MAGIC_BURST = 4              # and after them, as poses 32 to 35, the four pieces of the Tilte explosion (appearances $A5 to $A8, `CastMagic_FinishHandler_TilteAfterFirstHit`)
 
 
-def magic_anim_assets(rom: fr.Rom, palette_index: int, plan: PalettePlan) -> tuple[bytes, bytes]:
+def magic_anim_assets(rom: fr.Rom, palette_index: int, plan: PalettePlan, burst_poses: bool = True) -> tuple[bytes, bytes]:
     """(poses, images) for the spells, made like the hero's poses (`hero_equip_assets`): 32 poses, pose = the appearance number - 0x95 + 16 * the flip bit (set when the
     spell flies right and its tiles are mirrored), all x relative to the spell's x and y to its y (`Arg_DrawSprite_PosX/Y`, the HUD and the one-line
-    shift of the sprites in it), the tiles from the common sprite tiles, the colours from the sprite palettes of the palette set."""
+    shift of the sprites in it), the tiles from the common sprite tiles, the colours from the sprite palettes of the palette set. Poses 32 to 35 are the four
+    pieces of the Tilte explosion (never mirrored; the program puts each at its place by the counter): the same 16x16 picture (tiles $6E to $71) mirrored left-right,
+    upside down or both, so the images start with its four tiles and the entries of poses 32 to 35 say 4 * piece + place, the number of the image that `burst_make`
+    (src/viewer.s) makes of them when the package is attached. `burst_poses` False (a building: nothing there can be hit by a spell, so there is no explosion) leaves the
+    four images and the poses 32 to 35 out."""
     tiles = fs.common_tiles(rom)
     palettes = sprite_palettes(rom, palette_index)
     images: list[bytes] = []
     index: dict[tuple, int] = {}
     records = []
-    for flip in (0, 0x40):
-        for n in range(MAGIC_APPEARANCES):
-            app = fs.appearance(rom, MAGIC_FIRST_APPEARANCE + n, "TILEINFO_ENTITY_ADDRS")
-            entries = []
-            for sp in fs.place(app, ANIM_BASE, ANIM_BASE, flip):
-                key = (sp.tile, sp.attr & 3, bool(sp.attr & 0x40), bool(sp.attr & 0x80))
-                if key not in index:
-                    index[key] = len(images)
-                    images.append(sprite_image(tiles.get(sp.tile, bytes(16)), key[2], palettes[key[1]], plan, key[3]))
-                entries.append((sp.x - ANIM_BASE + ST_LEFT, sp.y + 1 - ANIM_BASE, index[key]))
-            x0, y0 = min(e[0] for e in entries), min(e[1] for e in entries)
-            box = (x0, max(e[0] for e in entries) + 8, y0, max(e[1] for e in entries) + 8)
-            record = b"".join(v.to_bytes(2, "big", signed=True) for v in box)
-            for e in entries:
-                record += b"".join(v.to_bytes(2, "big", signed=True) for v in e)
-            records.append(record + b"\xff\xff")
+    burst = [fs.appearance(rom, MAGIC_FIRST_APPEARANCE + MAGIC_APPEARANCES + k, "TILEINFO_ENTITY_ADDRS") for k in range(MAGIC_BURST)]
+    first = fs.place(burst[0], ANIM_BASE, ANIM_BASE, 0)                 # (the picture itself: its four tiles, top left first)
+    assert all(sp.attr == 0 for sp in first) and len(first) == 4
+    for sp in first if burst_poses else []:
+        images.append(sprite_image(tiles.get(sp.tile, bytes(16)), False, palettes[0], plan, False))
+    for flip, n in [(f, n) for f in (0, 0x40) for n in range(MAGIC_APPEARANCES)] + [(0, MAGIC_APPEARANCES + k) for k in range(MAGIC_BURST if burst_poses else 0)]:
+        app = fs.appearance(rom, MAGIC_FIRST_APPEARANCE + n, "TILEINFO_ENTITY_ADDRS")
+        entries = []
+        for q, sp in enumerate(fs.place(app, ANIM_BASE, ANIM_BASE, flip)):
+            if n >= MAGIC_APPEARANCES:
+                piece = n - MAGIC_APPEARANCES
+                flags = (sp.attr >> 6) & 3                                 # (burst_make's: bit 0 left-right, the attribute's bit 6; bit 1 upside down, bit 7)
+                assert sp.tile == first[q ^ flags].tile and not sp.attr & 3 and flags == (0, 2, 1, 3)[piece]
+                entries.append((sp.x - ANIM_BASE + ST_LEFT, sp.y + 1 - ANIM_BASE, 4 * piece + q))
+                continue
+            key = (sp.tile, sp.attr & 3, bool(sp.attr & 0x40), bool(sp.attr & 0x80))
+            if key not in index:
+                index[key] = len(images)
+                images.append(sprite_image(tiles.get(sp.tile, bytes(16)), key[2], palettes[key[1]], plan, key[3]))
+            entries.append((sp.x - ANIM_BASE + ST_LEFT, sp.y + 1 - ANIM_BASE, index[key]))
+        x0, y0 = min(e[0] for e in entries), min(e[1] for e in entries)
+        box = (x0, max(e[0] for e in entries) + 8, y0, max(e[1] for e in entries) + 8)
+        record = b"".join(v.to_bytes(2, "big", signed=True) for v in box)
+        for e in entries:
+            record += b"".join(v.to_bytes(2, "big", signed=True) for v in e)
+        records.append(record + b"\xff\xff")
     offsets, at = [], 2 * len(records)
     for record in records:
         offsets.append(at)

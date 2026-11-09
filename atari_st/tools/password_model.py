@@ -132,3 +132,22 @@ def decode(text: str) -> State | None:
     if any(v >= 5 for v in s.spells) or any(v >= 21 or not VALID_ITEM[v] for v in s.items):
         return None
     return s
+
+
+# The save file (src/save.s): SAVE.SAV is the mantra's characters and a line end. Reading takes the first SAVE_READ bytes, the characters up to the first byte of
+# 32 or less (the line end, a space, the end of the text), and hands them to the entry screen's check, so a file that was edited or damaged is refused like a typed mantra.
+SAVE_NAME = "SAVE.SAV"
+SAVE_READ = 35
+
+
+def save_file(s: State) -> bytes:
+    return password(s).encode("ascii") + b"\r\n"
+
+
+def read_save(data: bytes) -> State | None:
+    text = bytearray()
+    for byte in data[:SAVE_READ]:
+        if byte <= 32:
+            break
+        text.append(byte)
+    return decode(text.decode("latin-1"))

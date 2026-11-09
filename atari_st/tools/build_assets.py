@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import behind
 import enemy_data as ed
 import faxanadu_gfx as gfx  # noqa: E402
 import faxanadu_maps as fm
@@ -92,7 +93,7 @@ def edge_table(rom: fr.Rom, a: fm.Area, ids: list[int], world: dict[int, list[in
 FLAG_ROOM = 6 * 2 * 208                  # the block flags of 6 screens (src/viewer.s: FLAG_SLOTS), made when asked for, behind the package
 PACKAGE_PARTS = ("palette", "screens", "neighbours", "blocking", "ladders", "doors", "edges", "block_index", "blocks", "hud_tiles", "hud_partial",
                  "hero_list", "hero_images", "hero_colours", "magic_anim", "magic_images", "block_flags",
-                 "enemy_places", "enemy_kinds", "enemy_anim", "enemy_images", "enemy_scripts", "screen_ids", "screen_events")
+                 "enemy_places", "enemy_kinds", "enemy_anim", "enemy_images", "enemy_scripts", "screen_ids", "screen_events", "behind")
 HEADER_WORDS = ("door_count", "screen_count", "edge_count", "music")
 
 
@@ -193,6 +194,7 @@ def main() -> int:
     for name, data in scripts.items():
         (args.out / name).write_bytes(data)
     (args.out / "iscript.inc").write_text(isc.equates(scripts), encoding="ascii")
+    (args.out / "npcwalk.bin").write_bytes(isc.walk_file(rom))        # the people's behaviour scripts (src/town.s)
     town = isc.town_file(scripts)
     town_small = lz.pack(town)                     # the file the program reads once at the start (src/town.s), packed and unpacked where it lies
     (args.out / "TOWN.DAT").write_bytes(town_small)
@@ -224,7 +226,7 @@ def main() -> int:
         plan, table, images = sc.build_area_blocks(rom, area, palette_index=pal_index, screens=screens, tiles_index=tiles_index,
                                                     extra=itempics.mattock_blocks(rom, area))
         hero_list, hero_images = sc.hero_assets(rom, who, pal_index, plan, args.camera)
-        magic, magic_images = sc.magic_anim_assets(rom, pal_index, plan)
+        magic, magic_images = sc.magic_anim_assets(rom, pal_index, plan, burst_poses=building is None)
         parts = {
             "palette": plan.words(), "screens": bytes(blocks), "neighbours": bytes(around),
             "blocking": b"", "ladders": b"",
@@ -235,6 +237,7 @@ def main() -> int:
             "magic_anim": magic, "magic_images": magic_images,
             **(ed.package_parts(rom, area, screens, pal_index, plan) if building is None else ed.package_parts(rom, area, [None], pal_index, plan)),
             "screen_ids": bytes(screens) if building is None else b"\0",      # the ROM's number of each screen of the package (the people of a screen are placed by it; src/town.s)
+            "behind": behind.behind_part(rom, ar, screens if building is None else [], tiles_index),
             "screen_events": bytes(ed.screen_event(rom, area, sid) for sid in screens) if building is None else b"\xff",      # each screen's special event id ($FF none, 1 a boss room, 2 the final boss; src/flow.s)
         }
         counts = dict(door_count=len(doors) // DOOR_BYTES, screen_count=len(screens), edge_count=len(edges) // EDGE_BYTES, music=music)

@@ -66,6 +66,10 @@ new_game:
     FAR_CALL timers_clear                   | Game_ClearTimedItems
     lea hero_flip(%pc), %a0
     move.w #1, (%a0)                        | facing right (Player_Flags $40)
+    movea.l #PALETTE, %a0                   | (nothing to fade: the intro's fade and the title have left the screen black)
+    moveq #15, %d0
+2:  clr.w (%a0)+
+    dbra %d0, 2b
     .if EOLIS_START_SCREEN >= 0
     move.w #EOLIS_START_SCREEN, %d0
     .else
@@ -176,7 +180,12 @@ flow_tick:
     bne.w 9f
     bsr.w end_fade_room
     bra.w 9f
-2:  move.w hero_x(%pc), %d1                 | EndGame_MovePlayerTowardKing: pressing Left, Left and A between x $50 and $60, Up in front of the King
+2:  lea end_count(%pc), %a1                 | the walk has a time limit: a hero who does not get there (stuck on the step) is taken to the King's message
+    subq.w #1, (%a1)
+    bne.s 21f
+    bsr.w end_walk_timeout
+    bra.w 9f
+21: move.w hero_x(%pc), %d1                 | EndGame_MovePlayerTowardKing: pressing Left, Left and A between x $50 and $60, Up in front of the King
     moveq #NES_UP, %d2
     cmpi.w #0x44, %d1
     bcs.s 3f
@@ -333,15 +342,15 @@ end_fade_room:
     movem.l %d0-%d3/%a0, -(%sp)
     moveq #1, %d1
 1:  moveq #4, %d0
-2:  bsr.w wait_vbl
-    dbra %d0, 2b
+    bsr.w end_wait
+    bcs.s 9f
     bsr.w death_fade                        | (d1 = the step, 4 is black)
     addq.w #1, %d1
     cmpi.w #5, %d1
     bne.s 1b
     move.w #119, %d0
-3:  bsr.w wait_vbl
-    dbra %d0, 3b
+    bsr.w end_wait
+    bcs.s 9f
     move.w #0x9D, %d1
     move.w #0x44, %d2
     moveq #17, %d3
@@ -351,7 +360,57 @@ end_fade_room:
     move.w #END_WALK, (%a0)
     lea end_times+4(%pc), %a0
     move.l frame_count(%pc), (%a0)
-    movem.l (%sp)+, %d0-%d3/%a0
+    lea end_count(%pc), %a0
+    move.w #END_WALK_FRAMES, (%a0)
+    lea end_stage(%pc), %a0
+    clr.w (%a0)
+9:  movem.l (%sp)+, %d0-%d3/%a0
+    rts
+
+| d0+1 frames in which the game stands still, with the keys read: Esc ends the wait at once (carry set; the main loop then leaves the program).
+end_wait:
+    movem.l %d0/%a0, -(%sp)
+1:  bsr.w wait_vbl
+    bsr.w input_poll
+    lea input_state(%pc), %a0
+    tst.b IN_QUIT(%a0)
+    bne.s 2f
+    dbra %d0, 1b
+    movem.l (%sp)+, %d0/%a0                 | (the flags are those of the tst: carry clear)
+    rts
+2:  movem.l (%sp)+, %d0/%a0
+    ori #1, %ccr
+    rts
+
+| The walk to the King has not got there in END_WALK_FRAMES (the ROM's takes about 150): his message is started from where he stands (the script of the room's
+| person), and when that does not end the walk within END_WALK_GRACE frames, or there is no person, the ending goes on to the outro.
+end_walk_timeout:
+    movem.l %d0/%a0-%a1, -(%sp)
+    lea end_stage(%pc), %a0
+    tst.w (%a0)
+    bne.s 3f
+    move.w #1, (%a0)
+    lea end_count(%pc), %a0
+    move.w #END_WALK_GRACE, (%a0)
+    .ifdef NPCS
+    lea npc_slots(%pc), %a1
+    moveq #NPC_SLOTS-1, %d0
+1:  cmpi.b #0xFF, E_ENT(%a1)
+    beq.s 2f
+    cmpi.b #0xFF, N_SCRIPT(%a1)
+    bne.s 4f
+2:  lea NPC_REC(%a1), %a1
+    dbra %d0, 1b
+    .endif
+3:  lea end_state(%pc), %a0
+    move.w #END_FINISH, (%a0)
+    .ifdef NPCS
+    bra.s 9f
+4:  moveq #0, %d0
+    move.b N_SCRIPT(%a1), %d0
+    bsr.w iscript_run
+    .endif
+9:  movem.l (%sp)+, %d0/%a0-%a1
     rts
 
 | ------------------------------------------------------------------------------------------------------------------ the fade
@@ -364,7 +423,7 @@ flow_fade_out:
     moveq #0, %d2
 1:  or.w (%a0)+, %d2
     dbra %d0, 1b
-    tst.w %d2
+    andi.w #0x777, %d2                      | (the unused bits of a palette register read as anything)
     beq.s 9f
     moveq #1, %d1
 2:  moveq #4, %d0
@@ -387,6 +446,8 @@ end_state:
     .word 0                                 | 0, END_FREEZE, END_WALK or END_FINISH
 end_count:
     .word 0
+end_stage:
+    .word 0                                 | the walk: 0, 1 once the time ran out and the King's message was started (or there was none)
 end_times:
     .long 0, 0                              | frame_count when the ending began and when the King's room was there
     .text

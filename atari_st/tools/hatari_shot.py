@@ -32,7 +32,9 @@ SCREEN_HEIGHT = 200
 VBL_MARGIN = 60
 
 
-def run_hatari(hatari: str, tos: Path, prg: Path, work: Path, vbls: int, ram: str, debug_script: str, trace: str | None) -> str:
+def run_hatari(hatari: str, tos: Path, prg: Path, work: Path, vbls: int, ram: str, debug_script: str, trace: str | None,
+               files: dict[str, bytes] | None = None, extra: list[str] | None = None) -> str:
+    """`files` are more files for the drive (SAVE.SAV), `extra` more command line options (`--protect-hd on`); the drive is `work/hd` afterwards."""
     hd = work / "hd"
     if hd.exists():
         shutil.rmtree(hd)
@@ -41,6 +43,8 @@ def run_hatari(hatari: str, tos: Path, prg: Path, work: Path, vbls: int, ram: st
     # Data files of the same build sit beside the PRG, as on a disk.
     for data in sorted(prg.parent.glob("*.DAT")):
         shutil.copy(data, hd / data.name)
+    for name, data in (files or {}).items():
+        (hd / name).write_bytes(data)
     script_path = work / "dbg.ini"
     script_path.write_text(debug_script, encoding="utf-8")
     command = [
@@ -52,6 +56,7 @@ def run_hatari(hatari: str, tos: Path, prg: Path, work: Path, vbls: int, ram: st
     ]
     if trace:
         command += ["--trace", trace]
+    command += extra or []
     env = dict(os.environ, SDL_VIDEODRIVER="dummy", SDL_AUDIODRIVER="dummy")
     result = subprocess.run(command, capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=600)
     return result.stdout + result.stderr

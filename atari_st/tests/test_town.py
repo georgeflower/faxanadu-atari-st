@@ -215,13 +215,15 @@ class TownTests(unittest.TestCase):
         self.assert_picture(got, expected)
 
     def test_a_guru_without_a_new_rank_says_peace_and_shows_the_mantra(self) -> None:
-        """Script $1C with no rank earned: message $22, then the mantra (16 characters a line) until A; the rank is as it was, the temple is set."""
+        """Script $1C with no rank earned: message $22, the choice of Save to disk or Show mantra (B shows it), then the mantra (16 characters a line) until A; the rank is as
+        it was, the temple is set."""
         import password_model as pm
 
         plan = pages(raw_message(self.rom, 0x22))
         mantra = pm.password(pm.State(1, 0, 0, 0, 0, 0, pm.UNSET, pm.UNSET, pm.UNSET))
         wait = START + plan[-1]["press"] + 60
-        ram, word, log = self.scene(0x1C, [], presses(plan), wait, "shots_guru_mantra")
+        show = [(START + plan[-1]["press"] + 20, "b", 1), (START + plan[-1]["press"] + 22, "b", 0)]
+        ram, word, log = self.scene(0x1C, [], presses(plan) + show, wait, "shots_guru_mantra")
         self.assertEqual((word("hero_title"), word("hero_spawn")), (0, 1))
         self.assertEqual(word.raw("pw_text", len(mantra) + 1), mantra.encode() + b"\0")
         rows = [mantra[i:i + 16].ljust(16) for i in range(0, 64, 16)]
@@ -266,6 +268,17 @@ class TownTests(unittest.TestCase):
                 f"VIEWER_DEFS={self.NPC_DEFS} {extra}".strip()]
 
     ENTER = [(599, "joy", 1), (602, "joy", 0)]          # Up at the door: the building (the picture is steady well before frame 720)
+    UPDATES_BEHIND = 187                                  # the people of the street have had (the frame - this) updates: the program makes its images first (en_counter)
+
+    @staticmethod
+    def box_hit(bounds: dict, state: list, hero_x: int, hero_y: int) -> bool:
+        """Player_CheckHandlePressUpOnNPC's box test of the hero against the people of `state` (person_key tuples)."""
+        for s in state:
+            left, top, width, height = bounds[s[0]]
+            left = left - 256 if left > 127 else left
+            if (hero_x + 11 - (s[1] + left)) & 0xFFFF < width + 11 and (hero_y + 27 - (s[3] + top)) & 0xFFFF < height + 27:
+                return True
+        return False
 
     def npc_layer(self, rows, npc: dict, entity: int, x: int, y: int, palette_set: int, camera: int, frame: int, faces_right: bool = False) -> None:
         """The person drawn into `rows` (slot numbers) from npc.bin's tiles and the slot map of the palette set: what the game's blitter makes of the pose."""
@@ -290,9 +303,152 @@ class TownTests(unittest.TestCase):
 
     RING = [(300, "inv", 29 << 8 | 0x80)]               # the Ring of Elf in hand: it opens the doors of key 6 (the magician, the martial artist, the King)
 
+    SLOT = 40                                                          # npc_slots: a record of the enemies' layout (30 bytes) and the person's own fields (src/town.s NPC_REC)
+
+    @staticmethod
+    def person_key(s) -> tuple:
+        return (s.ent, s.x, s.xf, s.y, s.yf, s.flags, s.phase, s.beh, s.arg1, s.d3, s.d2, s.internal, s.bxf, s.bxfull, s.byf, s.byfull)
+
+    def people_raw(self, word, count: int) -> list[tuple]:
+        """The people's slots as the program has them (the same fields in the same order as `person_key`; enemy.s E_xxx)."""
+        raw = word.raw("npc_slots", self.SLOT * count)
+        return [(r[0], r[2], r[3], r[4], r[5], r[1], r[6], r[7], r[8], r[10], r[11], r[9], r[13], r[12], r[29], r[28]) for r in (raw[i * self.SLOT:(i + 1) * self.SLOT] for i in range(count))]
+
+    def people_states(self, area: int, screen: int, layout: int, hero_x: int, hero_y: int, updates: int) -> list[list[tuple]]:
+        """What `tools/npc_model.py` (checked against the game in tests/test_npc.py) has for the people of a screen (a building: its id, and `layout` is the screen of area 4 whose picture it
+        has) after 0, 1, ... `updates` updates with the hero standing still: a list of the people's states for each count (the first person of the screen is the model's slot 7)."""
+        import copy
+
+        import enemy_model as em
+        import faxanadu_maps as fm
+        import npc_model as nm
+
+        props = fm.block_properties(self.rom, fm.area(self.rom, area))
+        free = next(b for b in range(256) if em.IMPASSABLE[props[b] & 15] == 0 and props[b] & 15 != em.LADDER)
+        blocks = bytes(fm.decode_screen(self.rom, fm.area(self.rom, area), layout)[:208]) + bytes([free]) * 48
+        eng = nm.engine(self.rom, area, screen, blocks, hero_x, hero_y)
+        count = len(nm.people(self.rom, area, screen))
+        out = []
+        for _ in range(updates + 1):
+            out.append([self.person_key(eng.sprites[7 - i]) for i in range(count)])
+            eng.update_all()
+        return out
+
+    def assert_people_as_model(self, word, states: list[list[tuple]], what: str) -> int:
+        """Every person is where the model puts him after some number n of updates (not before 60: they have walked), or where he was after n - 1 (a capture can fall between the updates of two
+        people: the first of the screen goes first); returns the n."""
+        count = len(states[0])
+        got = self.people_raw(word, count)
+        for n in range(len(states) - 1, 59, -1):
+            if all(got[i] in (states[n][i], states[n - 1][i]) for i in range(count)):
+                return n
+        self.fail(f"{what}: the people are {got}, the model's states run from {states[60]} to {states[-1]}")
+
+    def people_info(self, word, count: int = 2) -> list[dict]:
+        """The people's slots: entity ($FF: empty), script (the record's), x, y, flags, phase."""
+        raw = word.raw("npc_slots", self.SLOT * count)
+        out = []
+        for i in range(count):
+            r = raw[i * self.SLOT:(i + 1) * self.SLOT]
+            out.append(dict(ent=r[0], script=r[self.SLOT - 4], x=r[2], y=r[4], flags=r[1], phase=r[6]))
+        return out
+
+    def draw_people(self, rows, npc: dict, state: list[tuple], counter: int, palette_set: int, camera: int) -> None:
+        """The people of `state` (person_key tuples) drawn as the program draws them: the pose the kind's rule gives for the counter, mirrored as the kind says."""
+        import npc_model as nm
+
+        for s in state:
+            frame, _ = nm.appearance(s[0], s[6], s[5], counter)
+            self.npc_layer(rows, npc, s[0], s[1], s[3], palette_set, camera, frame, faces_right=bool(s[5] & 1))
+
+    def assert_people_shown(self, word, got, states: list[list[tuple]], make_expected, npc: dict, palette_set: int) -> None:
+        """The picture is `make_expected()` (the screen without the people) with the people drawn from the model's state: the one the program has, or the one before (a capture can
+        fall between a frame's update and its show), with the counter of that frame."""
+        count = len(states[0])
+        have = self.people_raw(word, count)
+        counter = word("en_counter")
+        tries, best = [], None
+        for n in range(1, len(states)):
+            if all(have[i] in (states[n][i], states[n - 1][i]) for i in range(count)):
+                tries += [(states[n] if have == states[n] else have, counter), (states[n - 1], counter - 1)]
+        self.assertTrue(tries, "the people are where the model has them")
+        seen = []
+        for state, ctr in tries:
+            if (state, ctr) in seen:
+                continue
+            seen.append((state, ctr))
+            expected = make_expected()
+            self.draw_people(expected, npc, state, ctr, palette_set, word("camera"))
+            bad = sum(1 for y in range(200) for x in range(320) if got[y][x] != expected[y][x])
+            best = bad if best is None else min(best, bad)
+            if not bad:
+                return
+        self.fail(f"pixels that differ from the picture with the people of the program's state or the one before: {best}")
+
+    def test_a_walker_in_the_street_walks_and_stops_as_the_game_does(self) -> None:
+        """Eolis screen 1: the walker $34 (script 1: walk 60 frames at 0.75 pixel, stand 30, face the hero) and on screen 6 the nurse-like $44 (script 5: move 80, stand 10, flip, face the
+        hero), the hero standing still: after n updates every slot is where the model says."""
+        for screen, hero in ((1, 144), (6, 16)):
+            with self.subTest(screen=screen):
+                ram, word, log = self.run_scenario(self.street_args(screen, f"{hero},144"), [], 700, "shots_npc_walk")
+                states = self.people_states(0, screen, screen, word("hero_x"), word("hero_y"), 800)
+                n = self.assert_people_as_model(word, states, f"screen {screen}")
+                self.assertGreater(len({st[0][1] for st in states[:n]}), 8, "he has moved")
+
+    def test_the_priest_and_the_doctor_stand_where_op_6_puts_them(self) -> None:
+        """Eolis screen 2, the door at x 80: building 2, the priest ($39, placed at x 32) stands at x 36 (his script adds 4 to his x: the box of Up and the picture are there); area 3 screen
+        0, the door at x 208: building 10, the doctor ($43, placed at x 112) stands at x 120 (adds 8) and the smoking man ($3D, at x 16) flips as his script says."""
+        for area, screen, door, ident, layout, want in ((0, 2, 80, 2, 1, {0: 36}), (3, 0, 208, 10, 3, {1: 120})):
+            with self.subTest(building=ident):
+                ram, word, log = self.run_scenario(self.building_args(screen, door, area=area), self.ENTER, 799, "shots_npc_op6")
+                self.assertEqual((word("cur_area"), word("building_id")), (4, ident))
+                states = self.people_states(4, ident, layout, word("hero_x"), word("hero_y"), 300)
+                self.assert_people_as_model(word, states, f"building {ident}")
+                got = self.people_raw(word, len(states[0]))
+                for i, x in want.items():
+                    self.assertEqual(got[i][1], x, f"building {ident}: person {i}'s x")
+
+    def test_the_king_steps_forward_when_the_hero_is_near_and_back_when_he_is_not(self) -> None:
+        """The King's room with the hero poked to x 48 (near: the script adds 8 to the King's x, 40, in the near picture) and to x 200 (far: he is back at 32): the model's state."""
+        got = {}
+        for hero in (48, 200):
+            with self.subTest(hero=hero):
+                ram, word, log = self.run_scenario(self.building_args(7, 128), self.RING + self.ENTER + [(720, "x", hero)], 799, "shots_npc_king_near")
+                self.assertEqual((word("cur_area"), word("building_id"), word("hero_x")), (4, 7, hero))
+                states = self.people_states(4, 7, 0, hero, word("hero_y"), 300)
+                self.assert_people_as_model(word, states, f"hero at {hero}")
+                got[hero] = self.people_info(word, 1)[0]["x"]
+        self.assertEqual(got, {48: 40, 200: 32})
+
+    def test_the_people_who_face_the_hero_turn_to_him(self) -> None:
+        """Eolis screen 6, the door at x 192 (building 5, the Ring opens it): the magic teacher ($3B, x 16) turns every frame to the hero, who is poked to x 220 (he faces right: bit 0
+        of the flags, which the mirror rule reads) and then to x 4 (left): the model's state."""
+        faces = {}
+        for hero in (220, 4):
+            with self.subTest(hero=hero):
+                ram, word, log = self.run_scenario(self.building_args(6, 192), self.RING + self.ENTER + [(720, "x", hero)], 799, "shots_npc_turn")
+                self.assertEqual((word("cur_area"), word("building_id"), word("hero_x")), (4, 5, hero))
+                states = self.people_states(4, 5, 9, hero, word("hero_y"), 300)
+                self.assert_people_as_model(word, states, f"hero at {hero}")
+                faces[hero] = self.people_info(word, 1)[0]["flags"] & 1
+        self.assertEqual(faces, {220: 1, 4: 0}, "he turns to the hero")
+
+    def test_up_at_a_person_who_has_walked_uses_where_he_is_now(self) -> None:
+        """In the King's room the King steps to x 40 when the hero is near: his box (left 0, width 48) is hit by a hero at x 87 ((87 + 11 - 40) < 48 + 11) and not by one at x 88; at the
+        place he is built at, x 32, 87 would be out (87 + 11 - 32 = 66)."""
+        plan = pages(raw_message(self.rom, 0x35))
+        start = 720 + 20 + 2
+        for hero, typed in ((87, True), (88, False)):
+            with self.subTest(hero=hero):
+                pokes = self.RING + self.talk_pokes(hero, hero_y=112)
+                ram, word, log = self.run_scenario(self.building_args(7, 128), pokes, start + plan[0]["frame"] + 10, "shots_npc_up_walked")
+                self.assertEqual(word("hero_x"), hero)
+                self.assertEqual((word("tb_vars+10"), word("tb_vars+12")) == (1, 0), typed, "the first page is typed and waits for A" if typed else "no script runs")
+
     def test_the_king_stands_in_his_room(self) -> None:
-        """Eolis screen 7, the door at x 128 (id 7, type 0: the Ring of Elf opens it): the King (entity $3A, script 8) stands at x 32, y 112 in the pose of either of his
-        two frames, facing right (mirrored: his rule 1), in the slots of palette set 17 (npc.bin); the rest of the room is the building's picture."""
+        """Eolis screen 7, the door at x 128 (id 7, type 0: the Ring of Elf opens it): the King (entity $3A, script 8) in his room: his script moved him to x 40 when the hero is near (it adds
+        8 to the x), at y 112 in the pose of either of his frames, facing right (mirrored: his rule 1), in the slots of palette set 17 (npc.bin); the rest of the room is the
+        building's picture."""
         import hatari_shot as hs
         import st_convert as sc
 
@@ -300,16 +456,15 @@ class TownTests(unittest.TestCase):
         script, x, y = self.person(npc, 4, 7, 0x3A)
         ram, word, log = self.run_scenario(self.building_args(7, 128), self.RING + self.ENTER, 799, "shots_npc_king")
         self.assertEqual((word("cur_area"), word("cur_pal"), word("building_id")), (4, 17, 7))
-        slot = word.raw("npc_slots", 16)
-        self.assertEqual((slot[0], slot[1], int.from_bytes(slot[2:4], "big"), int.from_bytes(slot[4:6], "big")), (0x3A, script, x, y))
-        self.assertEqual(word.raw("npc_slots", 32)[16], 0xFF, "no second person in this room")
+        slots = self.people_info(word, 2)
+        self.assertEqual((slots[0]["ent"], slots[0]["script"], slots[0]["y"]), (0x3A, script, y))
+        self.assertIn(slots[0]["x"], (x, x + 8))
+        self.assertEqual(slots[1]["ent"], 0xFF, "no second person in this room")
+        states = self.people_states(4, 7, 0, word("hero_x"), word("hero_y"), 300)
+        self.assert_people_as_model(word, states, "the King")
         got = hs.decode_screen(ram, hs.video_base(log))
-        poses = []
-        for frame in (0, 1):
-            expected = sc.expected_screen(self.rom, 4, 0, word("camera"), palette_index=17, tiles_index=6, hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 255, 0, word("hero_flip") != 0))
-            self.npc_layer(expected, npc, 0x3A, x, y, 17, word("camera"), frame)
-            poses.append(sum(1 for yy in range(200) for xx in range(320) if got[yy][xx] != expected[yy][xx]))
-        self.assertEqual(min(poses), 0, f"pixels that differ from the King's pose 0 / pose 1: {poses}")
+        self.assert_people_shown(word, got, states, lambda: sc.expected_screen(self.rom, 4, 0, word("camera"), palette_index=17, tiles_index=6,
+                                                                              hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 255, 0, word("hero_flip") != 0)), npc, 17)
 
     def talk_pokes(self, hero_x: int, at: int = 720, hero_y: int | None = None):
         """He stands at `hero_x` (and `hero_y`) in the building at frame `at`, and Up is pressed (the script starts in the next frame). The King sits on a step: to
@@ -319,12 +474,12 @@ class TownTests(unittest.TestCase):
     def test_a_door_in_another_town_puts_the_roms_people_in_the_building(self) -> None:
         """Area 3, the towns after Eolis: screen 0's door at block $94 leads to the building with the id 8 (its type, 4, is the number of another room whose person has the script
         $0D; the ROM's id gives the armour salesman, entity $37 at x 48 with script $19); screen 1's door at block $95 has the id 11 (type 1: the people of room 1 would stand
-        there): the priest, entity $39 at x 32 with script $1C. The ids are the first bytes of the ROM's door records (tests/test_disk.py checks every door)."""
-        for screen, x, ident, want in ((0, 64, 8, [(0x37, 0x19, 48)]), (1, 80, 11, [(0x39, 0x1C, 32)])):
+        there): the priest, entity $39 at x 32 with script $1C, who stands at x 36 (his script adds 4). The ids are the first bytes of the ROM's door records (tests/test_disk.py checks
+        every door)."""
+        for screen, x, ident, want in ((0, 64, 8, [(0x37, 0x19, 48)]), (1, 80, 11, [(0x39, 0x1C, 36)])):
             ram, word, log = self.run_scenario(self.building_args(screen, x, area=3), self.ENTER, 760, f"shots_npc_town_{ident}")
             self.assertEqual((word("cur_area"), word("building_id")), (4, ident), f"the door of screen {screen}")
-            raw = word.raw("npc_slots", 32)
-            got = sorted((raw[16 * i], raw[16 * i + 1], int.from_bytes(raw[16 * i + 2:16 * i + 4], "big")) for i in range(2) if raw[16 * i] != 0xFF)
+            got = sorted((i["ent"], i["script"], i["x"]) for i in self.people_info(word, 2) if i["ent"] != 0xFF)
             self.assertEqual(got, sorted(want), f"the people of building {ident}")
 
     def test_up_at_the_king_gives_the_message_and_1500_gold(self) -> None:
@@ -508,8 +663,8 @@ class TownTests(unittest.TestCase):
         self.assert_portrait(ram, word, log, por, 8, 7)
 
     def test_a_room_with_two_people_draws_both_in_their_own_colours(self) -> None:
-        """Eolis screen 2, the door at x 224 (id 1, type 6, the house): a person of kind $3F (script 9) at x 64 and one of kind $45 (script 10) at x 144, each in the pose of either of its
-        frames (they turn by the counter, a pose for each), in the slots of the building's palette set (npc.bin); the room is the building's picture."""
+        """Eolis screen 2, the door at x 224 (id 1, type 6, the house): a person of kind $3F (script 9, stands) at x 64 and one of kind $45 (script 10, walks) from x 144, each in the pose
+        the model has for the program's counter, in the slots of the building's palette set (npc.bin); the room is the building's picture."""
         import faxanadu_maps as fm
         import hatari_shot as hs
         import st_convert as sc
@@ -518,48 +673,60 @@ class TownTests(unittest.TestCase):
         info = fm.building(self.rom, 6)
         ram, word, log = self.run_scenario(self.building_args(2, 224), self.ENTER, 799, "shots_npc_room")
         self.assertEqual((word("cur_area"), word("building_id"), word("cur_pal")), (4, 1, info["palette"]))
-        slots = word.raw("npc_slots", 32)
-        self.assertEqual((slots[0], slots[16]), (0x3F, 0x45))
+        slots = self.people_info(word, 2)
+        self.assertEqual((slots[0]["ent"], slots[1]["ent"], slots[0]["x"]), (0x3F, 0x45, 64))
+        states = self.people_states(4, 1, 6, word("hero_x"), word("hero_y"), 300)
+        self.assert_people_as_model(word, states, "the room")
         got = hs.decode_screen(ram, hs.video_base(log))
-        best = None
-        for first in (0, 1):
-            for second in (0, 1):
-                expected = sc.expected_screen(self.rom, 4, 6, word("camera"), palette_index=info["palette"], tiles_index=info["tiles"],
-                                              hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 255, 0, word("hero_flip") != 0))
-                for entity, x, y, frame in ((0x3F, 64, 128, first), (0x45, 144, 128, second)):
-                    self.npc_layer(expected, npc, entity, x, y, info["palette"], word("camera"), frame)
-                bad = sum(1 for yy in range(200) for xx in range(320) if got[yy][xx] != expected[yy][xx])
-                best = bad if best is None else min(best, bad)
-        self.assertEqual(best, 0, "pixels that differ from the best of the four pose pairs")
+        self.assert_people_shown(word, got, states, lambda: sc.expected_screen(self.rom, 4, 6, word("camera"), palette_index=info["palette"], tiles_index=info["tiles"],
+                                                                              hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 255, 0, word("hero_flip") != 0)), npc, info["palette"])
 
     def street_args(self, screen: int, hero: str, gold: int = 0):
         return ["ALL=1", "AREA=0", f"SCREEN={screen}", f"HERO={hero},0,255,255,0,1", "WORLD=1", f"HUD=16,0,0,{gold},0", f"VIEWER_DEFS={self.NPC_DEFS} --defsym NO_ENEMIES=1"]
 
-    def test_a_person_stands_in_the_street_in_the_outside_colours(self) -> None:
-        """Eolis screen 1: the walker $34 (script 1) at x 192, y 144 stands still (his walk is not done), in frame 0 and not mirrored (he faces left), in the slots of
-        palette set 0; the rest is the screen's picture with the hero."""
+    def test_a_person_walks_in_the_street_in_the_outside_colours(self) -> None:
+        """Eolis screen 1: the walker $34 (script 1) is where the model has him after the program's updates, in the pose and the mirror the model picks, in the slots of palette set 0;
+        the rest is the screen's picture with the hero."""
         import hatari_shot as hs
         import st_convert as sc
 
         npc, _ = self.town_files()
-        script, x, y = self.person(npc, 0, 1, 0x34)
         ram, word, log = self.run_scenario(self.street_args(1, "144,144"), [], 700, "shots_npc_street")
         got = hs.decode_screen(ram, hs.video_base(log))
-        expected = sc.expected_screen(self.rom, 0, 1, word("camera"), hero=sc.Hero(144, 144, 0, 255, 255, 0, True))
-        self.npc_layer(expected, npc, 0x34, x, y, 0, word("camera"), 0)
-        self.assert_picture(got, expected)
+        states = self.people_states(0, 1, 1, 144, 144, 800)
+        self.assert_people_as_model(word, states, "the street")
+        self.assert_people_shown(word, got, states, lambda: sc.expected_screen(self.rom, 0, 1, word("camera"), hero=sc.Hero(144, 144, 0, 255, 255, 0, True)), npc, 0)
 
     def test_up_at_a_person_in_the_street_starts_his_script(self) -> None:
-        """He walks to x 192 (the walker's box: left -8, width 32) and presses Up alone: script 1 (no gold): message $27 is typed on the box at the top of the window
-        (the hero stands at y 144: no portrait); Up with Left held does nothing."""
+        """The hero stands at x 144 while the walker $34 (the box: left -8, width 32) walks by: Up alone, newly pressed, when the model has his box over the hero's for a while
+        (`box_hit`): script 1 (no gold): message $27 is typed on the box at the top of the window (the hero stands at y 144: no portrait). Up with Left held, a few frames before,
+        does nothing."""
+        npc, _ = self.town_files()
+        bounds = {k["entity"]: k["bounds"] for k in npc["kinds"]}
+        states = self.people_states(0, 1, 1, 144, 144, 800)
+        hit = [n for n in range(800) if self.box_hit(bounds, states[n], 144, 144)]
+        first = next(f for f in range(660, 780) if all(f - self.UPDATES_BEHIND + d in hit for d in range(-14, 6)))          # (a window of updates around the frame: where the frame falls is not exact)
         plan = pages(raw_message(self.rom, 0x27))
-        pokes = [(620, "x", 192), (640, "joy", 1 | 4), (643, "joy", 0), (660, "joy", 1), (663, "joy", 0)]
-        start = 660 + 2
+        pokes = [(first - 20, "joy", 1 | 4), (first - 17, "joy", 0), (first, "joy", 1), (first + 3, "joy", 0)]
+        start = first + 2
         ram, word, log = self.run_scenario(self.street_args(1, "144,144"), pokes, start + plan[0]["frame"] + 10, "shots_npc_up")
         self.assertEqual((word("tb_vars+10"), word("tb_vars+12")), (1, 0), "the first page is typed and waits for A")
         rows = word.raw("tb_rows", 64).decode("latin-1")
         self.assertEqual([rows[i:i + 16] for i in range(0, 64, 16)], plan[0]["rows"])
         self.assertEqual(word("portrait_k"), -1, "a person in the street has no portrait")
+
+    def test_a_walker_in_front_of_a_door_does_not_keep_the_hero_out(self) -> None:
+        """Eolis screen 1, the hero at the door at x 48 while the walker $34 walks by (the model has his box over the hero's for a while): Up opens the door (building 0) and does
+        not start the walker's script: in the game the door comes first (Player_CheckHandleEnterDoor is in the player's update, the sprites' collision handlers after it; jsnes: Up
+        at a door with a person over the hero enters it)."""
+        npc, _ = self.town_files()
+        bounds = {k["entity"]: k["bounds"] for k in npc["kinds"]}
+        states = self.people_states(0, 1, 1, 48, 144, 800)
+        hit = [n for n in range(800) if self.box_hit(bounds, states[n], 48, 144)]
+        first = next(f for f in range(599, 780) if all(f - self.UPDATES_BEHIND + d in hit for d in range(-14, 6)))
+        ram, word, log = self.run_scenario(self.building_args(1, 48), [(first, "joy", 1), (first + 3, "joy", 0)], first + 130, "shots_npc_door")
+        self.assertEqual((word("cur_area"), word("building_id")), (4, 0), "the door opened")
+        self.assertEqual(word("tb_vars+10"), 0, "no message was typed")
 
     def test_touching_the_intro_trigger_in_eolis_starts_the_intro_once(self) -> None:
         """Eolis screen 0: the touch trigger (entity $4F, script 0) at x 64 runs the intro message $26 when the hero stands in it (the game starts there); when the message
@@ -576,8 +743,8 @@ class TownTests(unittest.TestCase):
         self.assert_picture(got, sc.expected_screen(self.rom, 0, 0, word("camera"), hero=sc.Hero(64, 144, 0, 255, 255, 0, True)))
 
     def test_the_people_go_with_a_scroll_and_come_with_the_next_screen(self) -> None:
-        """He walks off the left edge of Eolis screen 1: the walker of screen 1 is gone, screen 2's person (kind $45, script 3, x 112) is there once the scroll is done, drawn
-        in either of its two poses over the new screen's picture."""
+        """He walks off the left edge of Eolis screen 1: the walker of screen 1 is gone, screen 2's person (kind $45, script 3, from x 112) is there once the scroll is done, where
+        the model has her, drawn over the new screen's picture."""
         import hatari_shot as hs
         import st_convert as sc
 
@@ -586,19 +753,16 @@ class TownTests(unittest.TestCase):
         args = ["ALL=1", "AREA=0", "SCREEN=1", "HERO=16,144,0,255,255,0,1", "WORLD=1", f"VIEWER_DEFS={self.NPC_DEFS} --defsym NO_ENEMIES=1"]
         ram, word, log = self.run_scenario(args, [(599, "joy", 4), (660, "joy", 0)], 799, "shots_npc_scroll")
         self.assertEqual(word("cur_screen"), 2)
-        slot = word.raw("npc_slots", 32)
-        self.assertEqual((slot[0], slot[1], int.from_bytes(slot[2:4], "big"), int.from_bytes(slot[4:6], "big"), slot[16]), (0x45, script, x, y, 0xFF))
+        slots = self.people_info(word, 2)
+        self.assertEqual((slots[0]["ent"], slots[0]["script"], slots[0]["y"], slots[1]["ent"]), (0x45, script, y, 0xFF))
+        states = self.people_states(0, 2, 2, word("hero_x"), word("hero_y"), 300)
+        self.assert_people_as_model(word, states, "the next screen")
         got = hs.decode_screen(ram, hs.video_base(log))
-        poses = []
-        for frame in (0, 1):
-            expected = sc.expected_screen(self.rom, 0, 2, word("camera"), hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 255, 0, word("hero_flip") != 0))
-            self.npc_layer(expected, npc, 0x45, x, y, 0, word("camera"), frame)
-            poses.append(sum(1 for yy in range(200) for xx in range(320) if got[yy][xx] != expected[yy][xx]))
-        self.assertEqual(min(poses), 0, f"pixels that differ from the pose 0 / pose 1: {poses}")
+        self.assert_people_shown(word, got, states, lambda: sc.expected_screen(self.rom, 0, 2, word("camera"), hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 255, 0, word("hero_flip") != 0)), npc, 0)
 
     def test_walking_out_of_a_building_brings_the_street_back_with_its_people(self) -> None:
-        """In the King's room, off its right side: Eolis screen 1 again, the walker $34 at x 192 in the pose of frame 0 in the outside colours (the room's palette with its
-        people's colours is gone), the people of the room are not drawn."""
+        """In the building of Eolis screen 1's door (x 48), off its right side: screen 1 again, the walker $34 where the model has him (the hero stands at the door), in the outside
+        colours (the room's palette with its people's colours is gone), the people of the room are not drawn."""
         import hatari_shot as hs
         import st_convert as sc
 
@@ -607,12 +771,12 @@ class TownTests(unittest.TestCase):
         pokes = self.ENTER + [(699, "x", 240), (700, "joy", 8), (703, "joy", 0)]
         ram, word, log = self.run_scenario(self.building_args(1, 48), pokes, 899, "shots_npc_out")
         self.assertEqual((word("cur_area"), word("cur_screen")), (0, 1))
-        slot = word.raw("npc_slots", 32)
-        self.assertEqual((slot[0], slot[1], slot[16]), (0x34, script, 0xFF))
+        slots = self.people_info(word, 2)
+        self.assertEqual((slots[0]["ent"], slots[0]["script"], slots[1]["ent"]), (0x34, script, 0xFF))
+        states = self.people_states(0, 1, 1, word("hero_x"), word("hero_y"), 300)
+        self.assert_people_as_model(word, states, "the street again")
         got = hs.decode_screen(ram, hs.video_base(log))
-        expected = sc.expected_screen(self.rom, 0, 1, word("camera"), hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 255, 0, word("hero_flip") != 0))
-        self.npc_layer(expected, npc, 0x34, x, y, 0, word("camera"), 0)
-        self.assert_picture(got, expected)
+        self.assert_people_shown(word, got, states, lambda: sc.expected_screen(self.rom, 0, 1, word("camera"), hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 255, 0, word("hero_flip") != 0)), npc, 0)
 
 
 if __name__ == "__main__":

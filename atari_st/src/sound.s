@@ -241,6 +241,7 @@ sound_silence:
     movem.l (%sp)+, %d0/%a1
     rts
 
+    .ifndef NEWGAME                         | a test key: not in the disk build
 | Debug keys. A sound starts when its key goes down and the key is not the one that started the last (SND_LASTKEY).
 sound_keys:
     movem.l %d0-%d3/%a0-%a1, -(%sp)
@@ -300,3 +301,4 @@ sound_keys:
     bsr.w sound_play_sfx
 9:  movem.l (%sp)+, %d0-%d3/%a0-%a1
     rts
+    .endif

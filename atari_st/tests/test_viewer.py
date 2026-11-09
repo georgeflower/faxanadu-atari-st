@@ -667,6 +667,18 @@ class ViewerTests(unittest.TestCase):
         flip = word(700, "hero_flip") ^ ((word(700, "hero_mtick") >> 4) & 1)
         expected = sc.expected_screen(rom, 2, 0, 40, state=dict(hp=16, mp=0, experience=0, gold=0, seconds=0),
                                       hero=sc.Hero(word(700, "hero_x"), word(700, "hero_y"), 0, 255, 0, 7, bool(flip)))
+        # the ladder of Mist screen 0 is under blocks that sprites go behind (property 4): the hero's pixels over their opaque pixels are hidden (src/enemy.s behind_set)
+        import behind
+        hx, hy = word(700, "hero_x"), word(700, "hero_y")
+        halves = behind.halves(rom, a, 0, hx, hy)
+        opaque = behind.opaque_screen(rom, a, 0, True)
+        background = sc.expected_screen(rom, 2, 0, 40, state=dict(hp=16, mp=0, experience=0, gold=0, seconds=0))
+        for y in range(200):
+            for x in range(320):
+                if expected[y][x] != background[y][x]:
+                    line, col = y + 40, x - sc.ST_LEFT
+                    if 0 <= col < 256 and 32 <= line < 240 and halves & (1 << (((col - hx) >> 3) & 1)) and opaque[line - 32][col]:
+                        expected[y][x] = background[y][x]
         rows = hs.decode_screen((work / "ram700.bin").read_bytes(), shown)
         bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
@@ -834,6 +846,9 @@ class ViewerTests(unittest.TestCase):
                 text = f"memwrite ${base + sym['enemies'] + 7 * 30 + 15:x} 0x{value:02x}\ncont\n"
             elif what.startswith("w:"):                                # a word of the program's own data by its label: "w:hourglass"
                 text = f"memwrite ${base + sym[what[2:]]:x} 0x{(value >> 8) & 255:02x} 0x{value & 255:02x}\ncont\n"
+            elif what.startswith("mem:"):                              # a byte of the program's own data by its label and offset: "mem:enemies+210"
+                symbol, _, offset = what[4:].partition("+")
+                text = f"memwrite ${base + sym[symbol] + int(offset or 0):x} 0x{value & 255:02x}\ncont\n"
             elif what == "hp6":                                        # the same for the sprite in slot 6
                 text = f"memwrite ${base + sym['enemies'] + 6 * 30 + 15:x} 0x{value:02x}\ncont\n"
             elif what == "key":                                        # any key by scan code: value = scan code << 8 | 1 (down) or 0 (up)
@@ -916,9 +931,12 @@ class ViewerTests(unittest.TestCase):
         import hatari_shot as hs
         import st_convert as sc
 
+        import behind
+
         rom = fr.Rom(ROM)
         for area, screen, hero, vbl in scenes:
             with self.subTest(area=area, screen=screen):
+                opaque = behind.opaque_screen(rom, fm.area(rom, area), screen, True)
                 pal = fm.area(rom, area).palette_index
                 plan = sc.plan_for_set(rom, pal)
                 palettes = sc.sprite_palettes(rom, pal)
@@ -941,6 +959,7 @@ class ViewerTests(unittest.TestCase):
                             continue
                         app = fs.appearance(rom, ed.entity(rom, sp.ent)["appearance"] + em.appearance_offset(sp.ent, sp.phase, counter, sp.d2, sp.internal), "TILEINFO_ENTITY_ADDRS")
                         layer = fs.sprite_layer(fs.place(app, sp.x, sp.y, masks[i]), fs.entity_tiles(rom, sp.ent), palettes)
+                        layer = behind.drop_behind(layer, sp.x, behind.halves(rom, fm.area(rom, area), screen, sp.x, sp.y), opaque)      # (a column over a block that sprites go behind: src/enemy.s behind_image)
                         for (x, line), c in layer.items():
                             y = line - word("camera")
                             if sc.ST_TOP <= y < 200 and sc.ST_LEFT <= x + sc.ST_LEFT < sc.ST_LEFT + 256:
@@ -975,22 +994,37 @@ class ViewerTests(unittest.TestCase):
         rom = fr.Rom(ROM)
         for area, screen, hero, vbl in scenes:
             with self.subTest(area=area, screen=screen):
-                ram, word, _ = self.run_scenario(["ALL=1", f"AREA={area}", f"SCREEN={screen}", f"HERO={hero},0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], vbl, "shots_enemy")
-                n = word("en_counter")
-                self.assertGreater(n, 60)
-                eng = self.enemy_engine(rom, area, screen, word)
-                import copy
-                for _ in range(n - 1):
+                # (the passes of a Mist screen take longer where sprites are drawn behind the background (src/enemy.s behind_image) and some frames are late: the capture then
+                # falls in the middle of a pass now and then, with a slot half updated; the next VBL is a pass boundary again. So: 15 VBLs more when there were
+                # too few passes, and up to six tries in all.)
+                late = 0
+                for attempt in range(6):
+                    ram, word, _ = self.run_scenario(["ALL=1", f"AREA={area}", f"SCREEN={screen}", f"HERO={hero},0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], vbl + late + attempt, "shots_enemy")
+                    n = word("en_counter")
+                    if n <= 60 and area == 2 and attempt < 5:
+                        late += 15
+                        continue
+                    self.assertGreater(n, 60)
+                    eng = self.enemy_engine(rom, area, screen, word)
+                    import copy
+                    for _ in range(n - 1):
+                        eng.update_all()
+                    before = copy.deepcopy(eng.sprites)
                     eng.update_all()
-                before = copy.deepcopy(eng.sprites)
-                eng.update_all()
-                raw = word.raw("enemies", 8 * 30)
-                for i, s in enumerate(eng.sprites):
-                    r = raw[i * 30:(i + 1) * 30]
-                    got = (r[0], r[2], r[3], r[4], r[5], r[1], r[6], r[7], r[8], r[10], r[11], r[9], r[13], r[12], r[29], r[28])
-                    key = lambda s: (s.ent, s.x, s.xf, s.y, s.yf, s.flags, s.phase, s.beh, s.arg1, s.d3, s.d2, s.internal, s.bxf, s.bxfull, s.byf, s.byfull)
-                    # (a frame that takes longer than a VBL can be captured in the middle of the update, highest slot first: a slot not reached yet is as it was after n - 1)
-                    self.assertIn(got, (key(s), key(before[i])), f"slot {i} after {n} updates")
+                    raw = word.raw("enemies", 8 * 30)
+                    wrong = None
+                    for i, s in enumerate(eng.sprites):
+                        r = raw[i * 30:(i + 1) * 30]
+                        got = (r[0], r[2], r[3], r[4], r[5], r[1], r[6], r[7], r[8], r[10], r[11], r[9], r[13], r[12], r[29], r[28])
+                        key = lambda s: (s.ent, s.x, s.xf, s.y, s.yf, s.flags, s.phase, s.beh, s.arg1, s.d3, s.d2, s.internal, s.bxf, s.bxfull, s.byf, s.byfull)
+                        # (a frame that takes longer than a VBL can be captured in the middle of the update, highest slot first: a slot not reached yet is as it was after n - 1)
+                        if got not in (key(s), key(before[i])):
+                            wrong = f"slot {i} after {n} updates: {got} is neither {key(s)} nor {key(before[i])}"
+                            break
+                    if wrong is None:
+                        break
+                    if attempt == 5 or area != 2:
+                        self.fail(wrong)
 
     def test_the_enemies_move_as_the_model_does_1(self) -> None:
         self.enemies_move(self.ENEMY_SCENES[0::2])

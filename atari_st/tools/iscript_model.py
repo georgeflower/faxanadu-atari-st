@@ -7,7 +7,8 @@ State: gold (24 bit), power, magic, title, next title, spawn point, special item
 is selected in each. The ROM's names are used in the comments.
 
 Buttons (`policy`): "A" presses A whenever a script waits (every question is a yes, the first entry of every shop or sell menu is chosen, the Buy of the buy-or-sell menu);
-"BA" presses B first: a message that can be skipped and a question end the script, so does every menu; a message that cannot be skipped goes on with A.
+"BA" presses B first: a message that can be skipped and a question end the script, so does every menu; a message that cannot be skipped goes on with A; "SA" is "A" with Down
+pressed in the buy-or-sell menu first: the cursor is on Sell, and A there skips the address and goes on with the next action (the shop scripts have the SELL_MENU there).
 
 `run` returns the actions run (the ROM address of each, as `IScripts_InvokeNextAction` fetches them; an action that ends the script by itself, as B in a message does,
 adds nothing), the messages shown, in order, and the state. Nothing is timed: the model does what a script does, not how long it takes.
@@ -213,7 +214,7 @@ def run(script: Script, ident: int, state: State, policy: str = "A", limit: int 
             messages.append(BUY_OR_SELL)
             if b_first:
                 break
-            pc = script.word(at)                                                # (A on Buy)
+            pc = at + 2 if policy == "SA" else script.word(at)                  # (A on Buy: the address; on Sell: the next action, IScripts_SkipAddrAndInvoke)
         elif op == 0x10:                                                        # CONSUME_ITEM
             remove_item(s, script.byte(at))
             pc = at + 1

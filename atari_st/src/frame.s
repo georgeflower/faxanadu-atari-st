@@ -257,7 +257,7 @@ input_poll:
     bra.s 15b
 18:
     .ifdef BATCH
-    move.w auto_pad(%pc), %d1               | (tests) the buttons pressed by themselves: 4 frames down, 4 up; 1: A, 2: B and then A
+    move.w auto_pad(%pc), %d1               | (tests) the buttons pressed by themselves: 4 frames down, 4 up; 1: A, 2: B and then A, 3: A (Sell is chosen by town.s)
     beq.s 16f
     move.l frame_count(%pc), %d3
     btst #2, %d3
