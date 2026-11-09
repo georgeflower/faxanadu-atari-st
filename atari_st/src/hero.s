@@ -294,6 +294,7 @@ hero_draw_part:
     sub.w camera(%pc), %d1
     add.w (%a6)+, %d1
     move.w (%a6)+, %d2
+    move.w %d2, %d3                         | (the image number, for dissolve_image)
     mulu.w #SPRITE_IMAGE_BYTES, %d2
     movea.l hero_ram(%pc), %a1
     lea HERO_IMAGES_AT(%a1), %a1
@@ -303,7 +304,8 @@ hero_draw_part:
     bsr.w dissolve_image                    | (only while he dies)
 2:  move.w behind_v(%pc), %d2
     beq.s 3f
-    bsr.w behind_image                      | (only when a half of him is behind the background)
+    bsr.w behind_tile                       | (only when a half of him is behind the background)
+    bra.s 1b
 3:  bsr.w en_blit
     bra.s 1b
 9:  rts

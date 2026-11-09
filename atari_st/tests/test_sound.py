@@ -72,13 +72,32 @@ def noise_only_sfx_states() -> list:
     return out
 
 
+def pulse_sfx_states() -> list:
+    out = []
+    for i in range(8):
+        s = silent()
+        s[0] = [300 + 9 * i, 9, 2]
+        out.append(s)
+    return out
+
+
+def handler_note(first: int, last: int, index: int, length: int) -> list:
+    """SoundEffect_HandlerIndex after each frame of a recording: the effect's index from frame `first` to frame `last`, then 0."""
+    return [index if first <= i <= last else 0 for i in range(length)]
+
+
 def write_recordings(directory: Path) -> None:
     states = song_states()
     (directory / "m1.json").write_text(json.dumps({"musicCurrent": [0x81] * len(states), "state": states}))
     ending = song_states(1)[:30]
     (directory / "m2.json").write_text(json.dumps({"musicCurrent": [0x82] * 28 + [0, 0], "state": ending}))
-    (directory / "s1.json").write_text(json.dumps({"state": sfx_states() + [silent()] * 5}))
-    (directory / "s2.json").write_text(json.dumps({"state": noise_only_sfx_states() + [silent()] * 3}))
+    # a recording's frame 0 is the one in which the effect was asked for: silent, the engine starts it at the next interrupt
+    s1 = [silent()] + sfx_states() + [silent()] * 5
+    (directory / "s1.json").write_text(json.dumps({"state": s1, "handler": handler_note(1, 9, 0x40, len(s1))}))
+    s2 = [silent()] + noise_only_sfx_states() + [silent()] * 3
+    (directory / "s2.json").write_text(json.dumps({"state": s2, "handler": handler_note(1, 4, 0x20, len(s2))}))
+    s3 = [silent()] + pulse_sfx_states() + [silent()] * 3
+    (directory / "s3.json").write_text(json.dumps({"state": s3, "handler": handler_note(1, 9, 0x60, len(s3))}))
 
 
 class ConverterTests(unittest.TestCase):
@@ -113,9 +132,9 @@ class ConverterTests(unittest.TestCase):
     def test_a_song_survives_the_packing(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             write_recordings(Path(d))
-            data, info = bs.build(Path(d), 2, 2)
-        self.assertEqual(struct.unpack_from(">HH", data, 0), (2, 2))
-        offsets = [struct.unpack_from(">L", data, 4 + 4 * i)[0] for i in range(4)]
+            data, info = bs.build(Path(d), 2, 3)
+        self.assertEqual(struct.unpack_from(">HH", data, 0), (2, 3))
+        offsets = [struct.unpack_from(">L", data, 4 + 4 * i)[0] for i in range(5)]
         self.assertTrue(all(o % 2 == 0 for o in offsets))
         frames, loop_left, loop_offset = struct.unpack_from(">HHL", data, offsets[0])
         self.assertEqual((frames, loop_left), (60, 20))
@@ -124,6 +143,10 @@ class ConverterTests(unittest.TestCase):
         self.assertEqual(bs.parse_song(data, offsets[0]), expected)
         # the loop point is stored whole: the 68000 jumps there without having seen the frames before
         self.assertEqual(data[offsets[0] + 8 + loop_offset], 0xFF)
+        # a sound effect: its frame count, the handler index, the busy ticks; then the frames
+        count, priority, busy = struct.unpack_from(">HBB", data, offsets[2])
+        self.assertEqual((count, priority, busy), (9, 0x40, 9))
+        self.assertEqual(data[offsets[2] + 4:offsets[2] + 16], bs.sfx_frames({"state": [silent()] + sfx_states()})[0])
         # a song that ends: no loop; the silence at its end is cut and one silent frame stays
         frames, loop_left, _ = struct.unpack_from(">HHL", data, offsets[1])
         self.assertEqual(loop_left, 0)
@@ -133,11 +156,40 @@ class ConverterTests(unittest.TestCase):
         self.assertEqual(parsed[-1][7:11], b"\xFF\0\0\0")
 
     def test_a_sound_effect_takes_the_channels_it_uses_from_its_first_sound_to_its_last(self) -> None:
-        frames = bs.sfx_frames({"state": sfx_states() + [silent()] * 5})
-        self.assertEqual(len(frames), 9)                                                # trailing silence cut
+        frames = bs.sfx_frames({"state": [silent()] + sfx_states() + [silent()] * 5})
+        self.assertEqual(len(frames), 9)                                                # frame 0 (the request) and the trailing silence are cut
         masks = [f[11] for f in frames]
         self.assertEqual(masks, [2, 2, 2, 2 | 8, 2 | 8, 2 | 8, 8, 8, 8])
+        self.assertEqual(frames[0][:11], bs.ym_frame(sfx_states()[0])[0])
         self.assertEqual(bs.sfx_frames({"state": [silent()] * 4}), [])
+
+    def test_the_engines_note_gives_the_priority_and_how_long_the_effect_is_busy(self) -> None:
+        rec = {"handler": [0, 0x44, 0x44, 0x44, 0, 0, 0]}
+        self.assertEqual(bs.sfx_engine(rec), (0x44, 3))                                 # runs at ticks 1 to 3 of the recording, the engine is done at 4
+        self.assertEqual(bs.sfx_engine({"handler": [0, 0x10, 0x10]}), (0x10, 2))        # still running when the recording ends
+        with self.assertRaises(SystemExit):
+            bs.sfx_engine({"state": []})
+
+    def test_the_engine_model(self) -> None:
+        """The ROM's rule (SoundEffects_HandleOnInterrupt): a new effect is refused while one with a lower handler index runs; the same or a higher one is taken
+        and the old one does not come back; two asked for in one frame, the last counts; once the engine has finished an effect anything is taken."""
+        a, b, c = [bytes([i]) * 12 for i in (1, 2, 3)]
+        eng = bs.Engine({1: (0x40, 3, [a] * 5), 2: (0x20, 2, [b] * 3), 3: (0x60, 2, [c] * 4)})
+        eng.request(1)
+        self.assertEqual([eng.tick() for _ in range(2)], [a, a])
+        eng.request(3)                                                                  # index 0x60 > 0x40: refused, a goes on
+        self.assertEqual(eng.tick(), a)
+        eng.request(2)                                                                  # 0x20 < 0x40: takes over, from its first frame at this tick
+        self.assertEqual([eng.tick() for _ in range(4)], [b, b, b, None])               # and a does not come back
+        eng.request(1)
+        eng.request(3)                                                                  # two in one frame: the last counts
+        self.assertEqual(eng.tick(), c)
+        eng.request(3)                                                                  # the same effect again (the same index): it starts again
+        self.assertEqual([eng.tick() for _ in range(5)], [c, c, c, c, None])
+        eng.request(1)                                                                  # busy was 2 ticks and they have gone: taken
+        self.assertEqual(eng.tick(), a)
+        eng.request(99)                                                                 # no such effect
+        self.assertEqual(eng.tick(), a)
 
 
 def toolchain_ok() -> bool:
@@ -150,19 +202,32 @@ def toolchain_ok() -> bool:
     return True
 
 
-def reference(data: bytes, song: int, sfx: int | None, sfx_at: int, ticks: int) -> list[bytes]:
-    """What the YM is given each tick: the song (looping), with the sound effect started at tick sfx_at over it."""
+def effects_of(data: bytes) -> dict:
+    """The sound effects of a sound.bin as the engine model wants them: id -> (priority, busy, frames)."""
+    n_music, n_sfx = struct.unpack_from(">HH", data, 0)
+    offsets = [struct.unpack_from(">L", data, 4 + 4 * i)[0] for i in range(n_music + n_sfx)]
+    out = {}
+    for k in range(1, n_sfx + 1):
+        o = offsets[n_music + k - 1]
+        count, priority, busy = struct.unpack_from(">HBB", data, o)
+        out[k] = (priority, busy, [data[o + 4 + 12 * i:o + 16 + 12 * i] for i in range(count)])
+    return out
+
+
+def reference(data: bytes, song: int, requests: list, ticks: int) -> list[bytes]:
+    """What the YM is given each tick: the song (looping), with the sound effects asked for before the ticks in `requests` ([(tick, effect), ...], in
+    the order asked) as the ROM's engine (bs.Engine) takes or refuses them."""
     n_music, n_sfx = struct.unpack_from(">HH", data, 0)
     offsets = [struct.unpack_from(">L", data, 4 + 4 * i)[0] for i in range(n_music + n_sfx)]
     frames = bs.parse_song(data, offsets[song - 1])
     total, loop_left, _ = struct.unpack_from(">HHL", data, offsets[song - 1])
-    sfx_frames = []
-    if sfx is not None:
-        o = offsets[n_music + sfx - 1]
-        count = struct.unpack_from(">H", data, o)[0]
-        sfx_frames = [data[o + 2 + 12 * i:o + 14 + 12 * i] for i in range(count)]
+    engine = bs.Engine(effects_of(data))
     out = []
     for t in range(ticks):
+        for at, sfx in requests:
+            if at == t:
+                engine.request(sfx)
+        f = engine.tick()
         if t < total:
             regs = bytearray(frames[t])
         elif loop_left:
@@ -170,9 +235,8 @@ def reference(data: bytes, song: int, sfx: int | None, sfx_at: int, ticks: int) 
         else:
             regs = bytearray(frames[-1])                                            # the last tones stay, the mixer and the volumes go
             regs[7:11] = b"\xFF\0\0\0"
-        i = t - sfx_at
-        if 0 <= i < len(sfx_frames):
-            f, mask = sfx_frames[i], sfx_frames[i][11]
+        if f is not None:
+            mask = f[11]
             for bit, idx, vol, mix in ((0, (0, 1), 8, 0x09), (1, (2, 3), 9, 0x12), (2, (4, 5), 10, 0x04)):
                 if mask >> bit & 1:
                     for k in idx:
@@ -199,7 +263,7 @@ class PlayerTests(unittest.TestCase):
         tmp = Path(cls.tmp.name)
         (tmp / "rec").mkdir()
         write_recordings(tmp / "rec")
-        cls.data, _ = bs.build(tmp / "rec", 2, 2)
+        cls.data, _ = bs.build(tmp / "rec", 2, 3)
         cls.packed = bs.pack_songs(cls.data)
         source = tmp / "sound_test.s"
         source.write_text('    .text\n    .include "frame.s"\n', encoding="utf-8")
@@ -245,14 +309,16 @@ class PlayerTests(unittest.TestCase):
     def out(self, machine) -> bytes:
         return bytes(machine.mem.r8(self.sym["snd_state"] + SND_OUT + i) for i in range(11))
 
-    def play(self, song: int, sfx: int | None, sfx_at: int, ticks: int, data: bytes | None = None) -> list[bytes]:
+    def play(self, song: int, requests: list, ticks: int, data: bytes | None = None) -> list[bytes]:
+        """The 68000 player: the song, with the effects asked for before the ticks in `requests` ([(tick, effect), ...]); the registers after each tick."""
         mc = self.machine(data)
         self.call(mc, "sound_init", a0=BIN_AT, a1=SONG_AT)
         self.call(mc, "sound_play_music", d0=song)
         got = []
         for t in range(ticks):
-            if sfx is not None and t == sfx_at:
-                self.call(mc, "sound_play_sfx", d0=sfx)
+            for at, sfx in requests:
+                if at == t:
+                    self.call(mc, "sound_play_sfx", d0=sfx)
             self.call(mc, "sound_tick")
             got.append(self.out(mc))
         return got
@@ -262,24 +328,52 @@ class PlayerTests(unittest.TestCase):
         self.assertNotEqual(self.packed, self.data)
 
     def test_a_song_plays_frame_by_frame_and_loops(self) -> None:
-        got = self.play(1, None, 0, 60 + 3 * 20 + 9)
-        self.assertEqual(got, [r[:11] for r in reference(self.data, 1, None, 0, len(got))])
+        got = self.play(1, [], 60 + 3 * 20 + 9)
+        self.assertEqual(got, [r[:11] for r in reference(self.data, 1, [], len(got))])
 
     def test_a_song_that_ends_goes_quiet(self) -> None:
-        got = self.play(2, None, 0, 40)
-        self.assertEqual(got, [r[:11] for r in reference(self.data, 2, None, 0, 40)])
+        got = self.play(2, [], 40)
+        self.assertEqual(got, [r[:11] for r in reference(self.data, 2, [], 40)])
         self.assertEqual(got[-1][8:11], b"\0\0\0")
         self.assertEqual(got[-1][7], 0xFF)
 
     def test_a_sound_effect_takes_over_its_channels_and_gives_them_back(self) -> None:
         for sfx in (1, 2):
             with self.subTest(sfx=sfx):
-                got = self.play(1, sfx, 12, 40)
-                self.assertEqual(got, [r[:11] for r in reference(self.data, 1, sfx, 12, 40)])
-        plain = self.play(1, None, 0, 40)
-        loud = self.play(1, 1, 12, 40)
+                got = self.play(1, [(12, sfx)], 40)
+                self.assertEqual(got, [r[:11] for r in reference(self.data, 1, [(12, sfx)], 40)])
+        plain = self.play(1, [], 40)
+        loud = self.play(1, [(12, 1)], 40)
+        self.assertEqual(plain[11], loud[11])
+        self.assertNotEqual(plain[12], loud[12], "asked for before tick 12, it sounds in tick 12 (the ROM's engine starts it at the next interrupt)")
         self.assertNotEqual(plain[14], loud[14])
         self.assertEqual(plain[30], loud[30])
+
+    def test_sound_effects_asked_for_in_a_row_follow_the_roms_engine(self) -> None:
+        """Effect 1 has handler index $40, 2 has $20 (more important), 3 has $60: 3 is refused while 1 runs, 2 takes 1 over and 1 does not come back, 3 does not
+        take 2 over, a request again of the running effect starts it again, the last of two requests in one tick counts, and when the effect has run its time
+        anything is taken. Each is what the 68000 player does against the model of the engine."""
+        cases = {
+            "a refused": [(10, 1), (13, 3)],
+            "taken over": [(10, 1), (13, 2)],
+            "the less important one does not": [(10, 2), (11, 1), (12, 3)],
+            "again": [(10, 1), (13, 1)],
+            "two in a tick": [(10, 3), (10, 1)],
+            "two in a tick, the other way round": [(10, 1), (10, 3)],
+            "after its time": [(10, 2), (30, 3), (31, 1)],
+            "before its time": [(10, 3), (14, 1), (15, 2), (30, 1)],
+        }
+        for name, requests in cases.items():
+            with self.subTest(name):
+                want = [r[:11] for r in reference(self.data, 1, requests, 60)]
+                self.assertEqual(self.play(1, requests, 60), want)
+        # the ROM's rule itself, not only the model: asked 13 while effect 1 runs (busy for 9 ticks from tick 10), effect 3 never sounds ...
+        solo = self.play(1, [(10, 1)], 60)
+        self.assertEqual(self.play(1, [(10, 1), (13, 3)], 60), solo)
+        # ... while effect 1 asked for while 3 runs takes it over: it sounds as if asked alone, from its own tick
+        self.assertEqual(self.play(1, [(10, 3), (13, 1)], 60)[14:25], self.play(1, [(13, 1)], 60)[14:25])
+        # a request with no sound data (or a number the data does not have) is forgotten
+        self.assertEqual(self.play(1, [(10, 9), (11, 0)], 30), self.play(1, [], 30))
 
     def test_no_sound_data_means_no_sound(self) -> None:
         mc = self.machine()
@@ -297,6 +391,80 @@ class PlayerTests(unittest.TestCase):
         self.call(mc, "sound_tick")
         self.assertEqual(mem.r8(0xFF8800), 10)                                        # the last register selected
         self.assertEqual(mem.r8(0xFF8802), self.out(mc)[10])
+
+
+def sfx_recordings() -> Path:
+    """The sound effects recorded from the ROM (with the engine's note): the build's own, or recorded now into a temporary folder."""
+    have = ROOT / "build" / "refnes" / "sound"
+    if all((have / f"s{i}.json").is_file() and '"handler"' in (have / f"s{i}.json").read_text() for i in range(1, 29)):
+        return have
+    import record_sounds
+
+    tmp = Path(tempfile.mkdtemp(prefix="sfx_rec_"))
+    record_sounds.record(tmp, music_frames=1, jobs=2)
+    return tmp
+
+
+@unittest.skipUnless(ROM.is_file() and shutil.which("node") and (ROOT / "tools" / "refnes" / "node_modules" / "jsnes").is_dir()
+                     and (ROOT / "build" / "refnes" / "ram_labels.json").is_file(), "needs the ROM, node, the jsnes harness and the RAM labels")
+class EngineInTheRomTests(unittest.TestCase):
+    """Two sound effects asked for one after the other in the ROM (jsnes, tools/refnes/soundpair.mjs) against `build_sound.Engine`, which the 68000 player
+    follows (PlayerTests): what the engine runs after every frame (its handler index, 0 when nothing) is the same in every case, and the channels the model
+    plays are what the chip plays (apart from the first two frames of an effect that took over a running one: the ROM's set-up of an effect reads what the
+    one before left behind, so the pitch of those frames can differ; effect 17 and 19 do it)."""
+
+    A = (4, 5, 8, 22, 26)
+    B = (1, 2, 5, 8, 9, 16, 19, 22)
+    DELAYS = (3, 20)
+    FRAMES = 80
+
+    def test_the_engines_priorities_and_the_channels_equal_the_models(self) -> None:
+        import json
+
+        rec = sfx_recordings()
+        effects = {}
+        for i in range(1, 29):
+            r = json.loads((rec / f"s{i}.json").read_text())
+            priority, busy = bs.sfx_engine(r)
+            effects[i] = (priority, busy, bs.sfx_frames(r))
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "pairs.json"
+            subprocess.run(["node", "soundpair.mjs", "pairs", str(out), str(self.FRAMES), ",".join(map(str, self.DELAYS)), ",".join(map(str, self.A)), ",".join(map(str, self.B))],
+                           cwd=ROOT / "tools" / "refnes", check=True, capture_output=True)
+            pairs = json.loads(out.read_text())
+        self.assertEqual(len(pairs), len(self.A) * len(self.DELAYS) * len(self.B))
+        channels = ((0, (0, 1), 8), (1, (2, 3), 9), (2, (4, 5), 10))
+        refused = taken_over = 0
+        for key, seen in pairs.items():
+            a, delay, b = map(int, key.split(","))
+            engine = bs.Engine(effects)
+            engine.tick()                                           # the frame in which A is asked for: nothing yet
+            engine.request(a)
+            frames, states = [], [0]
+            for _ in range(delay):
+                frames.append(engine.tick())
+                states.append(engine.priority if engine.busy else 0)
+            self.assertEqual(seen["pre"], states[:delay], f"{key}: the engine's note while A runs")
+            engine.request(b)
+            over_running = bool(engine.busy)                        # asked for while A still runs: refused, or it takes A over
+            refused_now = over_running and effects[b][0] > engine.priority
+            refused += refused_now
+            taken_over += over_running and not refused_now
+            skip = 2 if over_running and not refused_now else 0     # the frames the ROM's set-up of B colours with what A left behind
+            for j in range(self.FRAMES):
+                frame = frames[-1] if j == 0 else engine.tick()
+                self.assertEqual(seen["rec"][j][0], engine.priority if engine.busy else 0, f"{key}: after frame {j}")
+                if 0 < j <= skip:
+                    continue
+                regs, _ = bs.ym_frame(seen["rec"][j][1])
+                mask = frame[11] if frame else 0
+                for bit, idx, vol in channels:
+                    if mask >> bit & 1:
+                        self.assertEqual([frame[k] for k in idx + (vol,)], [regs[k] for k in idx + (vol,)], f"{key}: frame {j}, channel {bit}")
+                if mask & 8:
+                    self.assertEqual(frame[6], regs[6], f"{key}: frame {j}, the noise")
+        self.assertGreater(refused, 10, "some of the pairs were refused")
+        self.assertGreater(taken_over, 10, "and some took over a running effect")
 
 
 @unittest.skipUnless(ROM.is_file() and shutil.which("hatari") and shutil.which("m68k-linux-gnu-as") and shutil.which("ca65") and TOS.is_file(),

@@ -1650,9 +1650,7 @@ batch_trace:                                | d0.b = the action about to run
     .equ N_POSE, NPC_REC-3                  | the pose last drawn (2 * frame + mirrored)
     .equ NPC_WALK_TABLE, 18*4               | npcwalk.bin: a record of four bytes a kind (the hit box type, 0, the script's offset), then the scripts
     .equ NPC_FIRST, 0x34                    | the first kind
-    .equ NPC_SLOT_RAM, 2560                 | a slot's room: the table and lists of poses (up to 640 bytes), the 44 keys (words), the images (40 bytes each)
-    .equ NPC_KEYS, 640
-    .equ NPC_IMAGES, 720
+                                            | (NPC_SLOT_RAM, NPC_KEYS and NPC_IMAGES: viewer.s)
     .equ NPC_TRIGGER, 0x4F
     .equ NPC_END, 0x7FFF                    | ends a pose's cells
 
@@ -1716,7 +1714,15 @@ npc_load:
     bsr.w npc_place
 7:  addq.l #6, %a2
     bra.s 3b
-8:  cmpi.w #BUILDING_AREA, %d6
+8:
+    .ifdef NPC_EXTRA                        | (tests) one more person, of a kind the game never places, in the next free slot of every screen: NPC_EXTRA = the entity, _X and _Y where
+    cmpi.w #NPC_SLOTS, %d5
+    bcc.s 81f
+    lea npc_extra(%pc), %a2
+    bsr.w npc_place
+81:
+    .endif
+    cmpi.w #BUILDING_AREA, %d6
     bne.s 9f
     bsr.w scene_palette                     | the palette with the people's colours
 9:  movem.l (%sp)+, %d0-%d7/%a0-%a3
@@ -1942,6 +1948,9 @@ tile_convert:
 
 | The boxes of the last drawing in the screen being drawn into (a4) are put back from the playfield.
 npc_erase:
+    bsr.s npc_erase_boxes
+    bra.w npc_update                        | (then the people move: once a frame, here, between the box going and the next drawing)
+npc_erase_boxes:                            | (the Mattock's crumble puts the boxes back and nothing moves: items.s)
     movem.l %d0/%a0, -(%sp)
     lea npc_rects(%pc), %a0
     move.w slot_index(%pc), %d0
@@ -1956,7 +1965,7 @@ npc_erase:
 2:  addq.l #8, %a0
     dbra %d0, 1b
     movem.l (%sp)+, %d0/%a0
-    bra.w npc_update                        | (then the people move: once a frame, here, between the box going and the next drawing)
+    rts
 
 | Sprites_UpdateAll for the people: the slots in order (the first of the screen is the ROM's slot 7), each its script's ops and its behaviour. The behaviours look at the
 | screen's blocks as the enemies' do (en_blocks: enemies_update sets it later in the frame; the people go first). Nothing is done on a screen without people.
@@ -2238,6 +2247,10 @@ conv_slots:
     .long 0                                 | the 16 slot bytes tile_convert reads (4 a palette)
 conv_poses:
     .word 0, 0                              | npc_convert: how many poses, the one being made
+    .ifdef NPC_EXTRA
+npc_extra:
+    .byte 0, 0, NPC_EXTRA, 0xFF, NPC_EXTRA_X, NPC_EXTRA_Y       | a place record: area, screen, entity, script ($FF: Up does nothing), x, y
+    .endif
 npc_intro_done:
     .word 0                                 | the intro trigger has run (once in a game)
 npc_fresh:

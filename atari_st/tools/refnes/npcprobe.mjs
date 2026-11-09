@@ -1,7 +1,7 @@
 // The town people in the ROM, frame by frame: the hero stands on a screen of an area (through a temple, see `newOutside`) or in a building (walked in through a door of
 // that screen), his x is set from a schedule, and every frame the 8 sprite slots, the sprites on show (OAM) and the counters are recorded.
 //   node npcprobe.mjs SPEC.json OUT.json
-// SPEC: {area, region, screen, x, door: {x, y} | null, frames, hero: [[frame, x], ...], inject: [{slot, entity, x, y, hbox, script}, ...]} (the hero's x from the first frame of each pair on;
+// SPEC: {area, region, screen, x, door: {x, y} | null, frames, hero: [[frame, x], ...], hourglass: [[from, to], ...], inject: [{slot, entity, x, y, hbox, script}, ...]} (the hero's x from the first frame of each pair on;
 // it is written every frame; a kind the game never places is put into a slot as the loader would: behaviour ready, the rest 0)
 import {newOutside, BTN} from "./faxanadu.mjs";
 import fs from "fs";
@@ -44,6 +44,7 @@ let heroX = g.rd("Player_PosX_Block");
 const rec = [];
 for (let f = 0; f < spec.frames; f++) {
   for (const [from, x] of schedule) if (f >= from) heroX = x;
+  if (spec.hourglass) g.wr("DurationHourGlass", spec.hourglass.some(([a, b]) => f >= a && f < b) ? 15 : 0xff);      // the Hour Glass in force in these windows of frames (15 seconds, kept up every frame)
   if (schedule.length) g.wr("Player_PosX_Block", heroX);
   g.run(1);
   const slots = [];
@@ -53,7 +54,7 @@ for (let f = 0; f < spec.frames; f++) {
     slots.push(s);
   }
   const blocks = f === 0 ? Array.from({length: 256}, (_, i) => g.rd(g.addr("ScreenBuffer") + i)) : undefined;
-  rec.push({f, start_x: startX, ic: g.rd("InterruptCounter"), oam: g.oam().filter((o) => o[0] >= 32 && o[0] < 240 && o[1] >= 0x90), rnd: g.rd("Random_Offset"), mask: g.rd("Joy1_ButtonMask"), blocks,
+  rec.push({f, hg: g.rd("DurationHourGlass") !== 0xff, start_x: startX, ic: g.rd("InterruptCounter"), oam: g.oam().filter((o) => o[0] >= 32 && o[0] < 240 && o[1] >= 0x90), rnd: g.rd("Random_Offset"), mask: g.rd("Joy1_ButtonMask"), blocks,
     pf: g.rd("Player_Flags"), px: g.rd("Player_PosX_Block"), py: g.rd("Player_PosY"), counter: g.rd("SpriteUpdateCounter"), area: g.rd("Area_CurrentArea"), screen: g.rd("Area_CurrentScreen"), slots});
 }
 fs.writeFileSync(process.argv[3], JSON.stringify(rec));

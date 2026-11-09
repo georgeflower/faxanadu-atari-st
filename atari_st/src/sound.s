@@ -5,7 +5,7 @@
 |
 | sound_init      a0 = sound.bin (or 0: no sound), a1 = a buffer of SND_SONG_MAX bytes for the song being played (the songs are packed), clears the state
 | sound_play_music d0 = song 1 up, 0 stops it; the song loops if it has a loop point
-| sound_play_sfx  d0 = sound effect 1 up
+| sound_play_sfx  d0 = sound effect 1 up: asked for, as the ROM's SoundEffect_SetCurrent does; the next sound_tick decides (see there)
 | sound_tick      once a VBL (vbl_isr calls it): next frame of the song and the effect, mixed, into the YM's registers 0-10
 | sound_silence   (supervisor mode) the YM quiet
 | sound_keys      (debug) F1-F10 play songs 1-10, Ctrl+F 11-20, the digit keys 1-0 sound effects 1-10, Ctrl 11-20, Shift 21-30, Backspace stops
@@ -24,8 +24,11 @@
     .equ SND_OUT, 34                        | what was written to the YM last (12 bytes)
     .equ SND_LASTKEY, 46                    | sound_keys: the key that started the last sound, until it is released
     .equ SND_SONG, 48                       | the buffer the song is unpacked into
-    .equ SND_SIZE, 52
-    .equ SND_SONG_MAX, 16384                | what a song may be unpacked (build_sound.SONG_MAX)
+    .equ SND_PEND, 52                       | the sound effect asked for since the last tick (0 none)
+    .equ SND_PRIO, 54                       | the handler index of the effect that runs: the ROM's priority, lower is more important
+    .equ SND_BUSY, 55                       | ticks left that the engine counts that effect as running (0: a new effect is always taken)
+    .equ SND_SIZE, 56
+    .equ SND_SONG_MAX, 15360                | what a song may be unpacked (build_sound.SONG_MAX; the biggest is 15,304)
 
     .section .data
     .even
@@ -93,9 +96,9 @@ sound_play_music:
 9:  movem.l (%sp)+, %d1/%a0-%a2
     rts
 
-| d0 = the sound effect
+| d0 = the sound effect. Like the ROM's SoundEffect_SetCurrent it only remembers the last one asked for; sound_tick (the ROM's next interrupt) decides.
 sound_play_sfx:
-    movem.l %d1/%a0-%a2, -(%sp)
+    movem.l %d1/%a0-%a1, -(%sp)
     lea snd_state(%pc), %a0
     movea.l SND_BIN(%a0), %a1
     move.l %a1, %d1
@@ -104,15 +107,8 @@ sound_play_sfx:
     beq.s 9f
     cmp.w 2(%a1), %d0                       | n_sfx
     bhi.s 9f
-    move.w (%a1), %d1                       | n_music
-    add.w %d0, %d1
-    lsl.w #2, %d1
-    move.l 0(%a1,%d1.w), %d1                | entry (n_music + d0) is at 4 + 4 * (n_music + d0 - 1)
-    lea 0(%a1,%d1.l), %a2
-    move.w (%a2)+, %d1
-    move.l %a2, SND_SPTR(%a0)
-    move.w %d1, SND_SLEFT(%a0)
-9:  movem.l (%sp)+, %d1/%a0-%a2
+    move.w %d0, SND_PEND(%a0)
+9:  movem.l (%sp)+, %d1/%a0-%a1
     rts
 
 sound_tick:
@@ -120,6 +116,33 @@ sound_tick:
     lea snd_state(%pc), %a0
     tst.l SND_BIN(%a0)
     beq.w 9f
+
+    | The sound effect asked for since the last tick (SoundEffects_HandleOnInterrupt): it is taken, and the effect that ran is gone for good, unless that
+    | one has a lower handler index (the ROM's priority) and is still running; then the new one is forgotten. The record: word frames, byte index, byte busy.
+    move.w SND_PEND(%a0), %d0
+    beq.s 22f
+    clr.w SND_PEND(%a0)
+    movea.l SND_BIN(%a0), %a1
+    move.w (%a1), %d1                       | n_music
+    add.w %d0, %d1
+    lsl.w #2, %d1
+    move.l 0(%a1,%d1.w), %d1
+    lea 0(%a1,%d1.l), %a2                   | the record
+    move.b 2(%a2), %d1                      | its handler index
+    tst.b SND_BUSY(%a0)
+    beq.s 21f                               | nothing runs
+    cmp.b SND_PRIO(%a0), %d1
+    bhi.s 22f                               | refused: what runs goes on
+21: move.b %d1, SND_PRIO(%a0)
+    move.b 3(%a2), SND_BUSY(%a0)
+    move.w (%a2), SND_SLEFT(%a0)
+    addq.l #4, %a2
+    move.l %a2, SND_SPTR(%a0)
+    bra.s 23f
+22: tst.b SND_BUSY(%a0)
+    beq.s 23f
+    subq.b #1, SND_BUSY(%a0)
+23:
 
     | The song: apply the changes of its next frame to the registers.
     move.w SND_MLEFT(%a0), %d0

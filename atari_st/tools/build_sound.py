@@ -17,7 +17,9 @@ repeat and loops back to there. Nothing here is committed: it all comes from the
 
 sound.bin: word n_music, word n_sfx, then a long offset for each song (id 1 up) and each sound effect (id 1 up), then the records:
     song: word frames, word frames from the loop point to the end (0: the song ends), long byte offset of the loop point in the stream, the stream
-    sound effect: word frames, the frames
+    sound effect: word frames, byte priority, byte busy, the frames
+(the priority is the effect's handler index in the ROM's sound engine, 4 to $70, and a LOWER number wins: the engine refuses a new effect while it
+runs one with a lower index, see `Engine`; busy is how many more ticks the engine counts the effect as running after the tick that starts it).
 Every record starts on an even address. In the file a song is packed (tools/lz.py; five times smaller): the player unpacks the one it plays
 into a buffer of SONG_MAX bytes (`pack_songs`, `unpack_songs`).
 """
@@ -38,7 +40,7 @@ import lz  # noqa: E402
 PAL_CPU = 1662607.0                             # the Europe NES; its sound engine's note table is tuned for it
 YM_CLOCK = 2000000.0
 FRAME = 12
-SONG_MAX = 16384                                # the player's buffer for the unpacked song (SND_SONG_MAX in src/sound.s)
+SONG_MAX = 15360                                # the player's buffer for the unpacked song (SND_SONG_MAX in src/sound.s); the biggest song is 15,304
 
 # the NES volume 0-15 as a YM2149 level (3 dB a step); the triangle has no volume, it sounds like a pulse about this loud
 TRIANGLE_LEVEL = 12
@@ -135,7 +137,9 @@ def find_loop(frames: list[bytes]) -> tuple[int, int] | None:
 
 
 def sfx_frames(rec: dict) -> list[bytes]:
-    """A sound effect's frames, with the channels it uses marked. It owns a channel from its first sound on it to its last."""
+    """A sound effect's frames, with the channels it uses marked. It owns a channel from its first sound on it to its last.
+    The recording's frame 0 is the frame in which the game asked for the effect: the engine only starts it at the next interrupt, so the
+    first frame of the result is the recording's frame 1 (it is the frame the player gives at the first tick after the request)."""
     conv = [ym_frame(s) for s in rec["state"]]
     n = 0
     for i, (_, bits) in enumerate(conv):
@@ -156,7 +160,54 @@ def sfx_frames(rec: dict) -> list[bytes]:
                 mask |= 1 << b
         regs = bytearray(conv[i][0])
         out.append(bytes(regs) + bytes([mask]))
-    return out
+    return out[1:]
+
+
+def sfx_engine(rec: dict) -> tuple[int, int]:
+    """(priority, busy) of a sound effect from the engine's own note (`handler`, soundrec.mjs): the handler index it runs under and the number of
+    ticks after the one that starts it for which the engine goes on counting it as running (when it has finished, any new effect is taken)."""
+    if "handler" not in rec:
+        raise SystemExit("the sound recordings have no `handler` (the engine's priority note): delete build/refnes/sound/s*.json and record again")
+    handler = rec["handler"]
+    first = next(i for i, v in enumerate(handler) if v)
+    end = next((i for i in range(first, len(handler)) if handler[i] == 0), len(handler))
+    return handler[first], end - 1
+
+
+class Engine:
+    """What the ROM's sound engine decides about sound effects (`SoundEffects_HandleOnInterrupt`; the code is the same in the US and the Europe ROM) and
+    the port's `sound_play_sfx` and `sound_tick` do the same: the game asks for an effect (`SoundEffect_SetCurrent`, which only remembers the last
+    one asked for since the last interrupt: its priority table is never used), and at the next interrupt the engine takes it unless it is running
+    an effect whose handler index is lower (a lower index is more important; the same index is the same effect, which starts again). An effect
+    that is taken replaces the one that ran, which does not come back; one that is refused is forgotten. `effects` maps an id to (priority, busy,
+    frames); `tick()` gives the frame (12 bytes with the channel mask) the effect plays at this interrupt, or None."""
+
+    def __init__(self, effects: dict[int, tuple[int, int, list[bytes]]]):
+        self.effects = effects
+        self.pending = 0
+        self.priority = 0
+        self.busy = 0                       # ticks left that the engine counts the running effect
+        self.frames: list[bytes] = []
+        self.at = 0
+
+    def request(self, ident: int) -> None:
+        if 0 < ident <= max(self.effects):
+            self.pending = ident
+
+    def tick(self) -> bytes | None:
+        started = False
+        if self.pending:
+            priority, busy, frames = self.effects[self.pending]
+            self.pending = 0
+            if not (self.busy and priority > self.priority):
+                self.priority, self.busy, self.frames, self.at = priority, busy, frames, 0
+                started = True
+        if not started and self.busy:
+            self.busy -= 1
+        if self.at < len(self.frames):
+            self.at += 1
+            return self.frames[self.at - 1]
+        return None
 
 
 def delta_stream(frames: list[bytes], full_at: int | None) -> tuple[bytes, int]:
@@ -190,8 +241,8 @@ def song_record(frames: list[bytes], loop: int | None) -> bytes:
     return data + b"\0" * (len(data) & 1)
 
 
-def sfx_record(frames: list[bytes]) -> bytes:
-    return struct.pack(">H", len(frames)) + b"".join(frames) + b"\0" * (len(frames) * 12 & 1)
+def sfx_record(frames: list[bytes], priority: int, busy: int) -> bytes:
+    return struct.pack(">HBB", len(frames), priority, busy) + b"".join(frames)
 
 
 def parse_song(data: bytes, offset: int) -> list[bytes]:
@@ -232,7 +283,7 @@ def build(rec_dir: Path | None, n_music: int = 16, n_sfx: int = 28) -> tuple[byt
                 data = song_record(frames, loop)
             else:
                 frames, loop = sfx_frames(rec), None
-                data = sfx_record(frames)
+                data = sfx_record(frames, *sfx_engine(rec))
             records.append(data)
             info[f"{name}{i}"] = (len(frames), loop, len(data))
     head = struct.pack(">HH", n_music, n_sfx)

@@ -27,6 +27,8 @@ jsnes runs NTSC timing. The game's logic runs once per NMI, so a jsnes frame is 
 - `Screen_ScrollDirection` is `$FF` when nothing scrolls; the main loop waits for the next frame at `$CA28`/`$CA2A`.
 - `soundrec.mjs music|sfx ID FRAMES OUT.json`: records what the ROM's sound engine does to the NES sound channels, frame by frame, for one song or sound effect (`tools/record_sounds.py` runs it for all of them; `tools/build_sound.py` converts them for the ST).
 - `magickill.mjs SPELL OUT.json`, `tiltehit.mjs MODE OUT.json`: a kill by a spell (entity $14, its five pieces) and Tilte's hit and miss (the explosion), frame by frame.
+- `soundpair.mjs single|pairs OUT FRAMES ...`: two sound effects asked for one after the other (effect A, D frames later effect B): the engine's handler index and the channels after every frame (priorities, `tests/test_sound.py`).
+- `musicprobe.mjs door AREA REGION SCREEN BLOCK [KEY [D]]` and `start`: `Music_Current`, `Areas_DefaultMusic` and `Area_Music_Outside` while a door is taken, and the Start press on the title with what the channels sound (`tests/test_music.py`).
 - `respawnprobe.mjs [SCREEN]`: Eolis, kills and hurts the enemies of a screen, goes to the next one and back, and prints what the slots hold each time (the whole list is loaded again).
 - `visitprobe.mjs [ENTRIES] [ENTITY]`: Trunk screen 14, enters it again and again and prints `Screen_TrackedVisitCount` and whether the random item is there (every 4th time).
 - `behindprobe.mjs [SCREEN] [OUT.json]`: Eolis screen 4, walks left through the pillar and back and records the hero's and the enemies' slots and the OAM sprites with their attributes (bit 5: behind the background).

@@ -67,7 +67,10 @@
     .equ REGION_BYTES, 208*160              | a whole 208-line playfield (stride 160: the same layout as the screen)
     .equ HERO_IMAGES_AT, 64*16              | hero.s: the hero's 64 tiles, then his 256 images
     .equ HERO_RAM_BYTES, HERO_IMAGES_AT+256*SPRITE_IMAGE_BYTES
-    .equ NPC_RAM_BYTES, 2*2560             | town.s: the pictures of the people of a screen (NPC_SLOTS slots of NPC_SLOT_RAM bytes), behind TOWN.DAT
+    .equ NPC_KEYS, NPC_LIST_BYTES           | town.s: a person's slot holds the table and lists of poses (NPC_LIST_BYTES), the keys of the images (a word each), the images (40 bytes each);
+    .equ NPC_IMAGES, NPC_KEYS+2*NPC_IMAGE_SLOTS      | the numbers are the biggest of the 18 kinds (tools/iscripts.py equates, in iscript.inc)
+    .equ NPC_SLOT_RAM, NPC_IMAGES+SPRITE_IMAGE_BYTES*NPC_IMAGE_SLOTS
+    .equ NPC_RAM_BYTES, 2*NPC_SLOT_RAM     | town.s: the pictures of the people of a screen (NPC_SLOTS slots), behind the package room
     .equ BUFFER_BYTES, 2*SCREEN_BYTES+2*REGION_BYTES+HERO_RAM_BYTES+256 | two screens and two playfields, the first on a 256-byte boundary
     .equ HERO_X_MIN, 0                      | where he is at the left edge (he has walked off it): scrolls to the screen on the left
     .equ HERO_X_MAX, 241                    | and at the right edge
@@ -346,6 +349,7 @@ start:
     lea input_state(%pc), %a0
     tst.b IN_QUIT(%a0)
     beq.s 12b
+viewer_leave:                               | (also the way out of flow_fade_out: Esc in the middle of a door's fade)
     bsr.w frame_exit
 viewer_quit:
     movea.l orig_screen(%pc), %a0
@@ -976,21 +980,25 @@ hero_respawn:
 
 | The dissolved hero: a1 = the image of the next tile of the hero (the 8 mask bytes, then the 8 lines' four plane bytes, as enemy_data.column_image); on return a1 is a copy with the pixels
 | gone that Player_DrawDeathAnimation has removed so far: in each phase q a pixel a line, the one PPUBUFFER_DRAWCOMMAND_REMOVE_VERT_LINES_MASKS[(q - line) & 7]
-| says, and in the phase going on only the tiles done so far (death_state count). The ROM dissolves the pattern tiles $00-$07, the standing body's eight
-| tiles, which are the first eight of the list; the weapon and the shield (the rest) are not drawn while he dies. The masks are mirrored when he faces
-| right. Keeps every register but a1.
+| says, and in the phase going on only the tiles done so far (death_state count). The ROM dissolves the pattern tiles $00-$07 and no others: the
+| standing body is the first eight sprites of the list (armour 1 without a shield has tiles $09-$0C among them, which stay whole); the weapon and
+| the shield (the rest) are not drawn while he dies. The masks are mirrored when he faces right. d3 = the image number (tile * 4 + palette * 2 +
+| mirrored). Keeps every register but a1.
 dissolve_image:
     movem.l %d0-%d5/%a0/%a2, -(%sp)
     move.w hero_dead(%pc), %d0
     beq.w 9f
+    lsr.w #2, %d3                           | the pattern tile
     lea death_state(%pc), %a0
-    move.w 10(%a0), %d3                     | which tile this is: 0-7 are the body's (the list has it first, in the order of the ROM's pattern tiles)
+    move.w 10(%a0), %d1                     | which sprite this is: the first eight are the body's
     addq.w #1, 10(%a0)
-    cmpi.w #8, %d3
-    blt.s 10f
+    cmpi.w #8, %d1
+    blt.s 11f
     lea blank_image(%pc), %a1               | Player_DrawBody only: no sword, no shield
     bra.w 9f
-10: move.w 2(%a0), %d4                      | the phases done
+11: cmpi.w #8, %d3
+    bge.w 9f                                | not one of the tiles the ROM dissolves: whole
+    move.w 2(%a0), %d4                      | the phases done
     cmpi.w #8, %d4
     bls.s 1f
     moveq #0, %d4                           | $FF: not started
@@ -1366,7 +1374,7 @@ spell_move_y:
 | The spell's picture (the finish handlers' choice by the interrupt counter: Thunder, Fire and the Tilte missile blink) drawn into screen a4, its
 | box noted in this screen's slot (the box is cleared already). Mirrored when it flies right.
 draw_spell:
-    movem.l %d0-%d7/%a0-%a3/%a5, -(%sp)
+    movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
     lea spell_state(%pc), %a2
     move.w (%a2), %d5
     bmi.w 9f
@@ -1444,6 +1452,11 @@ draw_spell:
     add.w %d5, %d0
     move.w %d0, (%a0)+
     movea.l pkg_ptr+PKG_MAGIC_IMAGES(%pc), %a3
+    move.w %d4, %d0                         | the halves of it that are behind the background (CastMagic_CalculateVisibility, at the spell's place)
+    move.w 8(%a2), %d1
+    bsr.w behind_set
+    move.w behind_v(%pc), %d0
+    bne.s 10f
 8:  move.w (%a5)+, %d0
     bmi.s 9f
     lea spell_state(%pc), %a2
@@ -1456,8 +1469,36 @@ draw_spell:
     lea (%a3,%d2.l), %a1
     bsr.w blit_tile
     bra.s 8b
+10: movea.l %a5, %a6                        | behind a pillar: the tiles go through behind_tile like the hero's (en_blit's registers)
+    movea.l en_nm(%pc), %a3
+    moveq #-1, %d6
+11: move.w (%a6)+, %d0
+    bmi.s 9f
+    lea spell_state(%pc), %a2
+    add.w 4(%a2), %d0
+    move.w 8(%a2), %d1
+    sub.w camera(%pc), %d1
+    add.w (%a6)+, %d1
+    move.w (%a6)+, %d2
+    mulu.w #SPRITE_IMAGE_BYTES, %d2
+    movea.l pkg_ptr+PKG_MAGIC_IMAGES(%pc), %a1
+    adda.l %d2, %a1
+    lea -40(%sp), %sp                       | the tile as en_blit has it (the 8 mask bytes, then 8 longs of plane bytes): the spells' images have a line's 5 bytes together
+    movea.l %sp, %a0
+    lea 8(%sp), %a2
+    moveq #7, %d3
+12: move.b (%a1)+, (%a0)+
+    move.b (%a1)+, (%a2)+
+    move.b (%a1)+, (%a2)+
+    move.b (%a1)+, (%a2)+
+    move.b (%a1)+, (%a2)+
+    dbra %d3, 12b
+    movea.l %sp, %a1
+    bsr.w behind_tile
+    lea 40(%sp), %sp
+    bra.s 11b
 draw_spell_end:
-9:  movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5
+9:  movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5-%a6
     rts
 
 | The Tilte explosion (CastMagic_FinishHandler_TilteAfterFirstHit), entered from draw_spell with a2 = spell_state and the registers saved: four pieces (poses 32 to
@@ -2127,10 +2168,9 @@ draw_hero:
     move.w hero_frame(%pc), %d1
     cmpi.w #7, %d1
     bne.s 1f
-    move.w hero_mtick(%pc), %d1             | climbing: the picture is mirrored every 16 ticks
-    lsr.w #4, %d1
-    andi.w #1, %d1
-    eor.w %d1, %d0
+    move.w hero_mtick(%pc), %d0             | climbing: the picture is mirrored every 16 ticks, by the tick alone (the ROM stores it over the facing)
+    lsr.w #4, %d0
+    andi.w #1, %d0
 1:  lsl.w #3, %d0                           | * 8: a pose for each of the ROM's body frames, both ways round
     add.w hero_frame(%pc), %d0              | the pose
     add.w %d0, %d0
@@ -2164,30 +2204,61 @@ draw_hero:
     add.w %d5, %d2
     add.w %d5, %d3
     movem.w %d0-%d3, (%a0)                  | the box
-    move.w hero_x(%pc), %d0                 | which halves of him are behind the background (Player_CalculateVisibility)
+    movea.l hero_ram(%pc), %a3
+    lea HERO_IMAGES_AT(%a3), %a3
+    lea hero_poses(%pc), %a2                | each part is behind the background by what is under its own place (Player_CalculateVisibility):
+    move.w hero_x(%pc), %d0                 | the body at his, the arm piece at x - 8 or + 16, the weapon where weapon_update says, the shield at the table's x and 8 down
     move.w hero_y(%pc), %d1
+    bsr.s draw_hero_part
+    move.w hero_x(%pc), %d0
+    move.w hero_y(%pc), %d1
+    moveq #-8, %d2
+    move.w hero_flip(%pc), %d3
+    beq.s 1f
+    moveq #16, %d2
+1:  add.w %d2, %d0
+    bsr.s draw_hero_part
+    move.w weapon_x(%pc), %d0
+    move.w weapon_x+2(%pc), %d1
+    bsr.s draw_hero_part
+    move.w hero_frame(%pc), %d0
+    add.w %d0, %d0
+    add.w hero_flip(%pc), %d0
+    lea shield_dx(%pc), %a0
+    moveq #0, %d2
+    move.b (%a0,%d0.w), %d2                 | SHIELD_SPRITE_OFFSETS_X
+    move.w hero_x(%pc), %d0
+    add.w %d2, %d0
+    move.w hero_y(%pc), %d1
+    addq.w #8, %d1
+    bsr.s draw_hero_part
+    bsr.s clear_margins
+    movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5-%a6
+    rts
+
+| One part of the hero (a2 = its pose table's pointer in hero_poses, moved on), the origin of the part d0 = x, d1 = y (the world's): the halves of it that are behind the
+| background, then the part. Clobbers d0-d7, a0, a1, a3, a5, a6.
+draw_hero_part:
+    movea.l (%a2)+, %a5
+    move.l %a5, %d2
+    beq.s 9f
+    move.w hero_pose_off(%pc), %d2
+    move.w (%a5,%d2.w), %d2
+    tst.w (%a5,%d2.w)
+    bmi.s 9f                                | (nothing of it in this pose)
+    movem.l %a2, -(%sp)
     bsr.w behind_set
     move.w hero_dead(%pc), %d2
     beq.s 1f
     lea behind_v(%pc), %a0
     clr.w (%a0)                             | (the dissolving body is drawn whole)
-1:  movea.l hero_ram(%pc), %a3
-    lea HERO_IMAGES_AT(%a3), %a3
-    lea hero_poses(%pc), %a2
-    movea.l (%a2), %a5
-    bsr.w hero_draw_part
-    lea hero_poses+4(%pc), %a2
-    movea.l (%a2), %a5
-    bsr.w hero_draw_part
-    lea hero_poses+8(%pc), %a2
-    movea.l (%a2), %a5
-    bsr.w hero_draw_part
-    lea hero_poses+12(%pc), %a2
-    movea.l (%a2), %a5
-    bsr.w hero_draw_part
-    bsr.s clear_margins
-    movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5-%a6
-    rts
+1:  bsr.w hero_draw_part
+    movem.l (%sp)+, %a2
+9:  rts
+
+| The shield's x from the hero's: SHIELD_SPRITE_OFFSETS_X, 2 * the body frame + 1 when he faces left.
+shield_dx:
+    .byte 0, 8, 0, 8, 0, 8, 0, 8, 0, 8, 0, 8, 8, 0, 0, 0
 
 | The hero (or his box) reaches into a side margin: the playfield is x 32 to 287, so what was drawn outside it is cleared again (the margins are
 | black). Uses the box in this screen's slot; clobbers d0-d3, a0-a1.
@@ -2271,6 +2342,29 @@ draw_playfield:
     blt 4b
     rts
 
+
+| What is on the screen a4 besides the blocks, as it stands (nothing moves while the game stands still, and the ROM's sprites stay on the screen): the boxes of the last drawing in
+| this screen are put back, then the spell, the people, the enemies and the hero are drawn again (the frame loop's order, without the updates). Here and not in items.s: the people's routines are in .text.early, out of reach from the end of .text.
+mattock_sprites:
+    lea rect_slots(%pc), %a0
+    move.w slot_index(%pc), %d0
+    lsl.w #4, %d0
+    adda.w %d0, %a0
+    bsr.w restore_rect
+    lea 8(%a0), %a0
+    bsr.w restore_rect
+    clr.l (%a0)+
+    clr.l (%a0)
+    bsr.w enemies_erase
+    .ifdef NPCS
+    bsr.w npc_erase_boxes
+    .endif
+    bsr.w draw_spell
+    .ifdef NPCS
+    bsr.w npc_draw
+    .endif
+    bsr.w draw_enemies
+    bra.w draw_hero
 
 | a4 = the screen just drawn: waits for the VBL, shows it, makes the other screen the one to draw into (a4 and slot_index), and draws
 | the HUD again if the game changed it (right after the VBL, before the beam gets to it). pending_offset becomes shown_offset.
@@ -2947,7 +3041,15 @@ load_package:
     bne.s 5f
     cmp.w cur_pal(%pc), %d1
     beq.w 10f
-5:  lea cur_area(%pc), %a0
+5:  moveq #-1, %d2                          | a door to another palette set of the same area: the ROM changes the song only when the new palette's is another one
+    cmp.w cur_area(%pc), %d0                | (Player_CheckHandleEnterDoor); keep_music is the song of the package he leaves then, else -1
+    bne.s 51f
+    cmpi.w #BUILDING_AREA, %d0
+    beq.s 51f
+    move.w pkg_ptr+PKG_MUSIC(%pc), %d2
+51: lea keep_music(%pc), %a0
+    move.w %d2, (%a0)
+    lea cur_area(%pc), %a0
     move.w %d0, (%a0)+
     move.w %d1, (%a0)
     lea pkg_name(%pc), %a0
@@ -3011,6 +3113,8 @@ load_package:
     beq.s 10f                               | the frame loop is not running yet: it plays the song itself
     .ifndef MUSIC
     move.w pkg_ptr+PKG_MUSIC(%pc), %d0
+    cmp.w keep_music(%pc), %d0
+    beq.s 10f                               | the same song goes on (no restart, the Hour Glass's song stays too)
     bsr.w sound_play_music
     lea cur_music(%pc), %a0
     move.w %d0, (%a0)
@@ -3337,6 +3441,8 @@ burst_buf:
     .space 16*SPRITE_IMAGE_BYTES            | the Tilte explosion's 16 images (burst_make)
 en_nm:
     .long 0                                 | enemies_load: the table of inverted masks (src/blit.s) that draw_enemies and hero_draw_part give en_blit
+keep_music:
+    .word -1                                | load_package: the song of the package that was in use when the area stays the same, else -1
 hud_states:                                 | last in .data, next to the code: the start-up code and the menus reach these from either end of .text
     .incbin "hud_states.bin"
 title_table:                                | PLAYER_TITLE_EXP_NEEDED (15 words), PLAYER_TITLE_GOLD (15 words)
@@ -3348,8 +3454,8 @@ sound_bin:
     .incbin "sound.bin"
     .even
 sound_song:
-    .space 16384                            | SND_SONG_MAX
+    .space SND_SONG_MAX
 
-    .section .stack,"aw",@progbits          | the stack, 4 KB, behind the song buffer: both are zeros and not in the file (make_prg.py --bss-from)
-    .space 4096
+    .section .stack,"aw",@progbits          | the stack, 2 KB (the deepest use measured: 638 bytes), behind the song buffer: both are zeros and not in the file (make_prg.py --bss-from)
+    .space 2048
 stack_end:

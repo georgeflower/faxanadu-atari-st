@@ -517,7 +517,7 @@ use_spent:
 | 8 bits; nothing at $F0 and more) at the row of his y. It is the one the Mattock breaks when it is the first of the area's four ids in USE_MATTOCK_BLOCK_TRANSITIONS
 | (items.bin; only Trunk has a real entry: $63 becomes $85, $86, $42; in every other area the id is 0, air, and the ROM's quirk is kept: it matches there). Then:
 | the message, the Mattock is gone, sound $1A, and four times (4 frames, the block and the one below it are made the next id of the four). The game stands still
-| (the sprites stay where they were, the hero is drawn again over the new blocks). Nothing is kept: a screen is made from the package again each time it is entered,
+| (the sprites stay where they were: the enemies, the people, the spell and the hero are drawn again over the new blocks). Nothing is kept: a screen is made from the package again each time it is entered,
 | so what was changed is put back when the screen is drawn next (mattock_restore, from draw_playfield).
 use_mattock:
     movem.l %d0-%d7/%a0-%a2, -(%sp)
@@ -560,6 +560,10 @@ use_mattock:
     movea.l pkg_ptr+PKG_SCREENS(%pc), %a2
     adda.l %d0, %a2                         | this screen's block ids
     bsr.w mattock_record
+    moveq #1, %d7                           | the box has gone and the screens were made again from the playfield (the hero and the people only): the rest comes back
+5:  bsr.w mattock_sprites
+    bsr.w present_swap
+    dbra %d7, 5b
     moveq #0, %d6                           | the step
 4:  bsr.w wait_vbl
     bsr.w wait_vbl
@@ -586,7 +590,7 @@ use_mattock:
 6:  bsr.w mattock_flags_reset
     moveq #1, %d7                           | both screens get the new blocks, the hero is drawn again over them
 7:  bsr.w mattock_show
-    bsr.w draw_hero
+    bsr.w mattock_sprites
     bsr.w present_swap
     dbra %d7, 7b
     addq.w #1, %d6

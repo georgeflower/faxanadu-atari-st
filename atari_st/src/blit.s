@@ -179,6 +179,252 @@ en_clip:                                    | a tile that is cut: n lines from t
 97: addq.l #2, %sp
     rts
 
+| ---- Sprites behind the background (src/enemy.s: behind_tile, behind_set, behind_load; the package part is tools/behind.py's) ----
+| A tile whose column is behind the background is drawn without the pixels that lie over background pixels that are not colour 0. bh_tile finds, for each of the tile's 8
+| lines, a byte of the part's masks (a bit set where the sprite shows) under it: the tile covers parts of four blocks at most, A (top left), B (top right), C and D (the row below);
+| they come from the screen's table (18 entries a row, a row and a column round the screen are all-ones masks), so there are no range tests. It finds 16 pixels a line, the
+| tile's and its neighbour's (8 pixels to the right or left on the same lines, the next tile of a pose), and keeps them (bh_cache in src/enemy.s: the world's x and
+| line, the AND of all the words, the 8 words), so that the next tile only has to look. en_blit_h draws a tile with those bytes. A tile cut at the top or the bottom of the
+| window is drawn from a copy of its image that has the pixels taken out (rare: bh_clipped).
+| In: d0 = x, d1 = line, d2 = the camera, a1 = the image, a3, a4 as en_blit, a5 = bh_cache (src/enemy.s: also behind_v, behind_ox, the part and the screen's table follow it),
+| a6 = the pose's list of tiles after this tile (dx, dy, image: bh_tile looks at the next tile, -6(a6) is the dx of this one). Keeps a6; d6 = -1 afterwards.
+    .equ BH_V, 24
+    .equ BH_OX, 26
+    .equ BH_PART, 28
+    .equ BH_TAB, 32
+    .macro BH_ROWS                          | d7 = the number of lines - 1, d3 = o, a1 and a0 = the masks of A and B at the first line, a6 = where the words go, d5 = the AND
+1:  move.w (%a1)+, %d6
+    swap %d6
+    move.w (%a0)+, %d6
+    lsl.l %d3, %d6
+    swap %d6
+    move.w %d6, (%a6)+
+    and.w %d6, %d5
+    dbra %d7, 1b
+    .endm
+bh_tile:
+    move.w %d0, %d3
+    sub.w BH_OX(%a5), %d3
+    asr.w #3, %d3
+    andi.w #1, %d3
+    btst %d3, BH_V+1(%a5)
+    beq.w en_blit                           | this column is in front
+    cmpi.w #LEFT_BYTES*2, %d0
+    blt.w en_blit                           | (nothing of these is drawn)
+    cmpi.w #288, %d0
+    bge.w en_blit
+    cmpi.w #HUD_LINES-7, %d1
+    blt.w en_blit
+    cmpi.w #SCREEN_LINES, %d1
+    bge.w en_blit
+    move.w %d0, %d3
+    subi.w #LEFT_BYTES*2, %d3               | the tile's place in the world: x
+    move.w %d1, %d4
+    add.w %d2, %d4
+    subi.w #HUD_LINES, %d4                  | and its first line
+    cmp.w 2(%a5), %d4
+    bne.s 1f
+    move.w %d3, %d5
+    sub.w (%a5), %d5
+    beq.s 6f
+    subq.w #8, %d5
+    bne.s 1f
+    moveq #1, %d5
+6:  cmpi.b #-1, 4(%a5,%d5.w)                | a tile the cache has the bytes of: the first byte of each word, or the second
+    bne.s 9f
+    moveq #-1, %d6                          | nothing of it is hidden (d4 and d5 are not en_blit's constants any more)
+    bra.w en_blit
+9:    move.l %a6, -(%sp)
+    lea 8(%a5,%d5.w), %a6
+    bsr.w bh_draw
+    movea.l (%sp)+, %a6
+    rts
+1:  movem.l %d0-%d1/%a1/%a6, -(%sp)
+    move.w (%a6), %d5                       | the pose's next tile: when it is 8 pixels to the left on the same line the window starts there
+    bmi.s 2f
+    move.w 2(%a6), %d6
+    cmp.w -4(%a6), %d6
+    bne.s 2f
+    sub.w -6(%a6), %d5
+    cmpi.w #-8, %d5
+    bne.s 2f
+    subq.w #8, %d3
+2:  move.w %d3, (%a5)
+    move.w %d4, 2(%a5)
+    lea 8(%a5), %a6                         | the words go here
+    movea.l BH_PART(%a5), %a2
+    lea BH_TAB(%a5), %a0
+    move.w %d3, %d0
+    asr.w #4, %d0
+    add.w %d0, %d0                          | 2 c, c the block column of the window's start (-1 to 15)
+    andi.w #15, %d3                         | o, the pixel in the block
+    move.w %d4, %d1
+    asr.w #4, %d1
+    addq.w #1, %d1                          | r + 1, r the block row (the table has a row above the screen)
+    move.w %d1, %d5
+    lsl.w #5, %d1
+    lsl.w #2, %d5
+    add.w %d5, %d1
+    add.w %d0, %d1
+    adda.w %d1, %a0                         | the table: A is 2(a0), B 4(a0), C 38(a0), D 40(a0)
+    cmpi.w #BEHIND_NONE, 2(%a0)
+    bne.s 8f
+    cmpi.w #BEHIND_NONE, 4(%a0)
+    bne.s 8f
+    cmpi.w #BEHIND_NONE, 38(%a0)
+    bne.s 8f
+    cmpi.w #BEHIND_NONE, 40(%a0)
+    bne.s 8f
+    move.w #-1, 4(%a5)                      | none of the four blocks hides anything of the 16 pixels
+    movem.l (%sp), %d0-%d1/%a1
+    bra.w 7f
+8:  andi.w #15, %d4                         | the line in its block
+    moveq #16, %d7
+    sub.w %d4, %d7                          | the lines of the tile in its first block row (the rest are in the next)
+    cmpi.w #8, %d7
+    ble.s 3f
+    moveq #8, %d7
+3:  move.w %d7, %d0                         | (n1)
+    subq.w #1, %d7
+    add.w %d4, %d4                          | the line's offset in a mask
+    moveq #-1, %d5                          | (the AND of the words: all ones when nothing is hidden)
+    move.w 38(%a0), %d1
+    move.w 40(%a0), %d2
+    move.w 2(%a0), %d6
+    add.w %d4, %d6
+    lea (%a2,%d6.w), %a1
+    move.w 4(%a0), %d6
+    add.w %d4, %d6
+    lea (%a2,%d6.w), %a0
+    BH_ROWS
+    moveq #7, %d7
+    sub.w %d0, %d7                          | the lines in the row below
+    bmi.s 4f
+    lea (%a2,%d1.w), %a1
+    lea (%a2,%d2.w), %a0
+    BH_ROWS
+4:  move.w %d5, 4(%a5)
+    movem.l (%sp), %d0-%d1/%a1
+    move.w %d0, %d4
+    subi.w #LEFT_BYTES*2, %d4
+    sub.w (%a5), %d4
+    lsr.w #3, %d4                           | which byte of the words is this tile's: 0 or 1
+    cmpi.b #-1, 4(%a5,%d4.w)
+    beq.s 7f
+    lea 8(%a5,%d4.w), %a6
+    bsr.w bh_draw
+5:  movea.l 12(%sp), %a6
+    lea 16(%sp), %sp
+    rts
+7:  moveq #-1, %d6                          | (d4-d7 are not en_blit's constants any more)
+    bsr.w en_blit                           | no pixel of the tile is hidden
+    bra.s 5b
+
+| d0 = x, d1 = line, a1 = the image, a6 = the bytes of the tile: en_blit_h, or when the tile is cut at the top or bottom of the window the image without the hidden pixels in
+| 40 bytes on the stack, drawn by en_blit. d6 = -1 afterwards.
+bh_draw:
+    moveq #-1, %d6
+    cmpi.w #HUD_LINES, %d1
+    blt.s bh_clipped
+    cmpi.w #SCREEN_LINES-8, %d1
+    bgt.s bh_clipped
+    bra.w en_blit_h
+bh_clipped:
+    lea -40(%sp), %sp
+    movea.l %sp, %a0
+    lea 8(%a1), %a2
+    lea 8(%a0), %a5
+    moveq #7, %d7
+1:  moveq #0, %d2
+    move.b (%a1)+, %d2
+    and.b (%a6), %d2
+    addq.l #2, %a6
+    move.b %d2, (%a0)+
+    add.w %d2, %d2
+    add.w %d2, %d2
+    move.l (%a3,%d2.w), %d2
+    not.l %d2                               | the mask in each of the four plane bytes
+    and.l (%a2)+, %d2
+    move.l %d2, (%a5)+
+    dbra %d7, 1b
+    movea.l %sp, %a1
+    bsr.w en_blit
+    lea 40(%sp), %sp
+    rts
+
+| en_blit for a tile that is not cut at the top or the bottom of the window, with a6 = its 8 bytes (every other byte of a table of words): the pixels whose bit is clear are not
+| drawn (the mask byte is and-ed with it and so is the tile's data, which `or` and `eor` do with the long that the table gives for the new mask: its inverse in each of four
+| bytes). Clobbers as en_blit.
+    .macro EN_LINEH n
+    moveq #0, %d2
+    move.l (%a2)+, %d3
+    move.b (%a1)+, %d2
+    and.b \n*2(%a6), %d2
+    beq.s 6f
+    add.w %d2, %d2
+    add.w %d2, %d2
+    move.l (%a3,%d2.w), %d2
+    or.l %d2, %d3
+    eor.l %d2, %d3                          | d3 and not d2
+    movep.l \n*STRIDE(%a0), %d0
+    ror.l %d6, %d2
+    move.l %d2, %d1
+    or.l %d5, %d1
+    and.l %d1, %d0
+    move.l %d3, %d1
+    lsr.l %d6, %d1
+    and.l %d4, %d1
+    or.l %d1, %d0
+    movep.l %d0, \n*STRIDE(%a0)
+    movep.l \n*STRIDE(%a5), %d0
+    or.l %d4, %d2
+    and.l %d2, %d0
+    lsl.l %d7, %d3
+    and.l %d5, %d3
+    or.l %d3, %d0
+    movep.l %d0, \n*STRIDE(%a5)
+6:
+    .endm
+en_blit_h:
+    lea 8(%a1), %a2
+    mulu.w #STRIDE, %d1
+    lea (%a4,%d1.l), %a0
+    EN_COLUMN
+    tst.w %d3
+    beq.w en_aligned_h
+    move.w %d3, %d6
+    EN_MASKS
+    EN_SECOND
+    EN_LINEH 0
+    EN_LINEH 1
+    EN_LINEH 2
+    EN_LINEH 3
+    EN_LINEH 4
+    EN_LINEH 5
+    EN_LINEH 6
+    EN_LINEH 7
+    rts
+en_aligned_h:                               | (a loop: an aligned tile is one in eight, and the unrolled lines cost 280 bytes; d7 is free while d6 is -1)
+    moveq #7, %d7
+1:  moveq #0, %d2
+    move.l (%a2)+, %d3
+    move.b (%a1)+, %d2
+    and.b (%a6), %d2
+    addq.l #2, %a6
+    beq.s 2f
+    add.w %d2, %d2
+    add.w %d2, %d2
+    move.l (%a3,%d2.w), %d2
+    or.l %d2, %d3
+    eor.l %d2, %d3
+    movep.l 0(%a0), %d0
+    and.l %d2, %d0
+    or.l %d3, %d0
+    movep.l %d0, 0(%a0)
+2:  lea STRIDE(%a0), %a0
+    dbra %d7, 1b
+    rts
+
     .section .herodata
 en_nm_table:                                | for a mask byte m: the long with ~m in each of its four bytes (en_blit)
     .set en_m, 0

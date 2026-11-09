@@ -5,7 +5,9 @@ in the row of its y, has the property 4, 9 or 13 (`Player_CalculateVisibility`, 
 sprite pixel only where the background pixel is colour 0. On the ST the colours of the screen cannot say which background pixels are colour 0 (the palettes' colour 1
 is black in most areas, the same ST colour as colour 0), so the package holds, for each such block the area's screens use, which of its 16x16 pixels are not colour 0.
 
-Layout: a word n (0: no such block, nothing follows), 256 bytes (for each block id 0 or its number 1 to n), then n masks of 16 words (a row each, bit 15 the left pixel).
+Layout: a word n (0: no such block, nothing follows), 256 bytes (for each block id 0 or its number 1 to n), a mask of 16 words that is all ones (the mask of every block
+position that has none of those blocks), then n masks of 16 words (a row each, bit 15 the left pixel). A mask has a bit set where the sprite shows (the background pixel is
+colour 0) and clear where the background is in front of it, so that the program can use a window of it as it is for the sprite's mask bytes.
 """
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ import faxanadu_rom as fr
 import render_screen as rs
 
 BEHIND_PROPERTIES = (4, 9, 13)
+ONES = b"\xff" * 32                      # the mask of a block position without a block of the part: the sprite is nowhere hidden
 
 
 def opaque_rows(rom: fr.Rom, a: fm.Area, tiles: dict, block: int) -> list[int]:
@@ -47,8 +50,9 @@ def behind_part(rom: fr.Rom, a: fm.Area, screens: list[int], tiles_index: int | 
     for n, b in enumerate(ids, 1):
         index[b] = n
     out += index
+    out += ONES
     for b in ids:
-        out += b"".join(r.to_bytes(2, "big") for r in opaque_rows(rom, a, tiles, b))
+        out += b"".join((~r & 0xFFFF).to_bytes(2, "big") for r in opaque_rows(rom, a, tiles, b))
     return bytes(out)
 
 

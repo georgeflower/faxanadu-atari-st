@@ -626,7 +626,7 @@ intro_play:
     bsr.w splash_load
     tst.l %d0
     bne.w 99f                               | no INTRO.DAT: no intro
-    moveq #0, %d0                           | the ROM plays no song in the intro
+    moveq #0, %d0                           | the Start press cuts the title's song at once
     bsr.w sound_play_music
     lea sp_phase(%pc), %a0
     move.w #2, (%a0)
@@ -635,7 +635,14 @@ intro_play:
     bsr.w sp_scene_show
     lea sp_late0(%pc), %a0
     move.l late_frames(%pc), (%a0)
-1:  bsr.w intro_tick
+    moveq #8, %d0                           | the ROM plays no song in the intro, but the Start press has set song 8 (the mantra's) and the intro's first frames take
+    bsr.w sound_play_music                  | five frames before it sets 0: four frames of that song's first note are heard (checked in jsnes); pass 5 stops it
+1:  move.w sp_st+ST_N(%pc), %d0
+    cmpi.w #5, %d0
+    bne.s 3f
+    moveq #0, %d0
+    bsr.w sound_play_music
+3:  bsr.w intro_tick
     tst.w %d0
     beq.s 2f
     bsr.w sound_play_sfx                    | a footstep

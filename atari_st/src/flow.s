@@ -428,6 +428,10 @@ flow_fade_out:
     moveq #1, %d1
 2:  moveq #4, %d0
 3:  bsr.w wait_vbl
+    bsr.w input_poll                        | Esc leaves at once (the frame loop would only see it after the next screen was made)
+    lea input_state(%pc), %a0
+    tst.b IN_QUIT(%a0)
+    bne.s 8f
     dbra %d0, 3b
     bsr.w death_fade
     addq.w #1, %d1
@@ -435,6 +439,7 @@ flow_fade_out:
     bne.s 2b
 9:  movem.l (%sp)+, %d0-%d2/%a0
     rts
+8:  FAR_JMP viewer_leave                    | the program's way out (frame_exit, TOS's screen and palette, Pterm0): it never comes back
 
 flow_last:
     .word -1, -1, -1                        | the area, palette set and screen the event below belongs to

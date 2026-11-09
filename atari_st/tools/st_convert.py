@@ -409,7 +409,8 @@ def magic_anim_assets(rom: fr.Rom, palette_index: int, plan: PalettePlan, burst_
     tiles = fs.common_tiles(rom)
     palettes = sprite_palettes(rom, palette_index)
     images: list[bytes] = []
-    index: dict[tuple, int] = {}
+    index: dict[tuple, int | None] = {}
+    kept: dict[bytes, int] = {}
     records = []
     burst = [fs.appearance(rom, MAGIC_FIRST_APPEARANCE + MAGIC_APPEARANCES + k, "TILEINFO_ENTITY_ADDRS") for k in range(MAGIC_BURST)]
     first = fs.place(burst[0], ANIM_BASE, ANIM_BASE, 0)                 # (the picture itself: its four tiles, top left first)
@@ -428,14 +429,21 @@ def magic_anim_assets(rom: fr.Rom, palette_index: int, plan: PalettePlan, burst_
                 continue
             key = (sp.tile, sp.attr & 3, bool(sp.attr & 0x40), bool(sp.attr & 0x80))
             if key not in index:
-                index[key] = len(images)
-                images.append(sprite_image(tiles.get(sp.tile, bytes(16)), key[2], palettes[key[1]], plan, key[3]))
+                picture = sprite_image(tiles.get(sp.tile, bytes(16)), key[2], palettes[key[1]], plan, key[3])
+                if not any(picture[5 * line] for line in range(8)):          # nothing in it: not drawn, so not kept
+                    index[key] = None
+                else:
+                    if picture not in kept:                                  # the same picture twice is kept once
+                        kept[picture] = len(images)
+                        images.append(picture)
+                    index[key] = kept[picture]
             entries.append((sp.x - ANIM_BASE + ST_LEFT, sp.y + 1 - ANIM_BASE, index[key]))
         x0, y0 = min(e[0] for e in entries), min(e[1] for e in entries)
         box = (x0, max(e[0] for e in entries) + 8, y0, max(e[1] for e in entries) + 8)
         record = b"".join(v.to_bytes(2, "big", signed=True) for v in box)
         for e in entries:
-            record += b"".join(v.to_bytes(2, "big", signed=True) for v in e)
+            if e[2] is not None:
+                record += b"".join(v.to_bytes(2, "big", signed=True) for v in e)
         records.append(record + b"\xff\xff")
     offsets, at = [], 2 * len(records)
     for record in records:

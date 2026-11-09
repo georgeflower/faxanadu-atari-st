@@ -181,6 +181,20 @@ class SplashTests(unittest.TestCase):
             self.assertEqual(mismatch(shot.rows, expected), [], "the game after the intro")
         self.assertEqual(game.palette, game_early.palette)
 
+    def test_start_cuts_the_title_song_and_the_intro_plays_four_or_five_frames_of_song_8_before_it_sets_0(self) -> None:
+        """The ROM's Start press sets Music_Current to 8 and the intro's first passes set it to 0 five frames later (jsnes: song 8's first note is heard for four frames,
+        then silence: tools/refnes/musicprobe.mjs); the intro plays no song. Every VBL from the end of the intro's loading is captured: the title's song stops, song 8 is
+        in the player for 3 to 6 VBLs in a row (SND_MLEFT of its record, over 2600), and then it is silent for good."""
+        caps = list(range(484, 520))
+        run = Run(["VIEWER_DEFS=--defsym SPLASH=1 --defsym MENU=1"], [(480, FIRE), (484, 0)], caps, "shots_splash_blip")
+        left = [shot.at("snd_state", 16) for shot in run.shots]
+        title_off = next(i for i, shot in enumerate(run.shots) if shot.at("sp_phase") == 2)
+        song8 = [i for i, n in enumerate(left) if i > title_off and n > 2600]
+        self.assertTrue(3 <= len(song8) <= 6, f"song 8 for 3 to 6 VBLs: {left}")
+        self.assertEqual(song8, list(range(song8[0], song8[0] + len(song8))), "in a row")
+        self.assertEqual(left[song8[-1] + 1:], [0] * (len(left) - song8[-1] - 1), "and silent afterwards")
+        self.assertEqual([left[i] for i in range(title_off, song8[0])], [0] * (song8[0] - title_off), "the title's song is cut when the intro starts")
+
     def test_continue_goes_to_the_entry_of_a_mantra_and_end_with_nothing_written_goes_back_to_the_title(self) -> None:
         """Down and fire on the title: the mantra's entry on the game's picture (the plain menu's entry; hero and HUD are on it); END with nothing written
         gives up and the title is there again, the arrow at START."""

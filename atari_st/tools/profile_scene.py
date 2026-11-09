@@ -5,7 +5,8 @@ with the debugger's profiler on for a window of VBLs, and prints what each routi
     profile_scene.py [--tos IMG] [--window 500,550] [--step 10] [--poke VBL:KIND:VALUE ...] -- MAKE_ARGS...
 
 MAKE_ARGS are the arguments of `make viewer` (ALL=1 AREA=7 SCREEN=15 HERO=208,144,0,255,0,0,1 WORLD=1 HUD=80,80,0,0,0 ...). A poke is a joystick
-byte (`joy`: 1 up, 2 down, 4 left, 8 right, 0x80 fire), the hero's x or y (`x`, `y`) or a key (`key`: scan code << 8 | 1 down, 0 up).
+byte (`joy`: 1 up, 2 down, 4 left, 8 right, 0x80 fire), the hero's x or y (`x`, `y`), a key (`key`: scan code << 8 | 1 down, 0 up) or a word of
+the program's by its symbol (`hourglass:60` keeps the enemies still).
 The window is in VBLs from the start of Hatari (TOS takes about 300 to boot, the title is not in these builds).
 
 Hatari's profiler counts the cycles of every instruction (--cpu-exact); with the program's symbols loaded it also has the cycles of every
@@ -57,8 +58,10 @@ def run(tos: Path, sym: dict[str, int], start: int, end: int, step: int, pokes: 
             text = f"memwrite ${base + sym['input_state'] + 259:x} 0x{value:02x}\ncont\n"
         elif what == "key":
             text = f"memwrite ${base + sym['input_state'] + 264 + (value >> 8):x} 0x{value & 255:02x}\ncont\n"
-        else:
+        elif what in ("x", "y"):
             text = f"memwrite ${base + sym['hero_' + what]:x} 0x{value >> 8:02x} 0x{value & 255:02x}\ncont\n"
+        else:                                           # the word at the program's symbol of that name (`hourglass`: the enemies stand still, the scene stays the same)
+            text = f"memwrite ${base + sym[what]:x} 0x{value >> 8:02x} 0x{value & 255:02x}\ncont\n"
         (work / f"poke{i}.ini").write_text(text, encoding="utf-8")
         script += f"b VBL > {vbl} :once :file {work / f'poke{i}.ini'}\n"
     cuts = list(range(start, end, step)) + [end]

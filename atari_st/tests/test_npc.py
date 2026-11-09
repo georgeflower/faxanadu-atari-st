@@ -21,6 +21,8 @@ REGIONS = {0: 0, 1: 1, 2: 2, 3: 0, 6: 4}          # the region the game's temple
 STREETS = ((0, 1, 64), (0, 2, 64), (0, 3, 64), (0, 6, 64), (0, 7, 64), (3, 1, 64), (3, 10, 64), (3, 2, 64), (3, 8, 64), (3, 0, 64), (1, 61, 64), (1, 63, 64))
 BUILDINGS = (0, 1, 2, 3, 4, 5, 6, 7, 40, 12, 22, 49, 50, 13, 17)
 INJECTED = ((0x35, 100, 144), (0x36, 150, 144))      # put into slots 6 and 5 of Eolis screen 1
+HOURGLASS = ((0, 1), (0, 2), (0, 6))                 # streets where the Hour Glass is in force for frames 150 to 400 (DurationHourGlass kept at 15 seconds): key (area, 2000 + screen)
+HOURGLASS_FRAMES = [[150, 400]]
 FIELDS = (("ent", "Entities"), ("x", "x"), ("xf", "xf"), ("y", "y"), ("yf", "yf"), ("flags", "Flags"), ("phase", "Phases"), ("beh", "Behaviors"), ("arg1", "BehaviorArg1"),
           ("d2", "BehaviorData2"), ("d3", "BehaviorData3"), ("internal", "InternalBehaviorStates"), ("bxf", "BehaviorState_XFrac"), ("bxfull", "BehaviorState_XFull"),
           ("byf", "BehaviorState_YFrac"), ("byfull", "BehaviorState_YFull"))
@@ -53,6 +55,11 @@ def building_doors(rom) -> dict[int, list[tuple[int, int, int, int, int]]]:
     return out
 
 
+def updated(rec, n: int) -> bool:
+    """The sprites were updated in frame n: the counter went up, or the Hour Glass was in force (it stands still then, the people go on) and the game did not stop them (a scroll)."""
+    return rec[n]["counter"] != rec[n - 1]["counter"] or rec[n]["hg"]
+
+
 def people_only(eng) -> None:
     """The model runs the people of a screen only (a screen of Trunk has items too): every other slot is empty."""
     for s in eng.sprites:
@@ -75,6 +82,9 @@ class NpcTests(unittest.TestCase):
             cls.runs[(area, screen)] = cls.record(dict(area=area, region=REGIONS[area], screen=screen, x=x, door=None), f"{area}_{screen}")
         inject = [dict(slot=6 - i, entity=e, x=x, y=y, hbox=ed.entity(cls.rom, e)["hitbox"], script=cls.rom.word("SPRITE_BSCRIPTS", e)) for i, (e, x, y) in enumerate(INJECTED)]
         cls.runs[(0, 1000)] = cls.record(dict(area=0, region=0, screen=1, x=64, door=None, inject=inject), "injected")
+        cls.runs[(0, 3000)] = cls.record(dict(area=0, region=0, screen=1, x=64, door=None, inject=inject, hourglass=HOURGLASS_FRAMES), "injected_hourglass")     # (all three kinds, the hero sweeping)
+        for area, screen in HOURGLASS:
+            cls.runs[(area, 2000 + screen)] = cls.record(dict(area=area, region=REGIONS[area], screen=screen, x=64, door=None, hourglass=HOURGLASS_FRAMES), f"hourglass_{area}_{screen}")
         for ident in BUILDINGS:
             for a, region, screen, x, y in doors[ident]:                    # (a door the hero cannot be put in front of is skipped for the next of its building)
                 try:
@@ -128,7 +138,8 @@ class NpcTests(unittest.TestCase):
         people_only(eng)
         for n in range(start + 1, len(rec)):
             eng.hero_x, eng.hero_y = rec[n]["px"], rec[n]["py"]
-            if rec[n]["counter"] != rec[n - 1]["counter"]:
+            if updated(rec, n):
+                eng.hourglass = rec[n]["hg"]
                 eng.update_all()
             yield n, eng
 
@@ -157,6 +168,8 @@ class NpcTests(unittest.TestCase):
             with self.subTest(area=key[0], screen=key[1]):
                 if key[0] == 4:
                     self.assertEqual((rec[0]["area"], rec[0]["screen"]), key, "the hero is in the building the scene says")
+                if 2000 <= key[1] < 3000:
+                    self.assertEqual((rec[0]["area"], rec[0]["screen"]), (key[0], key[1] - 2000), "the street the scene says")
                 slots = [i for i, s in enumerate(rec[0]["slots"]) if s["Entities"] in PEOPLE]
                 self.assertTrue(slots, "someone is there")
                 kinds |= {rec[0]["slots"][i]["Entities"] for i in slots}
@@ -170,6 +183,26 @@ class NpcTests(unittest.TestCase):
         self.assertEqual(kinds, set(PEOPLE), "every kind of person was run")
         self.assertGreater(checked, 5000)
 
+    def test_the_people_walk_on_while_the_hour_glass_runs_and_the_counter_stands_still(self) -> None:
+        """`Sprites_UpdateAll` adds 1 to SpriteUpdateCounter only while DurationHourGlass is $FF, and `Sprites_UpdateBehavior` leaves out only the sprites of category 0 (the enemies): the
+        people (category 2) walk, turn and wait as before for the whole of the Hour Glass, and the pictures that come from the counter (a walker's step every 8 updates, the rest every
+        16) stand still. In the recordings (three streets, and the kinds $35 and $36 injected) every person who walks before the Hour Glass walks during it and after it, and the
+        counter is one number from its first frame to its last."""
+        for key in ((0, 3000), *((a, 2000 + s) for a, s in HOURGLASS)):
+            with self.subTest(key=key):
+                rec = self.runs[key]
+                window = [n for n in range(len(rec)) if rec[n]["hg"]]
+                self.assertEqual((window[0], window[-1]), tuple(HOURGLASS_FRAMES[0][:1] + [HOURGLASS_FRAMES[0][1] - 1]), "the Hour Glass is in force in the window the scene asks for")
+                self.assertEqual({rec[n]["counter"] for n in window}, {rec[window[0] - 1]["counter"]}, "the counter stands still from the first frame of the Hour Glass to the last")
+                self.assertEqual(rec[window[-1] + 2]["counter"], (rec[window[0] - 1]["counter"] + 2) & 255, "and goes on where it stood")
+                walkers = 0
+                for i in range(8):
+                    if rec[0]["slots"][i]["Entities"] not in PEOPLE:
+                        continue
+                    xs = [rec[n]["slots"][i]["x"] * 256 + rec[n]["slots"][i]["xf"] for n in window[1:]]
+                    walkers += len(set(xs)) > 20
+                self.assertGreater(walkers, 0, "someone walks during the Hour Glass")
+
     def test_a_person_loaded_as_the_model_loads_him_is_where_the_game_has_him(self) -> None:
         """The state the game gives a person when the screen is loaded (behaviour ready, phase 0, the script's start) is, after some number of updates (none if the recording began at once;
         the recording began up to 400 frames after the load), the state of the first record: where he is, which way he faces, his phase, his behaviour and its count. (The game leaves the
@@ -180,7 +213,7 @@ class NpcTests(unittest.TestCase):
             return tuple(getattr(sp, FIELDS[i][0]) for i in keep) + (sp.flags & 0x40,)
 
         for key, rec in sorted(self.runs.items()):
-            if key == (0, 1000):
+            if key in ((0, 1000), (0, 3000)):
                 continue
             with self.subTest(area=key[0], screen=key[1]):
                 eng = self.engine(key, rec)
@@ -206,11 +239,11 @@ class NpcTests(unittest.TestCase):
 
         checked = 0
         for key, rec in sorted(self.runs.items()):
-            if key == (0, 1000) or key[0] == 1:                       # (the tiles of a kind that is not placed are not loaded; a screen of Trunk has items on show too)
+            if key in ((0, 1000), (0, 3000)) or key[0] == 1:          # (the tiles of a kind that is not placed are not loaded; a screen of Trunk has items on show too)
                 continue
             with self.subTest(area=key[0], screen=key[1]):
                 for n in range(1, len(rec) - 1):
-                    if rec[n]["counter"] == rec[n - 1]["counter"] or rec[n + 1]["counter"] == rec[n]["counter"]:
+                    if not updated(rec, n) or not updated(rec, n + 1):
                         continue
                     want = []
                     for s in rec[n]["slots"]:
@@ -223,6 +256,41 @@ class NpcTests(unittest.TestCase):
                     self.assertEqual(sorted(want), sorted(got), f"{key} frame {n}")
                     checked += 1
         self.assertGreater(checked, 3000)
+
+
+@unittest.skipUnless(ROM.exists() and shutil.which("node") and (ROOT / "tools" / "refnes" / "node_modules").exists(), "needs the ROM and the jsnes harness")
+class DoorAndPersonTests(unittest.TestCase):
+    """A door that needs a key and a person at once (`tools/refnes/doorpersonprobe.mjs`): Eolis screen 6 (area 0), the hero at the door of x 192 (the Ring of Elf's: key requirement 6),
+    the guard ($42, script value 7) put over him, Up pressed. `Player_CheckHandleEnterDoor` runs in the player's update and `Player_CheckHandlePressUpOnNPC` (CMP #$08 on the changed buttons)
+    in the sprites' collision handlers after it."""
+
+    def run_probe(self, name: str, **kw) -> dict:
+        import enemy_data as ed
+        import faxanadu_rom as fr
+
+        rom = fr.Rom(ROM)
+        spec = dict(area=0, region=0, screen=6, x=192, entity=0x42, script=7, up=[5], buttons="A", frames=400, ring=0, hbox=ed.entity(rom, 0x42)["hitbox"], bscript=rom.word("SPRITE_BSCRIPTS", 0x42))
+        spec.update(kw)
+        with tempfile.TemporaryDirectory() as tmp:
+            spec_file, out = Path(tmp) / f"{name}.spec.json", Path(tmp) / f"{name}.json"
+            spec_file.write_text(json.dumps(spec))
+            subprocess.run(["node", "doorpersonprobe.mjs", str(spec_file), str(out)], cwd=ROOT / "tools" / "refnes", check=True, capture_output=True)
+            result = json.loads(out.read_text())
+        return {"starts": [(s["frame"], s["script"]) for s in result["starts"]], "area": result["final"]["area"]}
+
+    def test_up_at_a_person_away_from_the_door_starts_the_persons_script(self) -> None:
+        self.assertEqual(self.run_probe("person", x=100)["starts"], [(5, 7)])
+
+    def test_up_at_a_locked_door_with_a_person_over_the_hero_runs_the_doors_script_and_never_the_persons(self) -> None:
+        for buttons in ("A", "B", "none"):
+            with self.subTest(buttons=buttons):
+                result = self.run_probe(f"locked_{buttons}", buttons=buttons)
+                self.assertEqual(result["starts"], [(5, 0x7F)], "the ring door's hint ($7F) and nothing after it, whichever way the message is dismissed")
+                self.assertEqual(result["area"], 0, "the door stayed shut")
+
+    def test_up_at_a_door_that_opens_with_a_person_over_the_hero_enters_it_and_starts_no_script(self) -> None:
+        result = self.run_probe("ring", ring=1)
+        self.assertEqual((result["starts"], result["area"]), ([], 4), "the Ring opens the door: no script at all, the building is entered")
 
 
 if __name__ == "__main__":

@@ -279,6 +279,55 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual((word("hud_state"), word("hud_state+2"), word("hud_state+4"), word("hud_state+6")), (0x5050, 2200, 0, 800), "all power and magic, his rank's experience and gold")
         self.assertEqual(word("hero_invinc"), 0)
 
+    def test_the_dissolving_hero_loses_only_the_pattern_tiles_0_to_7_as_in_the_rom(self) -> None:
+        """Player_DrawDeathAnimation takes pixels from the pattern tiles $00-$07 only. Armour 1 without a shield stands on the tiles 0, 1, 9, 10, 11, 12, 2, 3
+        (jsnes, tools/refnes/deathprobe.mjs with armour 1 and no shield: tiles 9 to 12 stay whole to the end), so the pieces of the body that use 9 to 12
+        stay as they are while the others go. The picture a few passes before the fade is the background with the body drawn from tiles that have lost the
+        pixels the ROM's rule says for the phase and the tile count the program is at (death_state, as it was when the picture was drawn)."""
+        import faxanadu_rom as fr
+        import faxanadu_sprites as fs
+        import hatari_shot as hs
+        import st_convert as sc
+
+        masks = (0xFE, 0xDF, 0xF7, 0xFD, 0xBF, 0xEF, 0x7F, 0xFB)        # PPUBUFFER_DRAWCOMMAND_REMOVE_VERT_LINES_MASKS
+
+        def removed(data: bytes, phases: int) -> bytes:
+            out = bytearray(data)
+            for i in range(16):
+                for ph in range(phases):
+                    out[i] &= masks[(ph - i) & 7]
+            return bytes(out)
+
+        for left in (0, 1):
+            args = ["ALL=1", "AREA=0", "SCREEN=1", f"HERO=128,144,1,255,0,0,{left}", "VIEWER_DEFS=--defsym DAMAGE=80 --defsym TITLE=2"]
+            hit = [(599, "h", 1), (600, "h", 0)]
+            ram, word, log = self.run_scenario(args, hit, 664, "shots_death")
+            phase, count = word("death_state+2"), word("death_state+4")
+            self.assertTrue(0 < phase < 8 and word("death_state") < 80 and count >= 2, f"dissolving, before the fade (phase {phase}, tiles {count}, pass {word('death_state')})")
+            count -= 1                      # (the capture is after the pass's step: the picture is of the state before it)
+            rom = fr.Rom(ROM)
+            import faxanadu_maps as fm
+            palette = fm.area(rom, 0).palette_index
+            plan = sc.plan_for_set(rom, palette)
+            camera = word("camera")
+            state = dict(hp=word("hud_state") >> 8, mp=word("hud_state") & 255, experience=word("hud_state+2"), gold=word("hud_state+4") << 16 | (word("hud_state+6") & 0xFFFF),
+                         seconds=(word("hud_state+8") >> 8) & 255)
+            expected = sc.expected_screen(rom, 0, 1, camera, state=state)
+            background = sc.expected_screen(rom, 0, 1, camera, state=state)
+            tiles = fs.pattern_tiles(rom, 1, 255, fs.NO_ITEM)
+            body = fs.hero_parts(rom, word("hero_x"), word("hero_y"), 1, 255, fs.NO_ITEM, 0, bool(word("hero_flip")))[0]
+            self.assertEqual(sorted(s.tile for s in body), [0, 1, 2, 3, 9, 10, 11, 12])
+            for t in range(8):
+                tiles[t] = removed(tiles[t], phase + (1 if 0 <= count and t < count else 0))
+            layer = fs.sprite_layer(body, tiles, sc.sprite_palettes(rom, palette))
+            for (x, line), c in layer.items():
+                y = line - camera
+                if sc.ST_TOP <= y < 200 and sc.ST_LEFT <= x + sc.ST_LEFT < sc.ST_LEFT + 256:
+                    expected[y][x + sc.ST_LEFT] = plan.slot[c & 0x3F]
+            self.assertNotEqual(expected, background)
+            rows = hs.decode_screen(ram, hs.video_base(log))
+            self.assert_picture(rows, expected)
+
     def test_up_and_b_cast_a_spell_that_flies_is_drawn_costs_magic_and_leaves_no_trail(self) -> None:
         """Eolis screen 1 with 80 magic power and each spell chosen (MAGIC=n): Up and B cast it. A few frames later its place and state are those of
         `tools/magic_model.py` (checked against the ROM in tests/test_magic.py), the magic power is down by its cost, and the screen is the converter's
@@ -610,6 +659,13 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual(state(800), (144, 0), "landed again")
 
     def test_he_climbs_a_ladder_as_the_rom_does(self) -> None:
+        self.climb_a_ladder(1)
+
+    def test_he_climbs_a_ladder_as_the_rom_does_facing_the_other_way(self) -> None:
+        """The climbing picture is mirrored by the movement tick alone, not by the facing as well (jsnes: tests/test_sprites.py): the same expected picture for either facing."""
+        self.climb_a_ladder(0)
+
+    def climb_a_ladder(self, left: int) -> None:
         """Mist screen 0 has a ladder in column 2 (rows 10 to 12). He hangs on it without falling; the stick held up (poked) from VBL 600 to 640
         lifts him 5/8 of a pixel a frame, which is where the Python model puts him after about 40 frames."""
         import faxanadu_maps as fm
@@ -617,11 +673,11 @@ class ViewerTests(unittest.TestCase):
         import hatari_shot as hs
         import hero_physics as hp
 
-        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=2", "SCREEN=0", "CAMERA=40", "HERO=32,170,0,255,0,0,1", "VIEWER_DEFS=--defsym NO_ENEMIES=1"], check=True, capture_output=True)
+        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=2", "SCREEN=0", "CAMERA=40", f"HERO=32,170,0,255,0,0,{left}", "VIEWER_DEFS=--defsym NO_ENEMIES=1"], check=True, capture_output=True)
         nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
         sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
         image = (ROOT / "build" / "viewer.bin").read_bytes()
-        work = ROOT / "build" / "shots_ladder"
+        work = ROOT / "build" / f"shots_ladder{left}"
         work.mkdir(parents=True, exist_ok=True)
         prg = ROOT / "build" / "VIEWER.PRG"
         hatari = shutil.which("hatari")
@@ -664,7 +720,7 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual(word(700, "hero_frame"), 7)
         m = re.findall(r"^00FF8200: ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2})", log, re.M)[-1]
         shown = (int(m[1], 16) << 16) | (int(m[3], 16) << 8)
-        flip = word(700, "hero_flip") ^ ((word(700, "hero_mtick") >> 4) & 1)
+        flip = (word(700, "hero_mtick") >> 4) & 1                 # (the tick alone: the ROM stores it over the facing, checked on a ladder in jsnes: tests/test_sprites.py)
         expected = sc.expected_screen(rom, 2, 0, 40, state=dict(hp=16, mp=0, experience=0, gold=0, seconds=0),
                                       hero=sc.Hero(word(700, "hero_x"), word(700, "hero_y"), 0, 255, 0, 7, bool(flip)))
         # the ladder of Mist screen 0 is under blocks that sprites go behind (property 4): the hero's pixels over their opaque pixels are hidden (src/enemy.s behind_set)
@@ -959,7 +1015,7 @@ class ViewerTests(unittest.TestCase):
                             continue
                         app = fs.appearance(rom, ed.entity(rom, sp.ent)["appearance"] + em.appearance_offset(sp.ent, sp.phase, counter, sp.d2, sp.internal), "TILEINFO_ENTITY_ADDRS")
                         layer = fs.sprite_layer(fs.place(app, sp.x, sp.y, masks[i]), fs.entity_tiles(rom, sp.ent), palettes)
-                        layer = behind.drop_behind(layer, sp.x, behind.halves(rom, fm.area(rom, area), screen, sp.x, sp.y), opaque)      # (a column over a block that sprites go behind: src/enemy.s behind_image)
+                        layer = behind.drop_behind(layer, sp.x, behind.halves(rom, fm.area(rom, area), screen, sp.x, sp.y), opaque)      # (a column over a block that sprites go behind: src/enemy.s behind_tile, src/blit.s bh_tile)
                         for (x, line), c in layer.items():
                             y = line - word("camera")
                             if sc.ST_TOP <= y < 200 and sc.ST_LEFT <= x + sc.ST_LEFT < sc.ST_LEFT + 256:
@@ -994,7 +1050,7 @@ class ViewerTests(unittest.TestCase):
         rom = fr.Rom(ROM)
         for area, screen, hero, vbl in scenes:
             with self.subTest(area=area, screen=screen):
-                # (the passes of a Mist screen take longer where sprites are drawn behind the background (src/enemy.s behind_image) and some frames are late: the capture then
+                # (the passes of a Mist screen take longer where sprites are drawn behind the background (src/blit.s bh_tile) and some frames are late: the capture then
                 # falls in the middle of a pass now and then, with a slot half updated; the next VBL is a pass boundary again. So: 15 VBLs more when there were
                 # too few passes, and up to six tries in all.)
                 late = 0

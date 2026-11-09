@@ -4,7 +4,8 @@
     record_sounds.py [--out build/refnes/sound] [--music-frames 9000] [--jobs 4]
 
 Writes m1.json .. m16.json (songs) and s1.json .. s28.json (sound effects); tools/build_sound.py turns them into the ST's sound data.
-Needs node, `npm install` in tools/refnes, the RAM labels (tools/ram_labels.py) and the ROM. Takes a few minutes; files that exist are kept.
+Needs node, `npm install` in tools/refnes, the RAM labels (tools/ram_labels.py) and the ROM. Takes a few minutes; files that exist are kept
+(a sound effect recorded before the engine's priority note, `handler`, was added is recorded again).
 """
 from __future__ import annotations
 
@@ -27,7 +28,7 @@ def record(out: Path, music_frames: int = 9000, sfx_frames: int = 300, jobs: int
 
     def run(job):
         kind, i, frames, path = job
-        if path.is_file():
+        if path.is_file() and (kind == "music" or '"handler"' in path.read_text()):
             return
         done = subprocess.run(["node", "soundrec.mjs", kind, str(i), str(frames), str(path)], cwd=ROOT / "tools" / "refnes",
                               capture_output=True, text=True)

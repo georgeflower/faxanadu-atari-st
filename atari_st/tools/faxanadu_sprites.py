@@ -164,9 +164,18 @@ def body_frame(flags: int, tick: int, attack_frame: int, status: int = 0, joy: i
     return 0, 0
 
 
+def is_climbing(flags: int, x: int) -> bool:
+    """`Player_IsClimbing`: Can Climb (bit 3) is set, he is not falling off the ladder (bit 2) unless he stands square on its block (x & 15 = 0), and Climbing (bit 4) is set."""
+    return bool(flags & 8) and not (x & 15 and flags & 4) and bool(flags & 0x10)
+
+
 def hero_parts(rom: Rom, x: int, y: int, armor: int, shield: int, weapon: int, frame: int, facing_left: bool, flip_extra: int = 0,
-               scroll_x: int = 0, attacking_frame: int = -1) -> tuple[list[Sprite], list[Sprite], list[Sprite], list[Sprite]]:
-    """The body, the extra piece of the arm (the third frame of an attack), the weapon and the shield, each as its sprites."""
+               scroll_x: int = 0, attacking_frame: int = -1, climbing: bool = False) -> tuple[list[Sprite], list[Sprite], list[Sprite], list[Sprite]]:
+    """The body, the extra piece of the arm (the third frame of an attack), the weapon and the shield, each as its sprites. `climbing`: `Player_GetBodySpriteFrameOffset` stores the
+    climbing picture's flip (`flip_extra`, the movement tick's bit 4) over the facing that `Player_SetFacingLeft` stored a moment before, so a climbing hero's body, weapon and shield
+    are mirrored by the tick alone, whichever way he faces (checked on a real ladder in jsnes, tests/test_sprites.py)."""
+    if climbing:
+        facing_left, flip_extra = bool(flip_extra & 0x40), 0
     flip = (0x40 if facing_left else 0) | flip_extra
     # the body: armour * 16 + shield * 8 for the combination, plus the frame (Battle Suit uses the same frames with or without a shield)
     offs = [rom.byte("PLAYER_BODY_TILEINFO_START_OFFSETS", i) for i in range(8)]
@@ -179,9 +188,9 @@ def hero_parts(rom: Rom, x: int, y: int, armor: int, shield: int, weapon: int, f
 
 
 def hero_sprites(rom: Rom, x: int, y: int, armor: int, shield: int, weapon: int, frame: int, facing_left: bool, flip_extra: int = 0,
-                 scroll_x: int = 0, attacking_frame: int = -1) -> list[Sprite]:
+                 scroll_x: int = 0, attacking_frame: int = -1, climbing: bool = False) -> list[Sprite]:
     """Body, then the weapon, then the shield, as the game draws them (`Player_DrawBody`, `Player_DrawWeapon`, `Player_DrawShield`)."""
-    body, arm, held, shielded = hero_parts(rom, x, y, armor, shield, weapon, frame, facing_left, flip_extra, scroll_x, attacking_frame)
+    body, arm, held, shielded = hero_parts(rom, x, y, armor, shield, weapon, frame, facing_left, flip_extra, scroll_x, attacking_frame, climbing)
     return body + arm + held + shielded
 
 

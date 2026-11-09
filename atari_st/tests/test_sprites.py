@@ -57,6 +57,70 @@ class HeroTests(unittest.TestCase):
                 self.assertEqual(bad[:5], [])
                 self.assertGreater(len(layer), 100)
 
+    def test_the_hero_inside_a_building_has_the_same_colours_as_outside(self) -> None:
+        """A building loads the inside sprite palettes ($1D0 of bank 11, outside $1C0): they differ in palettes 2 and 3 only (the people's and the enemies'), and the hero and his spells
+        draw with palettes 0 and 1, so the converter's outside palettes colour him right inside too. jsnes: the PPU's palettes outside and inside are the ROM's tables, the hero in the
+        building (Eolis screen 1's door, standing, no weapon: it is put away inside) is the converter's picture pixel for pixel."""
+        import nes_palette
+        import st_convert as sc
+
+        b11 = self.rom.prg(11)
+        table = lambda base: [list(b11[base + 4 * i:base + 4 * i + 4]) for i in range(4)]
+        self.assertEqual(table(0x1C0)[:2], table(0x1D0)[:2])
+        self.assertNotEqual(table(0x1C0)[2:], table(0x1D0)[2:])
+        for index in range(0x11, 0x1B):                                  # the ten building palette sets
+            self.assertEqual(sc.palette_set(self.rom, index, "inside")[1][:2], sc.sprite_palettes(self.rom, index)[:2])
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = os.path.join(tmp, "i")
+            subprocess.run(["node", "insidepalette.mjs", prefix], cwd=REFNES, check=True, capture_output=True)
+            state = json.loads(Path(prefix + ".json").read_text())
+            chr_ = Path(prefix + "_in.chr.bin").read_bytes()
+            ppm = self.rs.read_ppm(Path(prefix + "_in.ppm"))
+        self.assertEqual([state["outside"]["sprite"][i * 4:i * 4 + 4] for i in range(4)], table(0x1C0), "outside: the $1C0 palettes")
+        self.assertEqual([state["inside"]["sprite"][i * 4:i * 4 + 4] for i in range(4)], table(0x1D0), "inside: the $1D0 palettes")
+        self.assertEqual(state["area"], 4)
+        hero = state["hero"]
+        equipment = (hero["armor"], hero["shield"], 255)                  # (the weapon is not drawn inside)
+        tiles = self.sp.pattern_tiles(self.rom, *equipment)
+        self.assertEqual([n for n, b in tiles.items() if chr_[n * 16:n * 16 + 16] != b], [])
+        sprites = self.sp.hero_sprites(self.rom, hero["x"], hero["y"], *equipment, 0, bool(hero["flags"] & 0x40))
+        layer = self.sp.sprite_layer(sprites, tiles, sc.sprite_palettes(self.rom, state["inside"]["index"]))
+        bad = [(x, y) for (x, y), c in layer.items() if tuple(ppm[y][x]) != tuple(nes_palette.NES_RGB[c & 0x3F])]
+        self.assertEqual(bad[:5], [])
+        self.assertGreater(len(layer), 100)
+
+    def test_a_hero_on_a_real_ladder_is_drawn_as_the_game_draws_him(self) -> None:
+        """Mist screen 0 has a ladder (column 2): with the stick up and down he climbs it, in the climbing body frame 7 (`Player_GetBodySpriteFrameOffset`), mirrored by bit 4 of the
+        movement tick alone: the game stores that over the facing, so a hero facing either way is mirrored the same, and his weapon and shield follow (the model once did an OR with the
+        facing). Every frame of the climb up, the hang, the climb down and the frames before, for four equipments and both facings, the sprites jsnes holds (the same tiles, places and
+        attributes; the behind-the-background bit is the screen's) equal `hero_sprites` made from the state the game drew them from."""
+        flips = set()
+        for equipment, facing in (((0, 255, 255), 1), ((1, 1, 2), 1), ((3, 3, 3), 0), ((2, 255, 0), 1)):
+            with self.subTest(equipment=equipment, facing=facing):
+                with tempfile.TemporaryDirectory() as tmp:
+                    out = os.path.join(tmp, "l.json")
+                    subprocess.run(["node", "ladderprobe.mjs", *map(str, equipment), str(facing), out], cwd=REFNES, check=True, capture_output=True)
+                    frames = json.loads(Path(out).read_text())
+                bad, checked, climbing = [], 0, 0
+                for before, now in zip(frames, frames[1:]):
+                    game = sorted((e[3], e[0], e[1], e[2] & ~0x20) for e in now["oam"] if e[1] < 0x80)
+                    if not game:                                           # (the first frames after the warp: the hero is not drawn yet)
+                        continue
+                    on = self.sp.is_climbing(before["flags"], before["x"])
+                    frame, extra = self.sp.body_frame(before["flags"], before["tick"], before["attack"], before["status"], before["joy"], on)
+                    mine = sorted((s.x, s.y, s.tile, s.attr & ~0x20) for s in self.sp.hero_sprites(
+                        self.rom, before["x"], before["y"], *equipment, frame, bool(before["flags"] & 0x40), extra, before["scrollX"], -1, on))
+                    checked += 1
+                    climbing += on
+                    if on:
+                        flips.add((facing, extra))
+                    if mine != game:
+                        bad.append((now["phase"], before["tick"], on))
+                self.assertEqual(bad[:5], [])
+                self.assertGreater(checked, 150)
+                self.assertGreater(climbing, 100)
+        self.assertEqual(flips, {(0, 0), (0, 0x40), (1, 0), (1, 0x40)}, "both mirrors were seen for both facings")
+
     def test_every_frame_of_a_walk_attack_and_jump_equals_the_games_sprites(self) -> None:
         for equipment in [(0, 255, 0), (1, 1, 2), (3, 3, 3)]:
             with self.subTest(equipment=equipment):

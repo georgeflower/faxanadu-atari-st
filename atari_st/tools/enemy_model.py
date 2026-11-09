@@ -131,6 +131,8 @@ class Engine:
         self.combat: dict = {}        # enemy_data.tables
         self.hero = Hero(events=[], weapons=[], armours=[], shields=[], items=[], magics=[])
         self.visits = 0               # Screen_TrackedVisitCount
+        self.hourglass = False        # the Hour Glass is in force (DurationHourGlass is not $FF): SpriteUpdateCounter stands still and a sprite of category 0 (an enemy) runs no
+                                      # behaviour (`Sprites_UpdateAll`, `Sprites_UpdateBehavior`); the town people (category 2) and the items walk and wait as before
 
     @property
     def hero_x(self) -> int:
@@ -1445,7 +1447,8 @@ class Engine:
 
     def update_frame(self) -> None:
         """Sprites_UpdateAll for the sprites the sword and the touch can reach (no magic yet), the hero as `self.hero`."""
-        self.counter = (self.counter + 1) & 255
+        if not self.hourglass:
+            self.counter = (self.counter + 1) & 255
         for i in range(7, -1, -1):
             self.i = i
             s = self.sprites[i]
@@ -1541,6 +1544,8 @@ class Engine:
             raise NotImplementedError(f"script op {op}")
 
     def update_behaviour(self, s: Sprite) -> None:
+        if self.hourglass and self.kinds.get(s.ent, {}).get("category", 1) == 0:       # (Sprites_UpdateBehavior returns before the first op)
+            return
         self.ip = s.script
         self.load_next_op(s)
         b = s.beh & 0x7F
@@ -1553,7 +1558,8 @@ class Engine:
 
     def update_all(self) -> None:
         """Sprites_UpdateAll for slots without a hit in progress."""
-        self.counter = (self.counter + 1) & 255
+        if not self.hourglass:
+            self.counter = (self.counter + 1) & 255
         for i in range(7, -1, -1):
             self.i = i
             s = self.sprites[i]

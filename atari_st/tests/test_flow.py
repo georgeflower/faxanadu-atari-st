@@ -249,6 +249,36 @@ class FlowTests(unittest.TestCase):
         self.assertEqual((last.at("cur_screen"), last.at("hero_x"), last.at("hero_y")), (1, 144, 144))
         self.assertEqual(last.palette, full)
 
+    def test_esc_in_the_middle_of_a_doors_fade_leaves_at_once(self) -> None:
+        """The fade (flow_fade_out, 20 frames) reads the keyboard: Esc in the middle of it leaves the program at once (frame_exit, TOS's own screen) and not after the next screen was
+        drawn, which the frame loop would have seen only then. The control without Esc: the fade goes on (a dimmed palette on the program's own screen) at the same moment."""
+        args = ["ALL=1", "SCREEN=0", "HERO=192,144,0,255,0,0,1", "VIEWER_DEFS=--defsym FLOW=1 --defsym NO_ENEMIES=1"]
+        door = [(599, "joy", UP), (602, "joy", 0)]
+        control = Run(args, door, [590, 614], "shots_flow_door_esc0")
+        before, during = control.shots
+        self.assertNotEqual(during.palette, before.palette, "the fade is under way")
+        self.assertNotEqual(during.video, during.at("orig_screen", 0, 4, False), "on the program's own screen")
+        run = Run(args, door + [(608, "b:input_state+262", 255)], [590, 614], "shots_flow_door_esc")
+        before, gone = run.shots
+        self.assertNotEqual(before.video, before.at("orig_screen", 0, 4, False))
+        self.assertEqual(gone.video, gone.at("orig_screen", 0, 4, False), "TOS's own screen is on show again: the program has left in the middle of the fade")
+        self.assertEqual(gone.at("cur_screen"), 0, "the next screen was not even made")
+
+    def test_a_door_to_another_palette_restarts_the_song_only_when_the_new_palettes_song_is_another(self) -> None:
+        """Player_CheckHandleEnterDoor sets Music_Current only when the new palette's song (Palette_ARRAY e569) differs from the area's current one. Dartmoor's palettes 12, 13 and 14
+        have the songs 2, 6 and 6: through the door of screen 12 (to palette 13) the song starts anew, through the door of screen 20 (to palette 14) it plays on. A restart is
+        seen by a marker put in the player's state (SND_MLLEFT, which only the start of a song writes)."""
+        marker = lambda vbl: (vbl, "w:snd_state+18", 0x5A5A)
+        pokes = [marker(590), (599, "joy", UP), (602, "joy", 0)]                      # screen 12, palette 12, to screen 16 in palette 13
+        pokes += [(790, "w:cur_screen", 20), (790, "w:hero_x", 224), (790, "w:hero_y", 144), marker(792), (800, "joy", UP), (803, "joy", 0)]    # on to the door of screen 20
+        run = Run(["ALL=1", "AREA=6", "SCREEN=12", "HERO=128,64,0,255,0,0,1", "WORLD=1", "VIEWER_DEFS=--defsym NO_ENEMIES=1"], pokes, [595, 780, 795, 1000], "shots_flow_door_music")
+        start, first, second, last = run.shots
+        self.assertEqual((start.at("cur_pal"), start.at("cur_music"), start.at("snd_state", 18)), (12, 2, 0x5A5A))
+        self.assertEqual((first.at("cur_pal"), first.at("cur_music")), (13, 6))
+        self.assertNotEqual(first.at("snd_state", 18), 0x5A5A, "song 2 to song 6: a new song starts")
+        self.assertEqual((second.at("cur_pal"), second.at("cur_screen"), second.at("snd_state", 18)), (13, 20, 0x5A5A))
+        self.assertEqual((last.at("cur_pal"), last.at("cur_music"), last.at("snd_state", 18)), (14, 6, 0x5A5A), "song 6 to song 6: it plays on")
+
     # ------------------------------------------------------------------------------------------------------ boss rooms
     BOSS = ["ALL=1", "AREA=1", "SCREEN=21", "HERO=16,144,0,255,0,0,1", "HUD=80,80,0,0,0", "VIEWER_DEFS=--defsym FLOW=1"]
 

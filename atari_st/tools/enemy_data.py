@@ -199,7 +199,8 @@ def package_parts(rom: fr.Rom, area: int, screens: list[int], palette_index: int
         used += [e for e in EXTRAS if bosses or e != E_BOSS_DEATH]
     palettes = sc.sprite_palettes(rom, palette_index)
     images: list[bytes] = []
-    index: dict[tuple, int] = {}
+    index: dict[tuple, int | None] = {}
+    kept: dict[bytes, int] = {}
     records, firsts = [], {}
     scripts, entries = bytearray(), {}
     for ent in used:
@@ -220,21 +221,30 @@ def package_parts(rom: fr.Rom, area: int, screens: list[int], palette_index: int
                     for sp in fs.place(app, sc.ANIM_BASE + dx, sc.ANIM_BASE + dy, flip ^ mirror):
                         key = ('common' if ent in EXTRAS else ent, sp.tile, sp.attr & 3, bool(sp.attr & 0x40), bool(sp.attr & 0x80))      # (the common tiles: one image for all that an enemy leaves)
                         if key not in index:
-                            index[key] = len(images)
-                            images.append(column_image(sc.sprite_image(tiles.get(sp.tile, bytes(16)), key[3], palettes[key[2]], plan, key[4])))
+                            picture = column_image(sc.sprite_image(tiles.get(sp.tile, bytes(16)), key[3], palettes[key[2]], plan, key[4]))
+                            if not any(picture[:8]):                # nothing in it: not drawn, so not kept
+                                index[key] = None
+                            else:
+                                if picture not in kept:             # the same picture from another kind, frame or mirroring is kept once
+                                    kept[picture] = len(images)
+                                    images.append(picture)
+                                index[key] = kept[picture]
                         entries_.append((sp.x - sc.ANIM_BASE + sc.ST_LEFT, sp.y + 1 - sc.ANIM_BASE, index[key]))
                 x0, y0 = min(e[0] for e in entries_), min(e[1] for e in entries_)
                 box = (x0, max(e[0] for e in entries_) + 8, y0, max(e[1] for e in entries_) + 8)
                 record = b"".join(v.to_bytes(2, "big", signed=True) for v in box)
                 for x, y, number in entries_:
-                    if any(images[number][:8]):                     # (a tile with nothing in it is not drawn)
+                    if number is not None:                          # (a tile with nothing in it is not drawn)
                         record += x.to_bytes(2, "big", signed=True) + y.to_bytes(2, "big", signed=True) + (number * IMAGE_BYTES).to_bytes(2, "big")
                 records.append(record + b"\xff\xff")
     assert len(images) * IMAGE_BYTES < 0x10000, "an image's offset is one word"
-    offsets, at = [], 2 * len(records)
-    for record in records:
-        offsets.append(at)
-        at += len(record)
+    offsets, at, placed, shared = [], 2 * len(records), {}, []
+    for record in records:                                          # a pose with the same record as an earlier one points at it
+        if record not in placed:
+            placed[record] = at
+            shared.append(record)
+            at += len(record)
+        offsets.append(placed[record])
     kinds = bytearray()
     for ent in used:
         info, kind = entity(rom, ent), kind_info(rom, ent)
@@ -250,7 +260,7 @@ def package_parts(rom: fr.Rom, area: int, screens: list[int], palette_index: int
         body += b"\xff\xff"
     return {
         "enemy_places": b"".join(o.to_bytes(2, "big") for o in places) + bytes(body), "enemy_kinds": bytes(kinds) + b"\xff\xff",
-        "enemy_anim": b"".join(o.to_bytes(2, "big") for o in offsets) + b"".join(records), "enemy_images": b"".join(images), "enemy_scripts": bytes(scripts),
+        "enemy_anim": b"".join(o.to_bytes(2, "big") for o in offsets) + b"".join(shared), "enemy_images": b"".join(images), "enemy_scripts": bytes(scripts),
     }
 
 
