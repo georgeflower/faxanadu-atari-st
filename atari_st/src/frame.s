@@ -10,6 +10,10 @@
 | Buttons: stick left, right, up and down are the pad's; the stick's fire button is B (the sword; there is only one
 | button on an Atari stick). Keyboard: arrow keys as the pad, Space = A (jump), Alternate = B, Return = Start, Tab = Select.
 | The mouse port (joystick 0) is ignored.
+| With JOYPAD (the disk) the stick is the centre and what a button means depends on where it is pressed: input_poll (menus, boxes, the
+| title: everything but the running game) has fire and Space = A (choose), Alternate = B (back); input_poll_game (the main loop, and the
+| waits of a screen change) has fire and Alternate = B (the sword), Space = Up and B together (a spell), and Up held for two frames
+| without fire is a jump (joy_jump, viewer.s). The notes on JOYPAD are in AGENTS.md.
 
     .equ VBL_VECTOR, 0x70
     .equ IKBD_VECTOR, 0x118
@@ -42,6 +46,12 @@
     .equ IN_PAD_NEW, 261
     .equ IN_QUIT, 262
     .equ IN_KEYS, 264                       | 128 bytes, non-zero while a key is down
+    .ifdef JOYPAD
+    .equ IN_MODE, 392                       | the mode of the last poll: 0 menu, 1 game (a change of mode makes no button new)
+    .equ IN_REQ, 393                        | the mode the poll in progress runs in
+    .equ IN_UPCNT, 394                      | polls (game mode) with Up held on the stick or the arrow key, up to 4; 1 is the press, 3 starts a jump
+    .equ IN_LATCH, 395                      | fire (a B button) was down at the press of Up or in the polls since: this Up is not a jump
+    .endif
 
     .equ PKT_NONE, 0
     .equ PKT_JOY0, 1
@@ -62,7 +72,11 @@ old_vbl:
 old_ikbd:
     .long 0
 input_state:
+    .ifdef JOYPAD
+    .space 396
+    .else
     .space 392
+    .endif
 
     .text
 
@@ -88,7 +102,11 @@ frame_init:
     tst.b 2(%a0)
     bra.s 1b
 2:  lea input_state(%pc), %a0
+    .ifdef JOYPAD
+    moveq #(396/4)-1, %d1
+    .else
     moveq #(392/4)-1, %d1
+    .endif
 3:  clr.l (%a0)+
     dbra %d1, 3b
     movea.l #IKBD_STATUS, %a0
@@ -181,6 +199,15 @@ ikbd_isr:
 input_poll:
     movem.l %d0-%d3/%a0-%a2, -(%sp)
     lea input_state(%pc), %a1
+    .ifdef JOYPAD
+    clr.b IN_REQ(%a1)                       | menu mode
+    bra.s ip_go
+input_poll_game:                            | the running game: once a frame, from the main loop
+    movem.l %d0-%d3/%a0-%a2, -(%sp)
+    lea input_state(%pc), %a1
+    move.b #1, IN_REQ(%a1)
+ip_go:
+    .endif
     lea IN_KEYS(%a1), %a2
 1:  moveq #0, %d2
     move.b IN_TAIL(%a1), %d2
@@ -245,6 +272,13 @@ input_poll:
     ori.b #NES_RIGHT, %d0
 13: tst.b %d1
     bpl.s 14f
+    .ifdef JOYPAD
+    tst.b IN_REQ(%a1)
+    bne.s 19f
+    ori.b #NES_A, %d0                       | menus: fire chooses
+    bra.s 14f
+19:
+    .endif
     ori.b #NES_B, %d0
 14: lea key_map(%pc), %a0                   | ... and from the keys
 15: moveq #0, %d2
@@ -256,6 +290,39 @@ input_poll:
     or.b %d1, %d0
     bra.s 15b
 18:
+    .ifdef JOYPAD
+    move.b IN_REQ(%a1), %d3                 | the mode of this poll
+    tst.b 0x39(%a2)                         | Space (it is not in key_map: it means something else in each mode)
+    sne %d2
+    tst.b %d3
+    bne.s 20f
+    tst.b %d2                               | menus: Space chooses, as fire does
+    beq.s 22f
+    ori.b #NES_A, %d0
+    bra.s 22f
+20: move.b IN_UPCNT(%a1), %d1               | the game: how long Up (the stick or the arrow key, not Space) has been held
+    btst #3, %d0
+    bne.s 21f
+    moveq #0, %d1                           | Up is up: no count, no latch
+    clr.b IN_LATCH(%a1)
+    bra.s 23f
+21: cmpi.b #4, %d1
+    bcc.s 24f
+    addq.b #1, %d1
+24: btst #6, %d0                            | a B button down (fire, Alternate) or Space (Up and B): the Up that goes with it is no jump
+    bne.s 25f
+    tst.b %d2
+    beq.s 23f
+25: st IN_LATCH(%a1)
+23: move.b %d1, IN_UPCNT(%a1)
+    tst.b %d2
+    beq.s 26f
+    ori.b #NES_UP+NES_B, %d0                | Space: Up held and B (new when Space goes down): the spell
+26: btst #3, %d0
+    beq.s 22f
+    ori.b #NES_A, %d0                       | Up held is A held for the wing boots (a jump is not A: joy_jump)
+22:
+    .endif
     .ifdef BATCH
     move.w auto_pad(%pc), %d1               | (tests) the buttons pressed by themselves: 4 frames down, 4 up; 1: A, 2: B and then A, 3: A (Sell is chosen by town.s)
     beq.s 16f
@@ -274,6 +341,26 @@ input_poll:
     move.b %d0, IN_PAD(%a1)
     not.b %d1
     and.b %d1, %d0
+    .ifdef JOYPAD
+    move.b IN_REQ(%a1), %d1
+    cmp.b IN_MODE(%a1), %d1
+    beq.s 27f
+    move.b %d1, IN_MODE(%a1)                | the mode changed: no button is new, so that fire still down from a box or a menu is not an attack or a
+    moveq #0, %d0                           | choice now; an Up still held is not a jump either
+    tst.b %d1
+    beq.s 29f
+    tst.b IN_UPCNT(%a1)
+    beq.s 29f
+    move.b #4, IN_UPCNT(%a1)
+    bra.s 29f
+27: tst.b %d1
+    beq.s 29f
+    andi.b #0x77, %d0                       | the game: Up is new when the stick's Up (not Space's) was pressed in this poll; A is never new here
+    cmpi.b #1, IN_UPCNT(%a1)
+    bne.s 29f
+    ori.b #NES_UP, %d0
+29:
+    .endif
     move.b %d0, IN_PAD_NEW(%a1)
     movem.l (%sp)+, %d0-%d3/%a0-%a2
     rts
@@ -283,7 +370,9 @@ key_map:
     .byte 0x50, NES_DOWN
     .byte 0x4B, NES_LEFT
     .byte 0x4D, NES_RIGHT
+    .ifndef JOYPAD
     .byte 0x39, NES_A                       | Space
+    .endif
     .byte 0x38, NES_B                       | Alternate
     .byte 0x1C, NES_START                   | Return
     .byte 0x0F, NES_SELECT                  | Tab

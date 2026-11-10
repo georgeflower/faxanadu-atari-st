@@ -2138,6 +2138,10 @@ npc_draw:
 | (not $FF); touching the trigger runs its script (once in a game).
 npc_check:
     movem.l %d0-%d7/%a0-%a3, -(%sp)
+    .ifdef JOYPAD
+    move.w npc_probe(%pc), %d0
+    bne.s 0f                                | (npc_under: the people loaded in this pass count)
+    .endif
     lea npc_fresh(%pc), %a0
     tst.w (%a0)
     beq.s 0f
@@ -2148,6 +2152,12 @@ npc_check:
     lea input_state(%pc), %a0
     moveq #0, %d6
     move.b IN_PAD_NEW(%a0), %d6
+    .ifdef JOYPAD
+    move.w npc_probe(%pc), %d0
+    beq.s 10f
+    moveq #NES_UP, %d6                      | (npc_under: asked as if Up were pressed just now)
+10:
+    .endif
     lea npc_slots(%pc), %a3
     moveq #NPC_SLOTS-1, %d4
 1:  cmpi.b #0xFF, E_ENT(%a3)
@@ -2188,6 +2198,10 @@ npc_check:
     bcc.s 8f
     move.l E_KIND(%a3), %d0                 | his box is over this one
     bne.s 5f
+    .ifdef JOYPAD
+    move.w npc_probe(%pc), %d0
+    bne.s 8f                                | (npc_under: a trigger is no one to talk to)
+    .endif
     lea npc_intro_done(%pc), %a0            | the trigger: once
     move.w #1, (%a0)
     moveq #0, %d0
@@ -2200,12 +2214,35 @@ npc_check:
     move.b N_SCRIPT(%a3), %d0
     cmpi.b #0xFF, %d0
     beq.s 8f
+    .ifdef JOYPAD
+    move.w npc_probe(%pc), %d1
+    beq.s 6f
+    lea npc_probe(%pc), %a0
+    move.w #2, (%a0)                        | (npc_under: he would talk)
+    bra.s 9f
+    .endif
 6:  bsr.w iscript_run
     bra.s 9f
 8:  lea NPC_REC(%a3), %a3
     dbra %d4, 1b
 9:  movem.l (%sp)+, %d0-%d7/%a0-%a3
     rts
+
+    .ifdef JOYPAD
+| Would Up talk to a person here (the JOYPAD jump asks before it jumps)? Z clear: yes (npc_check's test with Up taken as pressed; no script is run, nothing
+| else changes). Every register kept.
+npc_under:
+    movem.l %d0/%a0, -(%sp)
+    lea npc_probe(%pc), %a0
+    move.w #1, (%a0)
+    bsr.w npc_check
+    moveq #0, %d0
+    move.w (%a0), %d0
+    clr.w (%a0)
+    subq.w #1, %d0                          | 2 (found) becomes 1: Z clear; 1 (not) becomes 0
+    movem.l (%sp)+, %d0/%a0                 | (movem leaves the flags)
+    rts
+    .endif
 
 | In a building: the building palette with the people's colours added (npc.bin) replaces the package's palette (the package is in memory: every later load of its
 | palette, the death fade, the text colour, has the people's colours too) and is put on the hardware at once. Keeps every register.
@@ -2248,8 +2285,15 @@ conv_slots:
 conv_poses:
     .word 0, 0                              | npc_convert: how many poses, the one being made
     .ifdef NPC_EXTRA
+    .ifndef NPC_EXTRA_SCRIPT
+    .equ NPC_EXTRA_SCRIPT, 0xFF
+    .endif
 npc_extra:
-    .byte 0, 0, NPC_EXTRA, 0xFF, NPC_EXTRA_X, NPC_EXTRA_Y       | a place record: area, screen, entity, script ($FF: Up does nothing), x, y
+    .byte 0, 0, NPC_EXTRA, NPC_EXTRA_SCRIPT, NPC_EXTRA_X, NPC_EXTRA_Y       | a place record: area, screen, entity, script ($FF: Up does nothing; NPC_EXTRA_SCRIPT: the script's number), x, y
+    .endif
+    .ifdef JOYPAD
+npc_probe:
+    .word 0                                 | npc_under is asking: 1 asking, 2 a person would talk
     .endif
 npc_intro_done:
     .word 0                                 | the intro trigger has run (once in a game)

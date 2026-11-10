@@ -14,15 +14,19 @@ CONTINUE loads SAVE.SAV or takes a
 mantra.
 
 SAVING: a Guru asks: Save to disk or
-Show mantra (Space takes, Alt = mantra).
-SAVE.SAV is the mantra as text on this
-disk, which must not be write protected
-(a Gotek image must be writable).
+Show mantra (fire or Space takes, Alt =
+mantra). SAVE.SAV is the mantra as text
+on this disk, which must not be write
+protected (a Gotek image must be
+writable).
 
-KEYS: arrows walk and climb, Space jump,
-Alt sword, Up+Alt spell, Down+Alt item,
-Tab menu, Esc quit. Stick: fire = sword;
-jump only on the keyboard.
+KEYS: stick Up jumps, climbs, enters
+doors and talks. Left, Right, Down as
+usual. Fire sword, Down+Fire item,
+Up+Fire spell. Arrow keys = the stick.
+Space spell, Alt sword. Tab: player
+menu. Esc: save or quit. In menus fire
+or Space choose, Alt goes back.
 
 Not as in the game: no credits, the
 timing of intro, ending and fades is

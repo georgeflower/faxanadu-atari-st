@@ -279,6 +279,16 @@ start:
     bsr.w frame_exit
     .endif
 
+    .macro JOY_SETTLE                       | JOYPAD: a menu or a box that ran in this frame (the last poll was a menu poll) leaves its button presses in IN_PAD_NEW: they are
+    .ifdef JOYPAD                           | not the game's (the Alternate that closed a menu is no stroke, the fire that chose is no jump)
+    lea input_state(%pc), %a0
+    tst.b IN_MODE(%a0)
+    bne.s 99f
+    clr.b IN_PAD_NEW(%a0)
+99:
+    .endif
+    .endm
+
     | The frame loop. a4 is the screen drawn into; the other one is on show. One pass a VBL until Esc: erase what was drawn in this
     | screen two frames ago (copy back from the background), move the hero, draw him, wait for the VBL, show this screen.
     movea.l buf_a(%pc), %a0
@@ -312,7 +322,11 @@ start:
     lea input_state(%pc), %a0
     tst.b IN_QUIT(%a0)
     bne.w viewer_leave                      | Esc on the title (or in the intro): the program ends, as it always did
-12: bsr.w input_poll
+12: .ifdef JOYPAD
+    bsr.w input_poll_game                   | the game's buttons (src/frame.s): fire is the sword, Up jumps
+    .else
+    bsr.w input_poll
+    .endif
     bsr.w esc_key                           | Esc: the menu (Save, Continue, Exit to GEMDOS; src/save.s)
     .ifdef FLOW
     bsr.w flow_tick                         | the ending's walk, boss rooms, the final boss (src/flow.s)
@@ -325,12 +339,14 @@ start:
     bsr.w script_test                       | (tests) runs the script SCRIPT once
     .endif
     bsr.w menu_key                          | Tab (Select): the player menu
+    JOY_SETTLE
     bsr.w hero_step
     .ifndef NO_PHYSICS
     bsr.w use_item                          | Down and B: the item he holds is used
     .endif
     bsr.w scroll_check                      | at the edge of the screen: scrolls to the next one (and comes back when it is done)
     .ifndef NO_PHYSICS
+    JOY_SETTLE
     bsr.w door_check                        | up in front of a door: the screen on the other side
     .ifdef NPCS
     bsr.w npc_check                         | Up in front of a person, or a touch trigger: its script (src/town.s); after the door: a person who walks by does not keep him out
@@ -2077,7 +2093,11 @@ hero_vertical:
 9:  rts
 3:  andi.w #0xFFFB, 18(%a1)                 | standing
     lea input_state(%pc), %a0
+    .ifdef JOYPAD
+    bsr.w joy_jump                          | the stick's Up (not a door, a person, a ladder or the start of a spell): a jump
+    .else
     btst #7, IN_PAD_NEW(%a0)                | A pressed just now?
+    .endif
     bne.s 4f
     andi.w #0xFFFC, 18(%a1)
     rts
@@ -2559,7 +2579,11 @@ do_scroll:
     movea.l (%sp)+, %a4
     moveq #13, %d7
 1:  bsr.w wait_vbl
+    .ifdef JOYPAD
+    bsr.w input_poll_game
+    .else
     bsr.w input_poll
+    .endif
     dbra %d7, 1b
     moveq #1, %d7                           | the step: 1 to 16
 2:  move.w %d7, %d0
@@ -2641,7 +2665,11 @@ do_vscroll:
     movea.l (%sp)+, %a4
     moveq #13, %d7
 4:  bsr.w wait_vbl
+    .ifdef JOYPAD
+    bsr.w input_poll_game
+    .else
     bsr.w input_poll
+    .endif
     dbra %d7, 4b
     | the viewport: its top line T in the two playfields (416 lines): d4 now, d3 at the end; the camera and the hero of the end
     move.w vscroll_down(%pc), %d6           | (draw_playfield clobbers the registers)
@@ -2891,37 +2919,8 @@ door_check:
     lea input_state(%pc), %a0
     btst #3, IN_PAD_NEW(%a0)
     beq.w 9f
-    move.w hero_x(%pc), %d1
-    move.w hero_y(%pc), %d2
-    andi.w #0xF0, %d2
-    move.w %d1, %d3
-    addq.w #7, %d3
-    lsr.w #4, %d3
-    or.w %d3, %d2                           | the block: row * 16 + column
-    andi.w #15, %d1
-    moveq #0, %d3
-    cmpi.w #8, %d1
-    bne.s 1f
-    moveq #1, %d3                           | on a block boundary the next block is a candidate too
-1:  move.w cur_screen(%pc), %d4
-    movea.l pkg_ptr+PKG_DOORS(%pc), %a1
-    move.w pkg_ptr+PKG_DOOR_COUNT(%pc), %d0
-    beq.s 9f
-    subq.w #1, %d0
-2:  cmp.b (%a1), %d4
-    bne.s 4f
-    moveq #0, %d1
-    move.b 1(%a1), %d1
-    cmp.w %d2, %d1
-    beq.s 5f
-    tst.w %d3
-    beq.s 4f
-    addq.w #1, %d1
-    cmp.w %d2, %d1
-    beq.s 5f
-4:  lea DOOR_BYTES(%a1), %a1
-    dbra %d0, 2b
-    bra.s 9f
+    bsr.w door_find
+    beq.w 9f
 5:  moveq #0, %d2
     move.b 6(%a1), %d2                      | the key he needs
     beq.s 6f
@@ -2947,6 +2946,83 @@ door_check:
 8:  bsr.w enter_building
 9:  movem.l (%sp)+, %d0-%d4/%a0-%a1
     rts
+
+| Is there a door under him: the block at his x + 7 and the row of his y (the next one to the right when x & 15 is 8)? Out: a1 = its record
+| and Z clear when there is one, Z set when not. Clobbers d0-d4.
+door_find:
+    move.w hero_x(%pc), %d1
+    move.w hero_y(%pc), %d2
+    andi.w #0xF0, %d2
+    move.w %d1, %d3
+    addq.w #7, %d3
+    lsr.w #4, %d3
+    or.w %d3, %d2                           | the block: row * 16 + column
+    andi.w #15, %d1
+    moveq #0, %d3
+    cmpi.w #8, %d1
+    bne.s 1f
+    moveq #1, %d3                           | on a block boundary the next block is a candidate too
+1:  move.w cur_screen(%pc), %d4
+    movea.l pkg_ptr+PKG_DOORS(%pc), %a1
+    move.w pkg_ptr+PKG_DOOR_COUNT(%pc), %d0
+    beq.s 9f                                | (Z set: none)
+    subq.w #1, %d0
+2:  cmp.b (%a1), %d4
+    bne.s 4f
+    moveq #0, %d1
+    move.b 1(%a1), %d1
+    cmp.w %d2, %d1
+    beq.s 5f
+    tst.w %d3
+    beq.s 4f
+    addq.w #1, %d1
+    cmp.w %d2, %d1
+    beq.s 5f
+4:  lea DOOR_BYTES(%a1), %a1
+    dbra %d0, 2b
+    moveq #0, %d0                           | Z set
+    rts
+5:  moveq #1, %d0                           | Z clear
+9:  rts
+
+    .ifdef JOYPAD
+| Z clear when a door is under him (what door_find says), every register kept.
+door_under:
+    movem.l %d0-%d4/%a1, -(%sp)
+    bsr.w door_find
+    movem.l (%sp)+, %d0-%d4/%a1             | (movem leaves the flags)
+    rts
+
+| The jump of the stick's Up (JOYPAD), asked at the place where the ROM looks for a new A press (hero_vertical, he stands). Z clear: jump.
+| The ROM's own A (the ending's scripted walk sets it) still jumps. Otherwise: Up has been held for 3 polls (IN_UPCNT: the press and the two
+| frames after it) and no fire was down in them (IN_LATCH: that is a spell, Up and B), he is not at a ladder (Up climbs: can climb or
+| climbing), no door is under him (Up enters it), no person in front of him would be talked to (Up talks). One Up, one jump: the count is 3 in one poll only.
+| Keeps a1 and d4; clobbers d0, a0.
+joy_jump:
+    lea input_state(%pc), %a0
+    moveq #1, %d0
+    btst #7, IN_PAD_NEW(%a0)
+    bne.s 9f
+    moveq #0, %d0
+    cmpi.b #3, IN_UPCNT(%a0)
+    bne.s 9f
+    tst.b IN_LATCH(%a0)
+    bne.s 9f
+    move.b hero_x+19(%pc), %d0
+    andi.b #0x18, %d0                       | can climb (8), climbing ($10)
+    bne.s 8f
+    bsr.w door_under
+    bne.s 8f
+    .ifdef NPCS
+    bsr.w npc_under
+    bne.s 8f
+    .endif
+    moveq #1, %d0
+    bra.s 9f
+8:  moveq #0, %d0
+9:  tst.w %d0
+    rts
+    .endif
 
 | d0 = the screen to go to (its number in the table), d1 = where the hero stands there (Y/16 << 4 | X/16). The picture fades out (black
 | palette), the new screen is drawn, the hero put at the door's other end, and the picture fades in (six frames each, the ROM's fade is

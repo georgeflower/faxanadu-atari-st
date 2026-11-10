@@ -49,7 +49,7 @@ $(PRG): $(BIN) $(TOOLS_DIR)/make_prg.py
 # screen. Every area (WORLD: all of them, the buildings come with the doors) and every package the doors, edges and temples ask for goes on it, with README.TXT.
 # `make disk` and `make viewerdisk` are the same thing (viewerdisk is the old name); tests/test_disk.py checks what is on it.
 DISK_WORLD := 1,2,3,5,6,7
-DISK_DEFS := --defsym MENU=1 --defsym SPLASH=1 --defsym NPCS=1 --defsym NEWGAME=1
+DISK_DEFS := --defsym MENU=1 --defsym SPLASH=1 --defsym NPCS=1 --defsym NEWGAME=1 --defsym JOYPAD=1
 disk viewerdisk: override VIEWER_DEFS += $(DISK_DEFS)
 disk viewerdisk: override ALL = 1
 disk viewerdisk: override WORLD = $(DISK_WORLD)
