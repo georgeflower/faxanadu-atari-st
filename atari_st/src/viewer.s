@@ -206,12 +206,19 @@ start:
     moveq #15, %d1
 1:  move.w (%a2)+, (%a1)+
     dbra %d1, 1b
-    moveq #PACKAGE_AREA, %d0                | the first package is read from the disk like the others (its LOADING word is drawn on TOS's screen, which TOWN.DAT then takes)
+    moveq #PACKAGE_AREA, %d0                | the first package is read from the disk like the others (its LOADING word is drawn on the program's own screen; TOWN.DAT then takes TOS's, out of sight)
     moveq #PACKAGE_PALETTE, %d1
     bsr.w load_package
     bsr.w town_load                         | the scripts, messages and people (TOWN.DAT, once)
     move.l pkg_result(%pc), %d0
     bpl.s 5f
+    movea.l orig_screen(%pc), %a0           | TOS's screen and colours back for the message
+    bsr.w show_screen
+    movea.l #PALETTE, %a2
+    lea saved_palette(%pc), %a1
+    moveq #15, %d1
+7:  move.w (%a1)+, (%a2)+
+    dbra %d1, 7b
     pea no_package(%pc)
     move.w #9, -(%sp)
     trap #1                                 | Cconws
@@ -3297,7 +3304,11 @@ loading_show:
 1:  clr.w (%a0)+
     dbra %d0, 1b
     move.w #0x777, (%a0)
-    lea text_planes(%pc), %a0
+    move.l old_vbl(%pc), %d0
+    bne.s 3f
+    movea.l %a3, %a0                        | before the frame loop the word goes on the program's own screen, not TOS's: TOWN.DAT is read into TOS's screen memory next (it
+    bsr.w show_screen                       | was shown, as noise, in TOS's colours)
+3:  lea text_planes(%pc), %a0
     moveq #3, %d0
 2:  move.w #-1, (%a0)+
     dbra %d0, 2b
@@ -3312,23 +3323,16 @@ loading_show:
 loading_hide:
     movem.l %d0-%d2/%a0-%a3, -(%sp)
     move.l old_vbl(%pc), %d0
-    beq.s 2f                                | before the frame loop: TOS's screen is not cleared (the flag tables lie behind the package, in it)
+    beq.s 9f                                | before the frame loop the word and the colours stay (the start-up gives TOS's back when an error message follows)
     bsr.s loading_screen
     bsr.s loading_clear
-    bra.s 9f
-2:
-    movea.l #PALETTE, %a0
-    lea saved_palette(%pc), %a1
-    moveq #15, %d1
-1:  move.w (%a1)+, (%a0)+
-    dbra %d1, 1b
 9:  movem.l (%sp)+, %d0-%d2/%a0-%a3
     rts
 
 loading_screen:                             | a3 = the screen on show
     move.l old_vbl(%pc), %d0
     bne.w shown_screen
-    movea.l orig_screen(%pc), %a3
+    movea.l buf_a(%pc), %a3
     rts
 
 loading_clear:                              | clears the screen a3
@@ -3621,5 +3625,6 @@ sound_song:
     .space SND_SONG_MAX
 
     .section .stack,"aw",@progbits          | the stack, 6 KB, behind the song buffer: both are zeros and not in the file (make_prg.py --bss-from). It must not be small: GEMDOS's file calls (a door loads a package)
+    .even                                   | (sp must be even: the section is placed on an even address)
     .space 6144                             | run on this stack in supervisor mode and TOS 1.02 needs far more than the 638 bytes the game's own calls reach; at 2 KB a door crashed on the author's TOS
 stack_end:

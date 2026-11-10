@@ -18,6 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
+import st_convert as sc  # noqa: E402
 ROM = ROOT.parent / "ext" / "Faxanadu_Europe.nes"
 REFNES = ROOT / "tools" / "refnes"
 NODE = bool(shutil.which("node") and (REFNES / "node_modules" / "jsnes").is_dir())
@@ -85,7 +86,7 @@ def unpacked(name: str) -> tuple[dict, dict]:
     return splash.split_blob(lz.unpack(r.packed), parts, words)
 
 
-def compare(screen: list[list[int]], palette: list[tuple], shot: bytes, nes_line_of) -> int:
+def compare(screen: list[list[int]], palette: list[tuple], shot: bytes, nes_line_of, scene: bool = False) -> int:
     """Pixels of the ST screen (slot numbers) that differ from jsnes' picture, in the part jsnes shows (x 8-247, lines 8-231) and the ST has."""
     bad = 0
     for line in range(200):
@@ -94,7 +95,7 @@ def compare(screen: list[list[int]], palette: list[tuple], shot: bytes, nes_line
             continue
         for x in range(40, 280):
             o = (nl * 256 + x - 32) * 3
-            want = (shot[o] >> 5, shot[o + 1] >> 5, shot[o + 2] >> 5)
+            want = sc.st_from_jsnes((shot[o], shot[o + 1], shot[o + 2]), scene)
             if palette[screen[line][x]] != want:
                 bad += 1
     return bad
@@ -319,7 +320,7 @@ class IntroTests(unittest.TestCase):
             triples = [t for frame, x, y in states.get(i, []) for t in splash.pose_triples(poses, frame, x, y)]
             splash.draw_sprites(screen, triples[::-1], images)
             step = sum(1 for c in changes if c <= i)
-            bad = compare(screen, fades[step], rgb(shot), lambda line: line + splash.CROP_LINE)
+            bad = compare(screen, fades[step], rgb(shot), lambda line: line + splash.CROP_LINE, True)
             self.assertEqual(bad, 0, f"record {i} (fade step {step})")
 
 
@@ -412,7 +413,7 @@ class OutroTests(unittest.TestCase):
             drawn = out[i - off][1] if i >= off else []              # record i shows the sprites of pass i - off + 1
             triples = [t for frame, x, y in drawn for t in splash.pose_triples(parts["poses"], frame, x, y)]
             splash.draw_sprites(screen, triples[::-1], images)
-            self.assertEqual(compare(screen, palette, rgb(shot), lambda line: line + splash.CROP_LINE), 0, f"record {i}")
+            self.assertEqual(compare(screen, palette, rgb(shot), lambda line: line + splash.CROP_LINE, True), 0, f"record {i}")
 
 
 if __name__ == "__main__":

@@ -880,6 +880,7 @@ door_unlock:
     .section .rodata
 ring_masks:
     .byte 0x80, 0x20, 0x10
+    .even                                   | key_hints is words: three bytes before it made it odd in some builds, and the hint of a locked door was an address error
 key_hints:
     .word TEXT_KEY_A, TEXT_KEY_K, TEXT_KEY_Q, TEXT_KEY_J, TEXT_KEY_JO
     .even

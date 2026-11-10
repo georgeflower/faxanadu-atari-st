@@ -20,10 +20,27 @@ BLOCK_BYTES = 128
 NO_IMAGE = 0xFFFF
 
 
-def st_rgb(nes_colour: int) -> tuple[int, int, int]:
+# The colours of the intro's and the ending's scenery (`scene=True`), as the author's own NES emulator shows them (measured on his screenshot of the intro: the flat
+# sky, ground and cloud colours, rounded to the ST's three bits a channel). jsnes' table has a pinkish $10 and a yellower $27, which made the clouds and the
+# tree pink and the ground yellow. Everything else, the game's screens and the title included, goes by jsnes' table as before.
+SCENE_RGB = {0x0C: (1, 1, 2), 0x10: (5, 5, 5), 0x17: (5, 2, 1), 0x27: (7, 4, 2)}
+
+
+def st_rgb(nes_colour: int, scene: bool = False) -> tuple[int, int, int]:
     """A NES master colour as the ST's three bits a channel."""
+    if scene and (nes_colour & 0x3F) in SCENE_RGB:
+        return SCENE_RGB[nes_colour & 0x3F]
     r, g, b = NES_RGB[nes_colour & 0x3F]
     return r >> 5, g >> 5, b >> 5
+
+
+def st_from_jsnes(rgb: tuple[int, int, int], scene: bool = False) -> tuple[int, int, int]:
+    """The ST colour for a pixel of jsnes' picture (what the tests compare the ST's picture with); `scene` as in `st_rgb`."""
+    if scene:
+        for number, own in SCENE_RGB.items():
+            if tuple(NES_RGB[number]) == tuple(rgb):
+                return own
+    return rgb[0] >> 5, rgb[1] >> 5, rgb[2] >> 5
 
 
 def st_word(rgb: tuple[int, int, int]) -> int:
@@ -50,12 +67,12 @@ def palette_set(rom: fr.Rom, index: int, sprites: str = "outside") -> tuple[list
     return bg, sp
 
 
-def palette_plan(nes_colours: set[int]) -> PalettePlan:
+def palette_plan(nes_colours: set[int], scene: bool = False) -> PalettePlan:
     """One slot for each different ST colour; black first. Over 16, the two closest colours are merged until 16 are left
     (the colour that is used by fewer NES entries goes into the other)."""
     by_rgb: dict[tuple[int, int, int], list[int]] = {}
     for c in sorted(nes_colours):
-        by_rgb.setdefault(st_rgb(c), []).append(c)
+        by_rgb.setdefault(st_rgb(c, scene), []).append(c)
     black = st_rgb(0x0F)
     by_rgb.setdefault(black, [])
     merged: list[tuple[int, int, int]] = []

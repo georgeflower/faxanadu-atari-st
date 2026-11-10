@@ -167,8 +167,8 @@ class TilePool:
         return self.index[image]
 
 
-def _plan(*palette_sets: list[list[int]]) -> sc.PalettePlan:
-    return sc.palette_plan({c & 0x3F for pals in palette_sets for p in pals for c in p})
+def _plan(*palette_sets: list[list[int]], scene: bool = False) -> sc.PalettePlan:
+    return sc.palette_plan({c & 0x3F for pals in palette_sets for p in pals for c in p}, scene)
 
 
 def _backdrop_ok(scene: Scene) -> None:
@@ -194,7 +194,7 @@ def background(scene: Scene, plan: sc.PalettePlan, rows: list[int | None]) -> tu
     return pool.images, b"".join(v.to_bytes(2, "big") for v in cells)
 
 
-def fade_palettes(nes_palette: list[int], plan: sc.PalettePlan) -> tuple[bytes, list[tuple]]:
+def fade_palettes(nes_palette: list[int], plan: sc.PalettePlan, scene: bool = False) -> tuple[bytes, list[tuple]]:
     """The ST palette after each of FADE_STEPS fade steps (`splash_model.fade` on the 32 NES palette bytes): the colours of a slot are faded one by one;
     returns (4 x 32 bytes, [(step, slot, different ST colours)] for slots whose colours would fade to different ST colours: none is expected)."""
     out, clashes = b"", []
@@ -202,7 +202,7 @@ def fade_palettes(nes_palette: list[int], plan: sc.PalettePlan) -> tuple[bytes, 
         faded = sm.fade(nes_palette, step)
         words = []
         for slot in range(16):
-            rgbs = {sc.st_rgb(f) for n, f in zip(nes_palette, faded) if (n & 0x3F) in plan.slot and plan.slot[n & 0x3F] == slot}
+            rgbs = {sc.st_rgb(f, scene) for n, f in zip(nes_palette, faded) if (n & 0x3F) in plan.slot and plan.slot[n & 0x3F] == slot}
             if len(rgbs) > 1:
                 clashes.append((step, slot, sorted(rgbs)))
             words.append(sc.st_word(sorted(rgbs)[0]) if rgbs else 0)
@@ -271,9 +271,9 @@ class SpriteSet:
 def build_scene(rom: fr.Rom, which: str) -> Result:
     data = sm.Data(rom)
     scene = splash_scene(rom, which)
-    plan = _plan(scene.bg, scene.spr)
+    plan = _plan(scene.bg, scene.spr, scene=True)
     nes_pal = [c for p in scene.bg + scene.spr for c in p]
-    fade, clashes = fade_palettes(nes_pal, plan)
+    fade, clashes = fade_palettes(nes_pal, plan, True)
     tiles, tmap = background(scene, plan, list(range(CROP_ROW, CROP_ROW + ST_ROWS)))
     sprites = SpriteSet(scene, plan)
     if which == "intro":
