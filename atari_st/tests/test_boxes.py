@@ -66,6 +66,30 @@ class BoxTests(unittest.TestCase):
         """Tab opens the player menu, B closes it."""
         self.keeps_the_hornet(ARGS, key(599, K_TAB) + alternate(615), "shots_box_menu")
 
+    def test_the_player_menu_takes_every_sprite_off_while_it_is_up(self) -> None:
+        """As the ROM does (jsnes, `boxsprites.mjs`: two frames after Select only the menu's own two sprites are left, until three frames after it closes): while the menu
+        is up the screen is the plain one but for the menu's boxes; neither a pixel of the Hornet nor one of the hero is left outside them."""
+        import faxanadu_maps as fm
+        import st_convert as sc
+
+        shots = self.run_multi(ARGS, key(599, K_TAB) + HORNET, [596, 606, 612, 620, 640], "shots_box_menu_bare")
+        (before, word0), *during = shots
+        camera = word0("camera")
+        pal = fm.area(self.rom, 1).palette_index
+        plan = sc.plan_for_set(self.rom, pal)
+        plain = sc.expected_screen(self.rom, 1, 12, camera, state=self.STATE)
+        hero = {(x, line - camera) for (x, line) in sc.hero_layer(self.rom, sc.Hero(40, 160, 0, 255, 255, word0("hero_frame"), True), pal, plan)}
+        sprites = {(x, y) for y in range(sc.ST_TOP, 200) for x in range(32, 288) if before[y][x] != plain[y][x]}
+        self.assertGreater(len(sprites - hero), 60, "the Hornet is on the screen before the menu")
+        self.assertTrue(hero <= sprites or len(hero - sprites) < 40, "and the hero")
+        for rows, _ in during:
+            menu = [(x, y) for y in range(sc.ST_TOP, 200) for x in range(32, 288) if rows[y][x] != plain[y][x] and (x, y) not in sprites]
+            self.assertGreater(len(menu), 500, "the menu is up")
+            x0, x1 = min(x for x, _ in menu), max(x for x, _ in menu)
+            y0, y1 = min(y for _, y in menu), max(y for _, y in menu)
+            left = [(x, y) for x, y in sprites if rows[y][x] != plain[y][x] and not (x0 <= x <= x1 and y0 <= y <= y1)]
+            self.assertEqual(left, [], "no sprite pixel outside the menu")
+
     def test_the_esc_menu_keeps_the_enemies_on_the_screen_when_it_goes(self) -> None:
         """Esc opens the Esc menu, B is Continue."""
         self.keeps_the_hornet(ARGS, key(599, K_ESC) + [(599, "mem:input_state+262", 255)] + alternate(615), "shots_box_esc")

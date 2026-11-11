@@ -386,6 +386,7 @@ player_menu:
     movem.l %d0-%d7/%a0-%a3, -(%sp)
     moveq #0x18, %d0
     bsr.w menu_sound
+    bsr.w menu_bare                         | the ROM's menu takes every sprite off, the hero's too (jsnes: two frames after Select; boxsprites.mjs)
     bsr.w text_color
     bsr.w shown_screen
     moveq #0, %d4
@@ -421,6 +422,21 @@ player_menu:
 9:  bsr.w hud_mark                          | what he holds may have changed: the HUD's picture
     bsr.w box_leave
     movem.l (%sp)+, %d0-%d7/%a0-%a3
+    rts
+
+| The screen on show without sprites: the window from the playfield into the screen being drawn (two frames), then shown (box_leave draws them
+| again when the menu closes, three frames later, as in the ROM).
+menu_bare:
+    movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)      | (not a4: present_swap makes the other screen the one to draw into)
+    bsr.w set_view
+    moveq #0, %d0
+    bsr.w copy_window_half
+    bsr.w wait_vbl
+    moveq #1, %d0
+    bsr.w copy_window_half
+    bsr.w wait_vbl
+    bsr.w present_swap
+    movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5-%a6
     rts
 
 | The box of the category d5 and its choice: A on an entry wears it (and the menu is done), B or Esc leave.
