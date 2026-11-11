@@ -66,6 +66,8 @@ class MattockTests(unittest.TestCase):
                 text = f"memwrite ${base + sym['input_state'] + 259:x} 0x{value:02x}\ncont\n"
             elif what == "b":
                 text = f"memwrite ${base + sym['input_state'] + 264 + 0x38:x} 0x{value:02x}\ncont\n"
+            elif what == "key":                                        # any key by scan code: value = scan code << 8 | 1 (down) or 0 (up)
+                text = f"memwrite ${base + sym['input_state'] + 264 + (value >> 8):x} 0x{value & 255:02x}\ncont\n"
             elif what == "inv":
                 text = f"memwrite ${base + sym['inv'] + (value >> 8):x} 0x{value & 255:02x}\ncont\n"
             elif what.startswith("w:"):

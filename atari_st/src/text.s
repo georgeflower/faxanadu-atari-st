@@ -207,10 +207,23 @@ wait_key:
 9:  movem.l (%sp)+, %d0/%a0
     rts
 
-| The box goes: both screens are made again from the playfield.
+| The box goes: both screens are made again from the playfield, with the enemies on them (box_keep; not while he dies, when there are none): the ROM keeps its sprites
+| on the screen through a message, a script and its end (jsnes, tools/refnes/boxsprites.mjs), and here they were off it for the frames the box took to go.
 box_leave:
+    movem.l %d0/%a0, -(%sp)
+    lea box_keep(%pc), %a0
+    move.w (%a0), -(%sp)                    | (use_spent's own setting is kept)
+    lea hero_dead(%pc), %a0
+    tst.w (%a0)
+    bne.s 1f
+    lea box_keep(%pc), %a0
+    move.w #1, (%a0)
+1:  bsr.w refresh_screens
     bsr.w refresh_screens
-    bra.w refresh_screens
+    lea box_keep(%pc), %a0
+    move.w (%sp)+, (%a0)
+    movem.l (%sp)+, %d0/%a0
+    rts
 
 | A box of text in the middle of the window, until a button is pressed: a0 = the text (lines end with a line feed, up to 16 characters each).
 message_box:
