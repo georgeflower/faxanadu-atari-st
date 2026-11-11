@@ -321,7 +321,7 @@ esc_menu:
     beq.s 3f                                | Save
     cmpi.w #2, %d0
     beq.w viewer_leave                      | Exit to GEMDOS
-    bsr.s esc_key_up                        | Continue, B or Esc
+    bsr.w esc_key_up                        | Continue, B or Esc
     bsr.w box_leave
     movem.l (%sp)+, %d0-%d7/%a0-%a3
     rts
@@ -332,6 +332,56 @@ esc_menu:
     lea sv_t_failed(%pc), %a0
 4:  bsr.w message_box
     bra.s 1b
+
+| Start in the game (the main loop, after the frame is shown): the ROM's pause (GameLoop_CheckPauseGame). Nothing moves and the picture stays; the song stands
+| still and is silent, a sound effect that runs goes on (sound_pause); Start again goes on with the next frame. Esc ends the pause and the main loop opens the
+| Esc menu. Not while he dies (the ROM's death is a loop of its own) and not in the ending. The polls are the menu's (src/frame.s): a button held through the
+| pause is not new afterwards (no jump, no stroke).
+pause_key:
+    movem.l %d0/%a0, -(%sp)
+    lea pause_on(%pc), %a0
+    tst.b 1(%a0)                            | Start new in the poll at the top of the frame (pause_note), not in a box's or a menu's poll later in it
+    beq.s 9f
+    lea hero_dead(%pc), %a0
+    tst.w (%a0)
+    bne.s 9f
+    .ifdef FLOW
+    move.w end_state(%pc), %d0
+    bne.s 9f
+    .endif
+    lea pause_on(%pc), %a0
+    st (%a0)
+    moveq #1, %d0
+    bsr.w sound_pause
+1:  bsr.w wait_vbl
+    bsr.w input_poll
+    lea input_state(%pc), %a0
+    tst.b IN_QUIT(%a0)
+    bne.s 2f
+    btst #4, IN_PAD_NEW(%a0)
+    beq.s 1b
+2:  moveq #0, %d0
+    bsr.w sound_pause
+    lea pause_on(%pc), %a0
+    sf (%a0)
+9:  movem.l (%sp)+, %d0/%a0
+    rts
+pause_on:                                   | (tests) set while paused
+    .byte 0
+    .byte 0                                 | pause_note: Start new at the top of the frame
+    .even
+
+| At the top of the main loop, right after its poll: whether Start is new there. A box or a menu that runs later in the frame (a message dismissed with Return, the
+| Esc menu's Continue) polls again and leaves its own presses in IN_PAD_NEW: those must not pause the game.
+pause_note:
+    movem.l %d0/%a0, -(%sp)
+    lea input_state(%pc), %a0
+    move.b IN_PAD_NEW(%a0), %d0
+    andi.b #0x10, %d0
+    lea pause_on(%pc), %a0
+    move.b %d0, 1(%a0)
+    movem.l (%sp)+, %d0/%a0
+    rts
 
 | IN_QUIT is cleared (before and after the wait: a press of Esc that came meanwhile is the one that closed the menu).
 esc_key_up:

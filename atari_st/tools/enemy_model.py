@@ -951,7 +951,8 @@ class Engine:
                   BEH_HOP: "behaviour_hop", BEH_FALL: "behaviour_fall", 41: "behaviour_ointment", 42: "behaviour_glove", 43: "behaviour_battle_suit",
                   44: "behaviour_battle_helmet", 45: "behaviour_dragon_slayer", 46: "behaviour_mattock", 47: "behaviour_wing_boots", 48: "behaviour_black_onyx",
                   49: "behaviour_pendant", 50: "behaviour_random_item", 51: "behaviour_random_item", 52: "behaviour_random_item", 53: "behaviour_random_item",
-                  54: "behaviour_random_item", 55: "behaviour_random_item", 56: "behaviour_random_item", 61: "behaviour_magical_rod"}
+                  54: "behaviour_random_item", 55: "behaviour_random_item", 56: "behaviour_random_item", 61: "behaviour_magical_rod",
+                  57: "behaviour_fountain", 58: "behaviour_spring_trunk", 59: "behaviour_spring_sky", 60: "behaviour_spring_joker"}
 
     # -- the items that stand on the screens (category 5)
     def fall_if_needed(self, s: Sprite) -> None:
@@ -1032,6 +1033,49 @@ class Engine:
             s.flags |= F_HIDDEN
         else:
             s.flags &= ~F_HIDDEN & 255
+
+    # -- the fountain and the springs of Trunk (category 3)
+    def behaviour_fountain(self, s: Sprite) -> None:
+        """SpriteBehavior_Fountain: the water shows when all three springs flow (Quests & 7); the ROM's Sprite_SetVisible sets the bit that hides it."""
+        if not s.flags & F_READY:
+            s.phase = 0
+            s.flags |= F_READY
+        if self.hero.quests & 7 == 7:
+            s.flags &= ~F_HIDDEN & 255
+        else:
+            s.flags |= F_HIDDEN
+
+    def behaviour_spring(self, s: Sprite, bit: int) -> None:
+        """SpriteBehavior_SpringOfFortress, _SpringOfSky, _SpringOfJoker and SpriteBehavior_Springs_UpdateFlowing: dry (step 0, nothing drawn) until its quest bit is set,
+        then step 1, the water rising (pictures 0 to 3, one every 4 updates), then step 2, it flows (the fountain's pictures). Each time the screen is entered it rises again."""
+        if not s.flags & F_READY:
+            s.phase = 0
+            s.flags |= F_READY
+        if s.phase == 0 and not self.hero.quests & bit:
+            s.flags |= F_HIDDEN
+            return
+        s.flags &= ~F_HIDDEN & 255
+        if s.phase == 0:
+            s.phase = 1
+            s.d2 = s.d3 = 0
+        if s.phase != 1:
+            s.phase = 2
+            return
+        s.d3 = (s.d3 + 1) & 255
+        if s.d3 & 3:
+            return
+        s.d2 = (s.d2 + 1) & 255
+        if s.d2 >= 4:
+            s.phase = 2
+
+    def behaviour_spring_trunk(self, s: Sprite) -> None:
+        self.behaviour_spring(s, 1)
+
+    def behaviour_spring_sky(self, s: Sprite) -> None:
+        self.behaviour_spring(s, 2)
+
+    def behaviour_spring_joker(self, s: Sprite) -> None:
+        self.behaviour_spring(s, 4)
 
     def behaviour_magical_rod(self, s: Sprite) -> None:
         if self.hero.special & 0x04:
@@ -1581,8 +1625,10 @@ def is_item(ent: int) -> bool:
 def is_drawn(ent: int, phase: int, counter: int, d2: int = 0, flags: int = 0) -> bool:
     """False when the update handler leaves without a picture (the sprite is drawn when the handler picks one): Nash in step 0 and, in step 1, while bit 2 of the
     counter is set; Tamazutsu in step 0 until its count is below 30. (Bit 4 of the flags, hidden, does not stop the drawing: it stops being hit and touching.)"""
-    if is_item(ent):                                 # (an item that is hidden is not drawn either)
+    if is_item(ent) or ent == 0x52:                  # (an item that is hidden is not drawn either; nor the fountain)
         return not flags & F_HIDDEN
+    if ent in (0x61, 0x62, 0x63):                    # a spring: nothing while it is dry (SpriteUpdateHandler_Effect_Spring returns in step 0)
+        return phase != 0
     if ent == 0x0D:
         return phase != 0 and not (phase == 1 and counter & 4)
     if ent == 0x2C:
@@ -1691,11 +1737,16 @@ def appearance_offset(ent: int, phase: int, counter: int, d2: int = 0, internal:
         return (counter >> 2) & 1
     if ent in (0x1F, 0x21):                          # Sir Gawaine and the Wolfman: the step is the picture
         return phase
+    if ent == 0x52 or ent in (0x61, 0x62, 0x63) and phase >= 2:        # the fountain, and a spring that flows: 4, 5, 6, 5 a change every 4 updates
+        return FOUNTAIN_PHASES[(counter >> 2) & 3]
+    if ent in (0x61, 0x62, 0x63):                    # a spring rising: its count d2 (0 to 3)
+        return d2
     if is_item(ent):      # the things that lie about: one picture (SpriteUpdateHandler_Item_Standard and _Special)
         return 0
     raise NotImplementedError(f"the pictures of entity {ent}")
 
 
+FOUNTAIN_PHASES = (4, 5, 6, 5)                   # SPRITE_FOUNTAIN_PHASES
 LAMPREY_FRAMES = (0, 1, 1, 0, 1, 1, 0, 1)        # BYTE_ARRAY_PRG14__978b
 LAMPREY_FLIPS = (0, 0, 0x40, 0x40, 0x40, 0, 0, 0x40)      # LAMPREY_HORIZ_FLIP_BITS
 
@@ -1708,16 +1759,25 @@ def flip_extra(ent: int, counter: int) -> int:
 STALE_FLIP = (0x11, 0x30)       # kinds whose update handler does not set the flip mask: they are drawn with what the sprite before them (or, first, the hero) left
 
 
+def phase_of(slot: tuple) -> int:
+    return slot[3] if len(slot) > 3 else 0
+
+
 def flip_masks(slots: list, counter: int, hero_flags: int) -> list:
     """The flip mask each slot is drawn with, in the order the ROM updates them (7 to 0). `slots` are (entity, flags, hit counter) for the 8 slots."""
     last = 0x40 if hero_flags & 0x40 else 0
     out = [0] * 8
     for i in range(7, -1, -1):
-        ent, flags, hit = slots[i]
+        ent, flags, hit = slots[i][:3]
         if ent == NONE or hit & 2:                  # (a sprite that blinks is not drawn)
             continue
-        if ent not in STALE_FLIP:
-            last = 0 if ent in (E_BREAD, E_COIN, E_DEATH, E_MAGIC_DEATH, E_BOSS_DEATH) else flip_mask(flags, ent) ^ flip_extra(ent, counter)
+        if ent in (0x61, 0x62, 0x63):               # a spring: no mirror while it flows, its facing while it rises, nothing set while it is dry
+            if phase_of(slots[i]) == 1:
+                last = flip_mask(flags, ent)
+            elif phase_of(slots[i]) >= 2:
+                last = 0
+        elif ent not in STALE_FLIP:
+            last = 0 if ent in (E_BREAD, E_COIN, E_DEATH, E_MAGIC_DEATH, E_BOSS_DEATH, 0x52) else flip_mask(flags, ent) ^ flip_extra(ent, counter)
         out[i] = last
     return out
 

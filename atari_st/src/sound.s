@@ -27,7 +27,9 @@
     .equ SND_PEND, 52                       | the sound effect asked for since the last tick (0 none)
     .equ SND_PRIO, 54                       | the handler index of the effect that runs: the ROM's priority, lower is more important
     .equ SND_BUSY, 55                       | ticks left that the engine counts that effect as running (0: a new effect is always taken)
-    .equ SND_SIZE, 56
+    .equ SND_PAUSED, 56                     | the Start pause (sound_pause): the song stands still and is silent, an effect goes on (Audio_HandlePaused)
+    .equ SND_MUTE, 57                       | channels of the song kept silent (bit 0 A, 1 B, 2 C): set by the pause, a channel's bit goes when the song writes that channel again
+    .equ SND_SIZE, 58
     .equ SND_SONG_MAX, 15360                | what a song may be unpacked (build_sound.SONG_MAX; the biggest is 15,304)
 
     .section .data
@@ -59,11 +61,23 @@ sound_init:
     move.b #0xFF, SND_OUT+7(%a2)
     rts
 
+| d0 = 1: the ROM's Start pause (Audio_HandlePaused: the song does not go on and its channels are reset, a sound effect that runs goes on); 0: the pause ends,
+| the song goes on from where it stood, but its channels stay silent until the song writes them again (the NES's channels were reset).
+sound_pause:
+    move.l %a0, -(%sp)
+    lea snd_state(%pc), %a0
+    move.b %d0, SND_PAUSED(%a0)
+    beq.s 1f
+    move.b #7, SND_MUTE(%a0)
+1:  movea.l (%sp)+, %a0
+    rts
+
 | d0 = the song (0 stops it)
 sound_play_music:
     movem.l %d1/%a0-%a2, -(%sp)
     lea snd_state(%pc), %a0
     clr.w SND_MLEFT(%a0)
+    clr.b SND_MUTE(%a0)
     move.b #0xFF, SND_MREGS+7(%a0)
     clr.b SND_MREGS+8(%a0)
     clr.b SND_MREGS+9(%a0)
@@ -145,13 +159,29 @@ sound_tick:
 23:
 
     | The song: apply the changes of its next frame to the registers.
+    tst.b SND_PAUSED(%a0)
+    bne.w 8f                                | paused: the song stands where it is
     move.w SND_MLEFT(%a0), %d0
     beq.w 8f
     movea.l SND_MPTR(%a0), %a1
     lea SND_MREGS(%a0), %a2
     moveq #0, %d1
     move.b (%a1)+, %d1
-    lsr.b #1, %d1
+    tst.b SND_MUTE(%a0)
+    beq.s 70f
+    move.b %d1, %d3                         | after a pause: a channel the frame writes (period or volume; the noise counts for C) sounds again
+    andi.b #0x21, %d3
+    beq.s 74f
+    bclr #0, SND_MUTE(%a0)
+74: move.b %d1, %d3
+    andi.b #0x42, %d3
+    beq.s 75f
+    bclr #1, SND_MUTE(%a0)
+75: move.b %d1, %d3
+    andi.b #0x8C, %d3
+    beq.s 70f
+    bclr #2, SND_MUTE(%a0)
+70: lsr.b #1, %d1
     bcc.s 1f
     move.b (%a1)+, (%a2)                    | period A
     move.b (%a1)+, 1(%a2)
@@ -199,7 +229,18 @@ sound_tick:
     move.l (%a2)+, (%a1)+
     move.l (%a2)+, (%a1)+
     lea SND_OUT(%a0), %a1
-    move.w SND_SLEFT(%a0), %d0
+    move.b SND_MUTE(%a0), %d1               | the song's channels kept silent (the pause)
+    beq.s 85f
+    lsr.b #1, %d1
+    bcc.s 86f
+    clr.b 8(%a1)
+86: lsr.b #1, %d1
+    bcc.s 87f
+    clr.b 9(%a1)
+87: lsr.b #1, %d1
+    bcc.s 85f
+    clr.b 10(%a1)
+85: move.w SND_SLEFT(%a0), %d0
     beq.w snd_mixed
     movea.l SND_SPTR(%a0), %a2
     moveq #0, %d1

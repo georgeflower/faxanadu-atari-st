@@ -36,6 +36,15 @@ DOOR_SAME, DOOR_PALETTE, DOOR_BUILDING, DOOR_OUTSIDE = 0, 1, 2, 3
 BUILDING_AREA = 4
 
 
+
+def mascon_blocks(rom, area: int, screens: list) -> list[int]:
+    """The block ids the way to Mascon puts on its screen (Game_OpenPathToMascon, Game_DropLadderToMascon: the stone moved one block, air, the ladder), for a
+    package that has the screen with event 0 (Trunk's screen 40): their images for all four corners."""
+    if not any(sid is not None and ed.screen_event(rom, area, sid) & 0x7F == 0 for sid in screens):
+        return []
+    return sorted({rom.byte("MASCON_FOUNTAIN_BLOCK_1_AIR"), rom.byte("MASCON_FOUNTAIN_BLOCK_2_AIR"), rom.byte("MASCON_FOUNTAIN_BLOCK_1_STONE"),
+                   rom.byte("MASCON_FOUNTAIN_BLOCK_2_STONE"), rom.byte("DROP_LADDER_TO_MASCON_LADDER_BLOCK")})
+
 def door_table(rom: fr.Rom, a: fm.Area, ids: list[int], palette_index: int, world: dict[int, list[int]]) -> tuple[bytes, list[tuple]]:
     """The doors on the screens in `ids`, 8 bytes each: screen (its number in the tables), block (row * 16 + column), kind, the screen it
     leads to (its number in the tables of the area it leads to), where the hero stands there (Y/16 << 4 | X/16), the palette set there, the key
@@ -228,13 +237,13 @@ def main() -> int:
             around += bytes(screens.index(n) if n in screens else 0xFF for n in fm.neighbours(rom, ar, sid))
         props = fm.block_properties(rom, ar)
         plan, table, images = sc.build_area_blocks(rom, area, palette_index=pal_index, screens=screens, tiles_index=tiles_index,
-                                                    extra=itempics.mattock_blocks(rom, area))
+                                                    extra=itempics.mattock_blocks(rom, area) + mascon_blocks(rom, area, screens))
         hero_list, hero_images = sc.hero_assets(rom, who, pal_index, plan, args.camera)
         magic, magic_images = sc.magic_anim_assets(rom, pal_index, plan, burst_poses=building is None)
         parts = {
             "palette": plan.words(), "screens": bytes(blocks), "neighbours": bytes(around),
             "blocking": b"", "ladders": b"",
-            "block_flags": bytes(hp.IMPASSABLE[props[b] & 15] | hp.CLIMBABLE[props[b] & 15] << 1 | (props[b] & 15 == 2) << 2 for b in range(256)),
+            "block_flags": bytes(hp.IMPASSABLE[props[b] & 15] | hp.CLIMBABLE[props[b] & 15] << 1 | (props[b] & 15 == 2) << 2 | (props[b] & 15 == 6) << 3 for b in range(256)),
             "doors": doors, "edges": edges, "block_index": b"".join(v.to_bytes(2, "big") for v in table), "blocks": b"".join(images),
             "hud_tiles": sc.hud_tile_images(rom, pal_index, plan, start["hp"], start["mp"]), "hud_partial": sc.hud_partial_images(rom, pal_index, plan),
             "hero_list": hero_list, "hero_images": hero_images, "hero_colours": sc.hero_colours(rom, pal_index, plan),

@@ -80,6 +80,8 @@ enemies_load:
     move.l %a0, (%a1)                       | (where en_blit finds its table of inverted masks: hero_draw_part reads it too)
     bsr.s enemies_clear
     bsr.w behind_load                       | (the sprites behind the background: this screen's block table)
+    lea mascon_new(%pc), %a0                | a screen was entered: its event (the way to Mascon) has its first tick (water.s)
+    move.w #1, (%a0)
     .ifdef NO_ENEMIES                       | (the picture tests of the screens and the doors want an empty field)
     bra.w 9f
     .endif
@@ -295,6 +297,8 @@ en_behaviour:
     cmpi.w #57, %d0
     bcs.w beh_item
     cmpi.w #61, %d0
+    bcs.w beh_water                         | the fountain and the springs (57 to 60, water.s)
+    cmpi.w #61, %d0
     beq.w beh_item
 1:  cmpi.w #1, %d0
     bne.s en_behaviour_end
@@ -309,6 +313,9 @@ en_finish:                                  | Sprite_FinishBehavior
     bset #7, E_BEH(%a3)
     rts
 
+mascon_call:                                | (the main loop is too far from .text.late for a bsr.w: water.s)
+    bra.w mascon_tick
+
 en_ready:                                   | Sprite_SetBehaviorReady
     bset #6, E_FLAGS(%a3)
     rts
@@ -322,6 +329,10 @@ en_countdown:                               | Sprites_CountdownBehavior
 1:  rts
 
 | BScripts_LoadNextOp: runs ops while they chain. d6 = offset of the next op (updated).
+op_add_x:                                   | 6: adds a byte to the sprite's x (BScript_Op_AddToSpriteData; the scripts the port runs use it on CurrentSprites_XPos_Full only:
+    move.b 3(%a5,%d6.w), %d0                | the fountain and the springs stand 8 pixels right of their place)
+    add.b %d0, E_X(%a3)
+    addq.w #4, %d6                          | (and on to the next op)
 en_ops:
 1:  move.b (%a5,%d6.w), %d0
     cmpi.b #0xFF, %d0
@@ -333,7 +344,9 @@ en_ops:
     cmpi.b #4, %d0
     beq.s op_finish
     cmpi.b #3, %d0
-    beq.s op_distance
+    beq.w op_distance
+    cmpi.b #6, %d0
+    beq.s op_add_x
     tst.b E_BEH(%a3)                        | the other ops wait for a finished behaviour
     bpl.s 9f
     cmpi.b #5, %d0
@@ -2526,6 +2539,8 @@ en_touch:
     btst #4, E_FLAGS(%a3)                   | hidden: it cannot touch him
     bne.w 9f
     movea.l E_KIND(%a3), %a0
+    cmpi.b #3, K_CAT+1(%a0)                 | an effect (the fountain, a spring): SPRITE_COLLISION_HANDLERS has nothing for it
+    beq.w 9f
     lea touch_box(%pc), %a1                 | the box (left, top, width, height): the kind's, but Sprite_GetBounds gives these a wide one in some steps
     move.l K_BL(%a0), (%a1)
     move.l K_BW(%a0), 4(%a1)
@@ -2875,7 +2890,7 @@ draw_enemies:
 14:
     move.w K_POSE(%a0), %d6
     move.w K_RULE(%a0), %d0
-    cmpi.w #40, %d0
+    cmpi.w #42, %d0
     bhi.s rule_default
     move.w %d0, %d1
     add.w %d1, %d1
@@ -2923,6 +2938,8 @@ rule_jt:                                    | the picture rule (K_RULE) to the c
     .word 61f - rule_jt
     .word 62f - rule_jt
     .word 63f - rule_jt
+    .word 64f - rule_jt
+    .word 65f - rule_jt
 rule_default:
     moveq #0, %d1
     cmpi.w #2, %d0
@@ -3267,6 +3284,30 @@ grieve_frames:
     add.w %d0, %d0
     add.w %d0, %d6
     bra.w 4f
+64: btst #4, E_FLAGS(%a3)                   | rule 41, the fountain: not while the springs are dry (hidden); 4, 5, 6, 5 a change every 4 updates, never mirrored
+    bne.w 8f
+    bsr.s water_frame
+    add.w %d0, %d6
+    bra.w 4f
+65: moveq #0, %d0                           | rule 42, a spring: nothing while dry (step 0), rising (step 1) its count d2 as it faces, flowing (2) the fountain's pictures (4 to 6)
+    move.b E_PHASE(%a3), %d1
+    beq.w 8f
+    move.b E_D2(%a3), %d0
+    subq.b #1, %d1
+    beq.w 7f
+    bsr.s water_frame
+    addq.w #4, %d0
+    add.w %d0, %d0
+    add.w %d0, %d6
+    bra.w 4f
+water_frame:                                | SPRITE_FOUNTAIN_PHASES by (counter >> 2) & 3, as pictures 0, 1, 2, 1
+    move.w en_counter(%pc), %d0
+    lsr.w #2, %d0
+    andi.w #3, %d0
+    cmpi.w #3, %d0
+    bne.s 66f                               | (not 1: the loop of draw_enemies goes back to its own 1)
+    moveq #1, %d0
+66: rts
 18: moveq #0, %d2                           | rule 11, Charron: picture 2 in step 5, 1 in step 0 and the odd ones, else a change every 8 updates
     move.b E_PHASE(%a3), %d2
     moveq #2, %d0

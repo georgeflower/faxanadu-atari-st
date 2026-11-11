@@ -25,8 +25,9 @@ doors and talks. Left, Right, Down as
 usual. Fire sword, Down+Fire item,
 Up+Fire spell. Arrow keys = the stick.
 Space spell, Alt sword. Tab: player
-menu. Esc: save or quit. In menus fire
-or Space choose, Alt goes back.
+menu. Return: pause. Esc: save or quit.
+In menus fire or Space choose, Alt goes
+back.
 
 Not as in the game: no credits, the
 timing of intro, ending and fades is

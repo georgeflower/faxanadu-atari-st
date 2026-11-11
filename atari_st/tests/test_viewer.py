@@ -182,6 +182,25 @@ class ViewerTests(unittest.TestCase):
         _, dy, _, _ = span([(599, "y", 16)], 0)
         self.assertGreater(dy, 60, "without A he falls 8 pixels a frame")
 
+    def test_a_door_shows_the_time_as_00_until_the_next_second_of_the_wing_boots(self) -> None:
+        """Screen_SetupNew draws the HUD with the time 0 (UI_DrawHUD), so with the boots on T: shows 00 after a door until their next second is
+        counted, which draws the seconds left again (`tools/refnes/timeprobe.mjs`: 29 before the castle door, 00 after it, 28 at the next second)."""
+        args = ["ALL=1", "SCREEN=0", "HERO=192,144,0,255,0,0,1", "VIEWER_DEFS=--defsym WINGS=30"]
+        pokes = [(599, "joy", 1), (602, "joy", 0)]
+        _, word, _ = self.run_scenario(args, [], 598, "shots_time")
+        self.assertGreaterEqual(word("hero_wings"), 10)
+        self.assertEqual(word.raw("hud_state", 9)[8], word("hero_wings"), "before the door: the seconds left")
+        ticks = []
+        for vbl in (640, 660, 680, 700, 720):
+            _, word, _ = self.run_scenario(args, pokes, vbl, "shots_time")
+            ticks.append((vbl, word("cur_screen"), word("hero_wings"), word.raw("hud_state", 9)[8]))
+        inside = [t for t in ticks if t[1] == 1]
+        self.assertTrue(inside, ticks)
+        self.assertEqual(inside[0][3], 0, f"T: is 00 on the new screen: {ticks}")
+        later = [t for t in inside if t[3] != 0]
+        self.assertTrue(later, f"the next second draws the time again: {ticks}")
+        self.assertEqual(later[0][3], later[0][2], "the seconds left")
+
     @staticmethod
     def use_pokes(at: int, dismiss: int = 16) -> list:
         """Down and B at `at` (the item is used; its message opens), B again `dismiss` frames later takes the message away, then everything is let go."""

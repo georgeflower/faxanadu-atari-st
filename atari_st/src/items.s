@@ -675,19 +675,20 @@ mattock_flags_reset:                        | the flags of the screens are made 
     movem.l (%sp)+, %d0/%a1
     rts
 
-| A change to remember: a2 = the screen's block ids, d3 = the place. The four last ones are kept (area, palette set, the ids at the place and the one under it).
+    .equ MT_RECS, 8                         | (the way to Mascon notes six at once, water.s)
+| A change to remember: a2 = the screen's block ids, d3 = the place. The MT_RECS last ones are kept (area, palette set, the ids at the place and the one under it).
 mattock_record:
     movem.l %d0-%d2/%a0-%a1, -(%sp)
     lea mt_recs(%pc), %a0
     move.w mt_count(%pc), %d0
-    cmpi.w #4, %d0
+    cmpi.w #MT_RECS, %d0
     bcs.s 2f
     lea 12(%a0), %a1                        | full: the oldest is forgotten
-    moveq #8, %d1
+    moveq #(MT_RECS-1)*3-1, %d1
 1:  move.l (%a1)+, (%a0)+
     dbra %d1, 1b
     lea mt_recs(%pc), %a0
-    moveq #3, %d0
+    moveq #MT_RECS-1, %d0
 2:  move.w %d0, %d2
     addq.w #1, %d2                          | the new count
     mulu.w #12, %d0
@@ -890,10 +891,10 @@ item_ticks:
     .word 0
 box_keep:                                   | non-zero while an item's message is up (use_spent): refresh_screens draws the enemies too when the box goes
     .word 0
-mt_count:                                   | the Mattock's changes still in the package: how many, then 4 records of 12 bytes (the screen's ids, area, palette set, place, two old ids)
+mt_count:                                   | the Mattock's changes still in the package: how many, then MT_RECS records of 12 bytes (the screen's ids, area, palette set, place, two old ids)
     .word 0
 mt_recs:
-    .space 48
+    .space MT_RECS*12
 inv:                                        | the inventory (a new game: nothing, no glove and no ointment in force, the equipment the build gave him)
     .space INV_GLOVE
     .byte 0xFF, 0xFF, 0, HERO_ARMOUR, HERO_SHIELD & 0xFF, ITEM & 0xFF, 0

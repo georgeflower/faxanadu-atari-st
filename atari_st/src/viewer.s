@@ -334,6 +334,7 @@ start:
     .else
     bsr.w input_poll
     .endif
+    bsr.w pause_note                        | Start at the top of the frame (pause_key, after the frame, pauses)
     bsr.w esc_key                           | Esc: the menu (Save, Continue, Exit to GEMDOS; src/save.s)
     .ifdef FLOW
     bsr.w flow_tick                         | the ending's walk, boss rooms, the final boss (src/flow.s)
@@ -355,6 +356,7 @@ start:
     .ifndef NO_PHYSICS
     JOY_SETTLE
     bsr.w door_check                        | up in front of a door: the screen on the other side
+    bsr.w mascon_call                       | the way to Mascon: the screen's first tick, the stone pushed (water.s)
     .ifdef NPCS
     bsr.w npc_check                         | Up in front of a person, or a touch trigger: its script (src/town.s); after the door: a person who walks by does not keep him out
     .endif
@@ -391,6 +393,7 @@ start:
     .endif
     bsr.w draw_hero
     bsr.w present_swap
+    bsr.w pause_key                         | Start: the pause (src/save.s), after the frame as the ROM's GameLoop_CheckPauseGame
     bra.w 12b                               | (Esc is seen at the top: esc_key)
 viewer_leave:                               | (also the way out of flow_fade_out: Esc in the middle of a door's fade, and of the Esc menu's Exit to GEMDOS)
     bsr.w frame_exit
@@ -3036,6 +3039,10 @@ joy_jump:
 | about as long). a4 and slot_index come back as present_swap leaves them.
 enter_screen:
     movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
+    move.w %d0, -(%sp)
+    moveq #0, %d0                           | Screen_SetupNew draws the HUD with the time 0 (UI_DrawHUD): with the wing boots on, T: shows 00 until their next
+    bsr.w hud_set_time                      | second is counted (tools/refnes/timeprobe.mjs)
+    move.w (%sp)+, %d0
     bsr.w spell_clear
     bsr.w enemies_clear
     lea hero_x(%pc), %a0
@@ -3407,6 +3414,7 @@ screen_flags:
     andi.b #1, %d4
     move.b %d4, (%a2)+
     lsr.b #1, %d2
+    andi.b #3, %d2                          | (bit 3 of the flags, the stone that is pushed on the way to Mascon, is not a ladder)
     move.b %d2, (%a3)+
     dbra %d3, 4b
     suba.w #208, %a2
@@ -3434,6 +3442,7 @@ early_base:                                 | the start of .text.early (tools/ch
     .include "menu.s"
     .include "hero.s"
     .include "blit.s"                       | (its code is in .text.late)
+    .include "water.s"                      | (the springs, the fountain and the way to Mascon; also in .text.late, behind blit.s)
     .ifdef SPLASH
     .include "splash68.s"                   | (its code is in .text.early, in front of the variables: see link.ld)
     .endif

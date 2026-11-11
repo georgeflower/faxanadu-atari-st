@@ -288,7 +288,8 @@ class TilteExplosionOnTheStTests(unittest.TestCase):
             raw = word.raw("enemies", 8 * 30)
             skip = [(word("hero_x") + sc.ST_LEFT - 24, word("hero_y") + 32 - camera - 8, 64, 48)]                      # his own picture is tested elsewhere
             skip += [(raw[i * 30 + 2] + sc.ST_LEFT - 8, raw[i * 30 + 4] + 32 - camera - 8, 32, 32) for i in range(8) if raw[i * 30] != 255]          # and the enemies'
-            candidates = [counter, counter - 1, counter + 1] if kind == 11 else [None]                               # (a capture can fall between a pass's update and its show)
+            candidates = [counter, counter - 1, counter + 1] if kind == 11 else [None, 15] if counter == 16 else [None]       # (a capture can fall between a pass's update and its show:
+                                                                                                                      # the last piece, 15, can still be on show when the spell is gone)
             for c in candidates:
                 expected = sc.expected_screen(rom, 0, 4, camera, state=dict(hp=hud[0], mp=hud[1], experience=int.from_bytes(hud[2:4], "big"), gold=int.from_bytes(hud[4:8], "big"), seconds=hud[8]),
                                               hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 0, word("hero_frame"), bool(word("hero_flip"))))
