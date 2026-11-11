@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+import re
 import unittest
 from pathlib import Path
 
@@ -35,6 +36,13 @@ def key(vbl: int, scan: int, up: int = 4) -> list:
 def esc(vbl: int) -> list:
     """Esc pressed at `vbl`: the key's flag, the byte the keyboard code sets, and the key let go four frames later."""
     return [(vbl, "key", ESC << 8 | 1), (vbl, IN_QUIT, 255), (vbl + 4, "key", ESC << 8)]
+
+
+def resolution(log: str) -> int:
+    """The shifter's resolution ($FF8260) out of the debugger's dump."""
+    match = re.search(r"^00FF8260: ([0-9a-fA-F]{2})", log, re.M)
+    assert match, "the dump reaches $FF8260"
+    return int(match.group(1), 16) & 3
 
 
 @unittest.skipUnless(NEEDS, "needs the ROM, cc65, hatari, the m68k binutils and a TOS image (TOS or TOS_PAL)")
@@ -104,10 +112,13 @@ class EscMenuTests(unittest.TestCase):
 
     def test_exit_to_gemdos_leaves_the_program(self) -> None:
         """Down, Return: the program ends as Esc used to end it (TOS's own screen on show at the second capture)."""
-        run = self.scene(esc(600) + key(620, DOWN_KEY) + key(640, RETURN), [590, 650], "shots_esc_exit")
+        run = self.scene([(580, "w:old_rez", 1)] + esc(600) + key(620, DOWN_KEY) + key(640, RETURN), [590, 650], "shots_esc_exit")
         before, gone = run.shots
         self.assertNotEqual(before.video, before.at("orig_screen", 0, 4, False))
         self.assertEqual(gone.video, gone.at("orig_screen", 0, 4, False), "TOS's own screen is on show again")
+        self.assertEqual(resolution(run.logs[0]), 0, "the game runs in low resolution")
+        self.assertEqual(resolution(run.logs[1]), 1, "and gives the desktop its resolution back (made medium here, as it is on most colour set-ups: the desktop drew in medium on a low screen, yellow letters)")
+        self.assertEqual([c & 0x777 for c in gone.palette], [int.from_bytes(gone.raw("saved_palette", 32)[i:i + 2], "big") & 0x777 for i in range(0, 32, 2)], "TOS's colours back")
 
     def test_save_writes_save_sav_as_the_guru_does_and_comes_back_to_the_menu(self) -> None:
         """Up (to Save), Return: SAVE.SAV is the mantra of the state (and a line end), the box says "Game saved."; a button dismisses it and the menu is there again; Continue goes on."""

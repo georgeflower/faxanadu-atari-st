@@ -67,12 +67,13 @@ class Run:
             (work / f"poke{i}.ini").write_text(text, encoding="utf-8")
             script += f"b VBL > {vbl} :once :file {work / f'poke{i}.ini'}\n"
         for i, vbl in enumerate(captures):
-            (work / f"cap{i}.ini").write_text(f"savebin {work / f'ram_{i}.bin'} 0 $80000\nm $ff8200-$ff8260\ncont\n", encoding="utf-8")
+            (work / f"cap{i}.ini").write_text(f"savebin {work / f'ram_{i}.bin'} 0 $80000\nm $ff8200-$ff8270\ncont\n", encoding="utf-8")
             script += f"b VBL > {vbl} :once :file {work / f'cap{i}.ini'}\n"
         log = hs.run_hatari(hatari, tv.TOS, prg, work, max(captures) + 1, "0", script, None)
         chunks = re.split(r"(?m)^(?=00FF8200:)", log)[1:]
         assert len(chunks) == len(captures), "every capture's dump of the video registers is in the log"
         self.shots = []
+        self.logs = chunks                                             # the debugger's dump of $FF8200 to $FF8260 at each capture
         for i, chunk in enumerate(chunks):
             ram = (work / f"ram_{i}.bin").read_bytes()
             base = hs.video_base(chunk)

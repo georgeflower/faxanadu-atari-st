@@ -97,6 +97,8 @@ game_start:
     .section .data
 saved_palette:
     .space 32
+old_rez:
+    .space 2
 old_ssp:
     .long 0
 hide_cursor:
@@ -156,6 +158,11 @@ start:
     lea game_start(%pc), %sp                | the stack is the last thing in the image, out of the way of the displacements (link.ld)
     adda.l #stack_end, %sp
 
+    move.w #4, -(%sp)
+    trap #14                                | Getrez: the desktop's resolution (medium on most colour set-ups), given back on exit
+    addq.l #2, %sp
+    lea old_rez(%pc), %a0
+    move.w %d0, (%a0)
     clr.w -(%sp)
     move.l #-1, -(%sp)
     move.l #-1, -(%sp)
@@ -400,6 +407,12 @@ viewer_leave:                               | (also the way out of flow_fade_out
 viewer_quit:
     movea.l orig_screen(%pc), %a0
     bsr.w show_screen                       | TOS's screen again
+    move.w old_rez(%pc), -(%sp)             | and its resolution: the desktop drew in medium resolution on a low resolution screen (yellow letters, half the
+    move.l #-1, -(%sp)                      | width) when it had been in medium
+    move.l #-1, -(%sp)
+    move.w #5, -(%sp)
+    trap #14                                | Setscreen
+    lea 12(%sp), %sp
 
     movea.l #PALETTE, %a2
     lea saved_palette(%pc), %a1
