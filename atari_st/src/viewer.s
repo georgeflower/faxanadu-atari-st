@@ -336,10 +336,16 @@ start:
     lea input_state(%pc), %a0
     tst.b IN_QUIT(%a0)
     bne.w viewer_leave                      | Esc on the title (or in the intro): the program ends, as it always did
-12: .ifdef JOYPAD
+12: .ifdef REPLAY
+    bsr.w replay_main_on                    | (tests) this poll is a pass of the game's loop: it takes a pad of the stream (src/replay.s)
+    .endif
+    .ifdef JOYPAD
     bsr.w input_poll_game                   | the game's buttons (src/frame.s): fire is the sword, Up jumps
     .else
     bsr.w input_poll
+    .endif
+    .ifdef REPLAY
+    bsr.w replay_main_off
     .endif
     bsr.w pause_note                        | Start at the top of the frame (pause_key, after the frame, pauses)
     bsr.w esc_key                           | Esc: the menu (Save, Continue, Exit to GEMDOS; src/save.s)
@@ -2638,7 +2644,7 @@ do_scroll:
     move.w #1, (%a0)
     move.w scroll_dir(%pc), %d0
     bne.s 3f
-    move.w #HERO_X_MAX, (%a0)
+    move.w #240, (%a0)                      | left: 240 (Game_MovePlayerOnScrollLeft takes 16 off the x of 0 he ran off at; the right scroll adds 16 to 241)
 3:  clr.w 6(%a0)
     clr.w 8(%a0)
     bsr.w refresh_screens
@@ -3017,9 +3023,9 @@ door_under:
     rts
 
 | The jump of the stick's Up (JOYPAD), asked at the place where the ROM looks for a new A press (hero_vertical, he stands). Z clear: jump.
-| The ROM's own A (the ending's scripted walk sets it) still jumps. Otherwise: Up has been held for 3 polls (IN_UPCNT: the press and the two
-| frames after it) and no fire was down in them (IN_LATCH: that is a spell, Up and B), he is not at a ladder (Up climbs: can climb or
-| climbing), no door is under him (Up enters it), no person in front of him would be talked to (Up talks). One Up, one jump: the count is 3 in one poll only.
+| The ROM's own A (the ending's scripted walk sets it) still jumps. Otherwise: Up was pressed in this poll (IN_UPCNT 1), he is not at a
+| ladder (Up climbs: can climb or climbing), no door is under him (Up enters it), no person in front of him would be talked to (Up
+| talks). One Up, one jump: the count is 1 in one poll only.
 | Keeps a1 and d4; clobbers d0, a0.
 joy_jump:
     lea input_state(%pc), %a0
@@ -3027,9 +3033,7 @@ joy_jump:
     btst #7, IN_PAD_NEW(%a0)
     bne.s 9f
     moveq #0, %d0
-    cmpi.b #3, IN_UPCNT(%a0)
-    bne.s 9f
-    tst.b IN_LATCH(%a0)
+    cmpi.b #1, IN_UPCNT(%a0)                | the poll of the press: one Up, one jump
     bne.s 9f
     move.b hero_x+19(%pc), %d0
     andi.b #0x18, %d0                       | can climb (8), climbing ($10)

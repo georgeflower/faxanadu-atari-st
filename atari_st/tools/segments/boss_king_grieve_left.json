@@ -1,0 +1,21 @@
+{
+ "y": 144,
+ "left": 1,
+ "hp": 80,
+ "mp": 80,
+ "exp": 0,
+ "gold": 0,
+ "title": 12,
+ "weapon": 3,
+ "armour": 2,
+ "shield": 2,
+ "policy": "fight",
+ "area": 6,
+ "screen": 22,
+ "x": 16,
+ "frames": 1500,
+ "heal": 1,
+ "jump": 1,
+ "reach": 24,
+ "leftovers": 1
+}

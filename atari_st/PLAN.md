@@ -69,6 +69,8 @@ The numbers are the order I intend to work in. A step is done when its tests pas
 - G9. **Start pause** DONE (asked for by the author, 11 Nov 2026): Return pauses the game as the ROM's Start does (`pause_key`, `sound_pause`; AGENTS.md 5f, `tests/test_pause.py`). The feet showing under a pillar were checked: the NES shows the same pixels (AGENTS.md, Feet under a pillar).
 - G10. **The death box's portrait** (asked for by the author, 11 Nov 2026): there is none in the ROM (script $1F has no portrait; jsnes shows the box without one), so nothing changed; `tests/test_deathbox.py`.
 - G11. **The enemies stay on the screen when a box goes** DONE (asked for by the author, 11 Nov 2026): `box_leave` draws them on the screens it makes again, for every box (`tests/test_boxes.py`). The player menu takes every sprite off while it is up, as the ROM's (the author asked for the ROM's way, 11 Nov 2026).
+- G12. **Controls** DONE: Up and fire no longer cast the spell (fire and Alternate are the sword, Up held or not; Space is the spell) and the press of Up is the jump at once (no wait for a fire); `tests/test_joypad.py`, README.
+- G13. **Side by side with the ROM** (5k): a bot played sixteen segments (fights in six areas, every spell, seven bosses) in jsnes and in the port with the same buttons. Fixed: the x after a left scroll (240), a coin on the bottom row falling out of the screen. Left: enemies a pixel off after a scroll, Ripasheiku's and King Grieve's fights, Shadow Eura (jsnes crashes).
 - G4. **Polish**: ST-specific options (joystick or keyboard, colour palette tweak, speed option) written in `AGENTS.md` section 8 as deliberate differences.
 
 ## Cross-cutting work

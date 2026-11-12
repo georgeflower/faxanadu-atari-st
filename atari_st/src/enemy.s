@@ -2043,10 +2043,40 @@ hop_masks:                                  | out d1 = SPRITE_BEHAVIOR_HOP_GRAVI
 en_cell:
     moveq #0, %d0
     cmpi.w #208, %d5
-    bge.s 1f
+    bge.s 2f
     movea.l en_blocks(%pc), %a0
     move.b (%a0,%d5.w), %d0
 1:  tst.w %d0
+    rts
+2:  moveq #0, %d0                           | below the 13 rows: what the ROM's ScreenBuffer holds there (a coin dropped on the bottom row of Mist
+                                            | bounced there in the ROM and fell out of the screen here: tools/sidebyside.py, tools/segments/mist33_thunder.json)
+
+| d5.w = a cell from 208 on (under the screen's 13 rows), d0.w = 0: impassable? 4: impassable or a ladder that holds an enemy (block_flags & 5)?
+| Out: d0.w = 1 or 0 (Z). Row 13 is the bits of the package part screen_low (what the screen's decoder wrote there); rows 14 and 15 are taken
+| as block 0 (row 15 is; a sprite is gone before it reaches row 14). Clobbers a0.
+en_low_bit:
+    cmpi.w #224, %d5
+    bcc.s 8f
+    move.l %d1, -(%sp)
+    move.w cur_screen(%pc), %d1
+    add.w %d1, %d1
+    add.w %d0, %d1
+    lsr.w #1, %d1                           | screen * 2 + 0 or 2: the word
+    add.w %d1, %d1
+    movea.l pkg_ptr+PKG_SCREEN_LOW(%pc), %a0
+    move.w (%a0,%d1.w), %d0
+    move.w %d5, %d1
+    andi.w #15, %d1
+    btst %d1, %d0
+    move.l (%sp)+, %d1
+    sne %d0
+    andi.w #1, %d0
+    rts
+8:  movea.l pkg_ptr+PKG_BLOCK_FLAGS(%pc), %a0
+    addq.w #1, %d0
+    and.b (%a0), %d0
+    sne %d0
+    andi.w #1, %d0
     rts
 
 | CurrentSprite_CanMoveInDirection: d3.w = 0 left, 1 right, 2 up, 3 down. Out: d0.w = 1 when a block he cannot pass is in the way
@@ -2075,7 +2105,7 @@ en_blocked:
     andi.w #0xF0, %d5
     lsr.w #4, %d1
     or.w %d1, %d5
-    bsr.s en_cell
+    bsr.w en_cell
     bne.w eb_yes
     lea hbox_height(%pc), %a0
     moveq #0, %d1
@@ -2084,7 +2114,7 @@ en_blocked:
     bmi.s 4f
     addi.w #0x10, %d5
     andi.w #0xFF, %d5
-    bsr.s en_cell
+    bsr.w en_cell
     bne.s eb_yes
     bra.s 3b
 4:  move.b E_Y(%a3), %d0
@@ -2206,13 +2236,19 @@ en_can_move:
     andi.w #0xF0, %d2
     or.w %d2, %d1
     cmpi.w #208, %d1
-    bge.s 3f
+    bge.s 4f
     movea.l en_ids(%pc), %a0
     moveq #0, %d0
     move.b (%a0,%d1.w), %d0
     movea.l pkg_ptr+PKG_BLOCK_FLAGS(%pc), %a0
     move.b (%a0,%d0.w), %d0
     andi.b #5, %d0                          | impassable, or a ladder of the kind that counts
+    bne.s 2f
+    bra.s 3f
+4:  exg %d1, %d5                            | (below the 13 rows: the ROM's ScreenBuffer there, as en_cell)
+    moveq #4, %d0
+    bsr.w en_low_bit
+    exg %d1, %d5
     bne.s 2f
 3:  bset #2, E_FLAGS(%a3)
     moveq #1, %d0

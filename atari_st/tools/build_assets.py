@@ -102,8 +102,25 @@ def edge_table(rom: fr.Rom, a: fm.Area, ids: list[int], world: dict[int, list[in
 FLAG_ROOM = 6 * 2 * 208                  # the block flags of 6 screens (src/viewer.s: FLAG_SLOTS), made when asked for, behind the package
 PACKAGE_PARTS = ("palette", "screens", "neighbours", "blocking", "ladders", "doors", "edges", "block_index", "blocks", "hud_tiles", "hud_partial",
                  "hero_list", "hero_images", "hero_colours", "magic_anim", "magic_images", "block_flags",
-                 "enemy_places", "enemy_kinds", "enemy_anim", "enemy_images", "enemy_scripts", "screen_ids", "screen_events", "behind")
+                 "enemy_places", "enemy_kinds", "enemy_anim", "enemy_images", "enemy_scripts", "screen_ids", "screen_events", "behind", "screen_low")
 HEADER_WORDS = ("door_count", "screen_count", "edge_count", "music")
+
+
+def low_rows(rom, ar, screens: list[int], props: list[int]) -> bytes:
+    """The package part screen_low: for each screen two words, bit (cell & 15) for the cells 208 to 223 of the ROM's ScreenBuffer (row 13, which the
+    screen's decoder fills): the block is impassable; the block is impassable or a ladder that holds an enemy (block_flags & 5)."""
+    out = bytearray()
+    for sid in screens:
+        ids = fm.decode_screen(rom, ar, sid)[208:224]
+        imp = stand = 0
+        for i, b in enumerate(ids):
+            p = props[b] & 15
+            if hp.IMPASSABLE[p]:
+                imp |= 1 << i
+            if hp.IMPASSABLE[p] or p == 2:
+                stand |= 1 << i
+        out += imp.to_bytes(2, "big") + stand.to_bytes(2, "big")
+    return bytes(out)
 
 
 def package_name(area: int, palette: int) -> str:
@@ -251,6 +268,9 @@ def main() -> int:
             **(ed.package_parts(rom, area, screens, pal_index, plan) if building is None else ed.package_parts(rom, area, [None], pal_index, plan)),
             "screen_ids": bytes(screens) if building is None else b"\0",      # the ROM's number of each screen of the package (the people of a screen are placed by it; src/town.s)
             "behind": behind.behind_part(rom, ar, screens if building is None else [], tiles_index, table, images),
+            # row 13 of each screen's block buffer (the decoder writes more than the 13 rows, ScreenBuffer: the enemies' and the drops' block tests read
+            # it under the screen): two words a screen, impassable, then impassable or a ladder that holds an enemy (en_low_bit in src/enemy.s)
+            "screen_low": low_rows(rom, ar, screens, props),
             "screen_events": bytes(ed.screen_event(rom, area, sid) for sid in screens) if building is None else b"\xff",      # each screen's special event id ($FF none, 1 a boss room, 2 the final boss; src/flow.s)
         }
         counts = dict(door_count=len(doors) // DOOR_BYTES, screen_count=len(screens), edge_count=len(edges) // EDGE_BYTES, music=music)

@@ -44,7 +44,6 @@ class Model:
         self.pad = self.new = 0
         self.mode = 0
         self.count = 0
-        self.latch = False
 
     def poll(self, game: bool, joy: int, keys: set[int]) -> tuple[int, int]:
         pad = 0
@@ -63,13 +62,11 @@ class Model:
         else:
             if fire or alt:
                 pad |= N_B
-            if pad & N_UP:
-                self.count = min(self.count + 1, 4)
-                self.latch = self.latch or bool(pad & N_B) or space
-            else:
-                self.count, self.latch = 0, False
+            self.count = min(self.count + 1, 4) if pad & N_UP else 0
             if space:
                 pad |= N_UP | N_B
+            elif pad & N_B and not self.pad & N_B and pad & N_UP:
+                pad = (pad & ~N_UP) | N_A                           # fire or Alternate with Up held: the sword, never the spell (Up left out in that poll)
             if pad & N_UP:
                 pad |= N_A                                          # Up held is A held (the wing boots), never a new A
         new = pad & ~self.pad & 0xFF
@@ -137,9 +134,6 @@ class MappingTests(unittest.TestCase):
     def count(self) -> int:
         return self.mc.mem.r8(self.sym["input_state"] + IN_UPCNT)
 
-    def latch(self) -> bool:
-        return self.mc.mem.r8(self.sym["input_state"] + IN_LATCH) != 0
-
     def test_menus_fire_and_space_choose_and_alternate_goes_back(self) -> None:
         self.assertEqual(self.poll(False, FIRE), (N_A, N_A))
         self.assertEqual(self.poll(False, 0), (0, 0))
@@ -157,50 +151,32 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(self.poll(True, up=(K_ALT,), joy=DOWN | FIRE), (N_DOWN | N_B, N_DOWN), "Alternate let go, fire pressed in the same poll: B stays down, not new")
         self.assertEqual(self.poll(True, joy=0, down=(K_DOWN, K_LEFT, K_RIGHT)), (N_DOWN | N_LEFT | N_RIGHT, N_LEFT | N_RIGHT), "(Down was already held)")
 
-    def test_up_held_makes_up_new_once_and_a_jump_after_two_more_polls(self) -> None:
+    def test_up_held_makes_up_new_once_and_the_press_is_the_jump(self) -> None:
         self.poll(True)
         self.assertEqual(self.poll(True, UP), (N_UP | N_A, N_UP))
-        self.assertEqual(self.count(), 1)
+        self.assertEqual(self.count(), 1, "the poll in which joy_jump starts the jump: the press")
         self.assertEqual(self.poll(True)[1], 0)
-        self.assertEqual(self.count(), 2)
+        self.assertEqual(self.count(), 2, "one Up, one jump: the count is 1 in one poll only")
         self.poll(True)
-        self.assertEqual(self.count(), 3, "the poll in which joy_jump starts the jump")
         self.poll(True)
-        self.assertEqual(self.count(), 4, "one Up, one jump: the count is 3 in one poll only")
+        self.assertEqual(self.count(), 4)
         self.poll(True)
         self.assertEqual(self.count(), 4)
         self.poll(True, 0)
         self.assertEqual(self.count(), 0)
 
-    def test_fire_with_up_or_within_two_frames_of_it_is_a_spell_not_a_jump(self) -> None:
+    def test_fire_with_up_held_is_the_sword_and_never_the_spell(self) -> None:
         self.poll(True)
-        for fire_at in (0, 1, 2):                                   # the poll of Up's press, and the two after it
-            self.poll(True, 0)
-            for n in range(5):
-                joy = UP | (FIRE if n == fire_at else 0)
-                self.poll(True, joy)
-            self.assertTrue(self.latch(), f"fire at poll {fire_at} of Up")
+        self.poll(True, UP)
+        self.assertEqual(self.poll(True, UP | FIRE), (N_A | N_B, N_B), "B new without Up: the sword (Up's A stays, for the wing boots)")
+        self.assertEqual(self.poll(True, UP | FIRE), (N_UP | N_A | N_B, 0), "Up back in the pad, not new: no door, no talk")
+        self.assertEqual(self.count(), 3)
+        self.poll(True, 0)
+        self.assertEqual(self.poll(True, UP | FIRE), (N_A | N_B, N_B | N_UP), "pressed together: the sword, and the press of Up (new: a door, a person) is the jump")
+        self.assertEqual(self.count(), 1)
         self.poll(True, 0)
         self.poll(True, UP)
-        self.poll(True, UP)
-        self.poll(True, UP | FIRE)                                  # the third poll is the jump's: fire in it is a spell
-        self.assertTrue(self.latch())
-        self.poll(True, 0)
-        for _ in range(3):
-            self.poll(True, UP)
-        self.assertEqual((self.count(), self.latch()), (3, False), "no fire: no latch, the jump is on")
-        self.poll(True, UP | FIRE)                                  # fire after the jump started: a spell in the air, the count is past 3
-        self.assertEqual(self.count(), 4)
-
-    def test_fire_held_before_up_is_no_jump(self) -> None:
-        self.poll(True)
-        self.poll(True, FIRE)
-        for _ in range(3):
-            self.poll(True, FIRE | UP)
-        self.assertTrue(self.latch())
-        self.poll(True, UP)                                         # fire let go: still the same Up, still no jump
-        self.poll(True, UP)
-        self.assertTrue(self.latch())
+        self.assertEqual(self.poll(True, down=(K_ALT,), joy=UP), (N_A | N_B, N_B), "Alternate the same")
 
     def test_space_is_up_and_b_held_and_makes_no_new_up(self) -> None:
         self.poll(True)
@@ -247,7 +223,7 @@ def y_after(y0: int, n: int) -> int:
 @unittest.skipUnless(NEEDS, "needs the ROM, cc65, hatari, the m68k binutils and a TOS image (TOS or TOS_PAL)")
 class GameTests(unittest.TestCase):
     DEFS = "--defsym JOYPAD=1 --defsym NO_ENEMIES=1"
-    UP_AT = 603                                                     # the stick is poked at this VBL; the game polls it in the next frame: the press is poll 1, the jump poll 3
+    UP_AT = 603                                                     # the stick is poked at this VBL; the game polls it in the next frame: the press is the jump
 
     @staticmethod
     def args(screen: int = 1, hero: str = "144,144,0,255,0,0,1", hud: str = "16,0,0,0,0", defs: str = "", area: int = 0, world: bool = False) -> list[str]:
@@ -268,7 +244,7 @@ class GameTests(unittest.TestCase):
         ys = self.ys(run)
         near, later = ys[:12], ys[12:]
         first = next(i for i, y in enumerate(near) if y != 144)
-        self.assertEqual(604 + first, self.UP_AT + 3, f"the jump starts in the third poll of Up: {near}")
+        self.assertEqual(604 + first, self.UP_AT + 1, f"the jump starts in the poll of Up's press: {near}")
         self.assertEqual(near[first:], [y_after(144, n + 1) for n in range(len(near) - first)], "up 8, 4, 4, 4, 4, 2, ...: the ROM's curve")
         self.assertEqual(later, [144, 144], "he landed and the Up still held does not jump again")
         self.assertEqual([s.at("hero_x", 18) & 1 for s in run.shots[12:]], [0, 0])
@@ -297,29 +273,25 @@ class GameTests(unittest.TestCase):
             for s in run.shots:
                 self.assertEqual((s.at("hero_y"), s.at("hero_x", 18) & 1), (144, 0), "no jump")
 
-    def test_up_and_fire_together_cast_the_spell_and_do_not_jump(self) -> None:
-        run = tf.Run(self.spell_args(), [(self.UP_AT, "joy", UP | FIRE), (606, "joy", UP)], [606, 608, 610, 612, 616, 625, 660, 700], "shots_jp_spell")
-        self.check_spell(run, 1)
+    def no_spell(self, run: "tf.Run") -> None:
+        for shot in run.shots:
+            self.assertEqual(shot.at("spell_state"), -1, "no spell")
+        self.assertEqual(run.shots[-1].raw("hud_state", 2), bytes([80, 80]), "no magic points used")
 
-    def test_fire_in_the_two_frames_after_up_is_the_spell_too_and_no_jump(self) -> None:
-        for fire_at in (self.UP_AT + 1, self.UP_AT + 2):
-            with self.subTest(fire_at=fire_at):
-                run = tf.Run(self.spell_args(), [(self.UP_AT, "joy", UP), (fire_at, "joy", UP | FIRE), (fire_at + 3, "joy", UP)],
-                             [fire_at + 3, fire_at + 5, fire_at + 8, 620, 625, 660, 700], f"shots_jp_spell_late{fire_at}")
-                self.check_spell(run, 1)
+    def test_up_and_fire_together_jump_and_swing_the_sword_and_cast_nothing(self) -> None:
+        run = tf.Run(self.spell_args(), [(self.UP_AT, "joy", UP | FIRE), (606, "joy", UP), (640, "joy", 0)], [605, 607, 610, 625, 660, 700], "shots_jp_upfire")
+        self.assertNotEqual(run.shots[0].at("hero_y"), 144, "he jumped")
+        self.assertNotEqual(run.shots[0].at("hero_x", 18) & 0x80, 0, "the sword is swung")
+        self.no_spell(run)
+        self.assertEqual(run.shots[-1].at("hero_y"), 144)
 
-    def test_fire_after_the_jump_has_started_is_a_spell_in_the_air(self) -> None:
-        run = tf.Run(self.spell_args(), [(self.UP_AT, "joy", UP), (self.UP_AT + 3, "joy", UP | FIRE), (self.UP_AT + 6, "joy", UP)],
-                     [self.UP_AT + 5, self.UP_AT + 8, 618, 625, 660, 700], "shots_jp_spell_air")
-        self.assertNotEqual(run.shots[1].at("hero_y"), 144, "he jumped")
-        self.check_spell(run, 1, whole=False)
-        self.assertEqual((run.shots[-1].at("hero_y"), run.shots[-1].at("hero_x", 18) & 1), (144, 0))
-
-    def test_fire_held_when_up_is_pressed_is_no_jump_and_no_spell(self) -> None:
-        run = tf.Run(self.spell_args(), [(600, "joy", FIRE), (self.UP_AT, "joy", UP | FIRE), (620, "joy", UP), (630, "joy", 0)], [602, 612, 625, 650, 700], "shots_jp_fire_first")
-        for s in run.shots:
-            self.assertEqual((s.at("hero_y"), s.at("hero_x", 18) & 1), (144, 0))
-        self.assertEqual((run.shots[-1].at("spell_state"), run.shots[-1].raw("hud_state", 2)), (-1, bytes([80, 80])), "Up came after the fire: no new B with Up held")
+    def test_fire_with_up_held_on_the_ground_or_in_the_air_is_the_sword(self) -> None:
+        for fire_at, name in ((self.UP_AT + 2, "air"), (650, "ground")):
+            with self.subTest(name):
+                run = tf.Run(self.spell_args(), [(self.UP_AT, "joy", UP), (fire_at, "joy", UP | FIRE), (fire_at + 4, "joy", UP), (690, "joy", 0)],
+                             [fire_at + 2, fire_at + 4, 700], f"shots_jp_upheld_fire_{name}")
+                self.assertNotEqual(run.shots[0].at("hero_x", 18) & 0x80, 0, "the sword is swung")
+                self.no_spell(run)
 
     def test_space_casts_the_spell_and_is_no_jump_no_door(self) -> None:
         """Eolis screen 0, at the castle door: Up would enter it, Space does not (it is Up held and B new)."""
@@ -366,31 +338,30 @@ class GameTests(unittest.TestCase):
         self.assertGreater(keyed.shots[0].at("hero_x"), 150)
 
     # ------------------------------------------------------------------------------------------------------ Up: doors, people, ladders
-    def test_up_at_the_door_enters_it_and_up_held_while_walking_onto_a_door_does_not_jump(self) -> None:
+    def test_up_at_the_door_enters_it_and_up_held_while_walking_onto_a_door_does_not_enter(self) -> None:
         run = tf.Run(self.args(screen=0, hero="192,144,0,255,0,0,1"), [(self.UP_AT, "joy", UP), (606, "joy", 0)], [700], "shots_jp_door")
         (s,) = run.shots
         self.assertEqual((s.at("cur_screen"), s.at("hero_x"), s.at("hero_y")), (1, 144, 144), "the castle door leads to screen 1")
-        # Up and Right held from x 184, next to the castle door (its block is the one at x + 7 = 192, so x 185 to 200): two frames of walking put him on it (x 185) in the poll in which
-        # the jump would start. No jump (the door is under him) and no entering (Up was pressed when he was not on the door). The control, away from it: the same sticks jump.
+        # Up and Right held from x 184, next to the castle door (its block is the one at x + 7 = 192, so x 185 to 200): Up was pressed beside the door, so it is a jump (the press is the
+        # jump), and the door is not entered when he comes over it with Up still held (not a new Up). The control, away from it: the same sticks jump.
         walk = tf.Run(self.args(screen=0, hero="184,144,0,255,0,0,1"), [(self.UP_AT, "joy", UP | RIGHT), (680, "joy", 0)], list(range(604, 614)) + [650], "shots_jp_door_walk")
         self.assertEqual([s.at("cur_screen") for s in walk.shots], [0] * 11, "not entered")
-        self.assertEqual([s.at("hero_y") for s in walk.shots], [144] * 11, "no jump over the door")
-        self.assertGreater(walk.shots[-1].at("hero_x"), 195)
+        self.assertTrue(any(s.at("hero_y") != 144 for s in walk.shots[:10]), "pressed beside the door: a jump")
         away = tf.Run(self.args(screen=0, hero="100,144,0,255,0,0,1"), [(self.UP_AT, "joy", UP | RIGHT), (680, "joy", 0)], list(range(604, 614)) + [650], "shots_jp_door_away")
         self.assertTrue(any(s.at("hero_y") != 144 for s in away.shots[:10]), "the control: Up and Right jump when nothing is under him")
 
     PERSON = "--defsym NPCS=1 --defsym NPC_EXTRA=0x37 --defsym NPC_EXTRA_X=100 --defsym NPC_EXTRA_Y=144 --defsym NPC_EXTRA_SCRIPT=2"
 
-    def test_up_at_a_person_talks_and_up_held_while_walking_up_to_him_does_not_jump(self) -> None:
+    def test_up_at_a_person_talks_and_up_held_while_walking_up_to_him_does_not_talk(self) -> None:
         """Eolis screen 4 with the test build's man (entity $37, stands, script 2: one message) at x 100, y 144: his box takes a hero from x 89 to 139. Up pressed there starts the script
-        (the text box is open: the program is polling as a menu) and he stays on the ground. Up and Right held from x 88: he is in the box in the poll in which the jump would start:
-        no jump, and no talk either (Up was pressed away from him). The control without him jumps."""
+        (the text box is open: the program is polling as a menu) and he stays on the ground. Up and Right held from x 88: pressed away from him,
+        it is a jump and no talk. The control without him jumps."""
         stand = tf.Run(self.args(screen=4, hero="100,144,0,255,0,0,1", defs=self.PERSON), [(self.UP_AT, "joy", UP)], [650, 700], "shots_jp_person")
         for s in stand.shots:
             self.assertEqual((s.at("hero_y"), s.at("hero_x", 18) & 1, s.raw("input_state", 396)[IN_MODE]), (144, 0, 0), "talking: the text box is open, no jump")
         walk = tf.Run(self.args(screen=4, hero="88,144,0,255,0,0,1", defs=self.PERSON), [(self.UP_AT, "joy", UP | RIGHT), (680, "joy", 0)], list(range(604, 614)) + [650], "shots_jp_person_walk")
-        self.assertEqual([s.at("hero_y") for s in walk.shots], [144] * 11, "no jump in front of him")
-        self.assertEqual({s.raw("input_state", 396)[IN_MODE] for s in walk.shots}, {1}, "and no talk either")
+        self.assertTrue(any(s.at("hero_y") != 144 for s in walk.shots[:10]), "pressed away from him: a jump")
+        self.assertEqual({s.raw("input_state", 396)[IN_MODE] for s in walk.shots}, {1}, "and no talk (Up was pressed away from him)")
         control = tf.Run(self.args(screen=4, hero="88,144,0,255,0,0,1", defs="--defsym NPCS=1"), [(self.UP_AT, "joy", UP | RIGHT), (680, "joy", 0)], list(range(604, 614)) + [650], "shots_jp_person_control")
         self.assertTrue(any(s.at("hero_y") != 144 for s in control.shots[:10]), "the control: without him the same sticks jump")
 

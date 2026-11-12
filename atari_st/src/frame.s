@@ -12,8 +12,8 @@
 | The mouse port (joystick 0) is ignored.
 | With JOYPAD (the disk) the stick is the centre and what a button means depends on where it is pressed: input_poll (menus, boxes, the
 | title: everything but the running game) has fire and Space = A (choose), Alternate = B (back); input_poll_game (the main loop, and the
-| waits of a screen change) has fire and Alternate = B (the sword), Space = Up and B together (a spell), and Up held for two frames
-| without fire is a jump (joy_jump, viewer.s). The notes on JOYPAD are in AGENTS.md.
+| waits of a screen change) has fire and Alternate = B (the sword, also with Up held: never the spell), Space = Up and B together (the
+| spell), and the press of Up is a jump (joy_jump, viewer.s). The notes on JOYPAD are in AGENTS.md.
 
     .equ VBL_VECTOR, 0x70
     .equ IKBD_VECTOR, 0x118
@@ -50,7 +50,7 @@
     .equ IN_MODE, 392                       | the mode of the last poll: 0 menu, 1 game (a change of mode makes no button new)
     .equ IN_REQ, 393                        | the mode the poll in progress runs in
     .equ IN_UPCNT, 394                      | polls (game mode) with Up held on the stick or the arrow key, up to 4; 1 is the press, 3 starts a jump
-    .equ IN_LATCH, 395                      | fire (a B button) was down at the press of Up or in the polls since: this Up is not a jump
+    .equ IN_LATCH, 395                      | (not used any more)
     .endif
 
     .equ PKT_NONE, 0
@@ -303,22 +303,25 @@ ip_go:
 20: move.b IN_UPCNT(%a1), %d1               | the game: how long Up (the stick or the arrow key, not Space) has been held
     btst #3, %d0
     bne.s 21f
-    moveq #0, %d1                           | Up is up: no count, no latch
-    clr.b IN_LATCH(%a1)
+    moveq #0, %d1                           | Up is up: no count
     bra.s 23f
 21: cmpi.b #4, %d1
-    bcc.s 24f
+    bcc.s 23f
     addq.b #1, %d1
-24: btst #6, %d0                            | a B button down (fire, Alternate) or Space (Up and B): the Up that goes with it is no jump
-    bne.s 25f
-    tst.b %d2
-    beq.s 23f
-25: st IN_LATCH(%a1)
 23: move.b %d1, IN_UPCNT(%a1)
     tst.b %d2
     beq.s 26f
     ori.b #NES_UP+NES_B, %d0                | Space: Up held and B (new when Space goes down): the spell
-26: btst #3, %d0
+    bra.s 28f
+26: btst #6, %d0                            | fire or Alternate pressed just now (B new) with Up held: the sword, never the spell (the ROM's Up
+    beq.s 28f                               | and B): Up is left out of the pad in this poll (the count goes on, so it is no new Up after it)
+    btst #6, IN_PAD(%a1)
+    bne.s 28f
+    btst #3, %d0
+    beq.s 28f
+    bclr #3, %d0
+    ori.b #NES_A, %d0                       | (the A of the Up that is held stays: the wing boots)
+28: btst #3, %d0
     beq.s 22f
     ori.b #NES_A, %d0                       | Up held is A held for the wing boots (a jump is not A: joy_jump)
 22:
@@ -337,7 +340,11 @@ ip_go:
     bra.s 16f
 17: ori.b #NES_A, %d0
     .endif
-16: move.b IN_PAD(%a1), %d1
+16:
+    .ifdef REPLAY
+    bsr.w replay_step                       | (tests) the pad from the stream, src/replay.s
+    .endif
+    move.b IN_PAD(%a1), %d1
     move.b %d0, IN_PAD(%a1)
     not.b %d1
     and.b %d1, %d0
@@ -379,5 +386,10 @@ key_map:
     .byte 0
     .even
 
+    .ifdef REPLAY
+    .section .text.early,"ax"               | (in front of .data: the test build's replay code then takes nothing of .text's reach)
+    .include "replay.s"
+    .text
+    .endif
     .include "unpack.s"
     .include "sound.s"

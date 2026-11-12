@@ -22,13 +22,13 @@ writable).
 
 KEYS: stick Up jumps, climbs, enters
 doors and talks. Left, Right, Down as
-usual. Fire sword, Down+Fire item,
-Up+Fire spell. Arrow keys = the stick.
-Space spell, Alt sword. Tab: player
-menu. Return: pause. Esc: save or quit.
+usual. Fire or Alt: sword, Down+Fire
+item. Space: spell. Arrow keys = the
+stick. Tab: player menu. Return:
+pause. Esc: save or quit.
 In menus fire or Space choose, Alt goes
 back.
 
-Not as in the game: no credits, the
-timing of intro, ending and fades is
+Not as in the game: the timing of the
+intro, the ending and the fades is
 approximate.

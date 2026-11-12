@@ -533,7 +533,7 @@ class ViewerTests(unittest.TestCase):
                 hero = sc.Hero(261 - offset if to_the_right else offset - 20, 144, armour, shield, weapon, step & 1, to_the_right)
                 expected = sc.expected_scroll_screen(rom, 0, 1, target, offset, to_the_right, 40, hero=hero)
             else:
-                hero = sc.Hero(1 if to_the_right else 241, 144, armour, shield, weapon, 0, to_the_right)
+                hero = sc.Hero(1 if to_the_right else 240, 144, armour, shield, weapon, 0, to_the_right)
                 expected = sc.expected_scroll_screen(rom, 0, target, target, 0, True, 40, hero=hero)
             bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
             if cur == 0 and offset == 16:

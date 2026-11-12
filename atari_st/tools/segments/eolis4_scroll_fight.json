@@ -1,0 +1,23 @@
+{
+ "area": 0,
+ "screen": 4,
+ "x": 24,
+ "y": 144,
+ "left": 1,
+ "hp": 80,
+ "mp": 0,
+ "exp": 0,
+ "gold": 0,
+ "title": 0,
+ "weapon": 1,
+ "armour": 0,
+ "shield": 255,
+ "frames": 400,
+ "policy": "fight",
+ "lead": [
+  [
+   2,
+   40
+  ]
+ ]
+}

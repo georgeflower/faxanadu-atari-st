@@ -1,0 +1,20 @@
+{
+ "y": 144,
+ "left": 1,
+ "hp": 80,
+ "mp": 80,
+ "exp": 0,
+ "gold": 0,
+ "title": 8,
+ "weapon": 2,
+ "armour": 1,
+ "shield": 255,
+ "policy": "fight",
+ "area": 2,
+ "screen": 33,
+ "x": 144,
+ "magic": 1,
+ "cast": 40,
+ "reach": 90,
+ "frames": 500
+}
