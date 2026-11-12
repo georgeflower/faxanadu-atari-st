@@ -3,7 +3,7 @@
 
 The image is plain FAT12 as TOS writes it (80 tracks, 2 sides, 9 sectors of 512 bytes, 2 sectors a cluster, one root
 directory of 112 entries). A name with a folder, `AUTO/FAXANADU.PRG`, puts the file in that folder of the root (one level): TOS
-runs the programs of A:\AUTO when it starts from the disk, with the root as the current folder, so the data files stay in the root.
+runs the programs of A:\\AUTO when it starts from the disk, with the root as the current folder, so the data files stay in the root.
 A Gotek or HxC reads it as it is, and Hatari takes it as a floppy image.
 
     make_disk.py OUT.st FILE [FILE ...]        (each FILE is a path, stored under its upper-case 8.3 name; NAME=PATH stores PATH as NAME)
