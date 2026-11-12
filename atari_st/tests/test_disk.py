@@ -273,7 +273,7 @@ class DiskTests(unittest.TestCase):
     # ------------------------------------------------------------------------------------------------ the disk
     def test_the_disk_fits_720_kb(self) -> None:
         readme = (ROOT / "disk" / "README.TXT").read_bytes()
-        files = [("FAXANADU.PRG", bytes(PRG_BUDGET)), ("README.TXT", readme)] + sorted(self.files.items())
+        files = [("AUTO/FAXANADU.PRG", bytes(PRG_BUDGET)), ("README.TXT", readme)] + sorted(self.files.items())
         files.append(("SAVE.SAV", b"A" * 34))                  # the game's save file (a cluster) must still find room
         image = make_disk.build_disk(files)                    # raises DiskFull when it does not fit
         names = make_disk.read_disk(image)
@@ -282,7 +282,7 @@ class DiskTests(unittest.TestCase):
     def test_the_readme_is_plain_text_a_small_screen_can_show(self) -> None:
         text = (ROOT / "disk" / "README.TXT").read_text(encoding="ascii")
         self.assertTrue(all(len(line) <= 40 for line in text.splitlines()), "lines of 40 characters at most")
-        self.assertIn("FAXANADU.PRG", text)
+        self.assertIn("AUTO", text)
 
 
 if __name__ == "__main__":

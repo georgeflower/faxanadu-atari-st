@@ -187,11 +187,11 @@ All numbers are from the game's disk build (`make disk`: `ALL=1`, every area, `N
 
 The splash files (TITLE, INTRO, OUTRO, at most 10.1 KB unpacked) are read into the second playfield region (26,624 bytes), free while they play, and so is the hero's data when `hero_sync` unpacks it (17,804 bytes with the table of reversed bits). A build whose package room or TOWN.DAT grows past these limits stops at assembly (`.error` in `viewer.s`) or, on a machine with less memory, at start-up with the message "not enough memory". **TOS's screen memory is used for TOWN.DAT: the program must give it back clean (the desktop redraws it on exit); the author checks that on the real machine.** The first TOWN.DAT version lay in the TPA behind the package room and was overwritten by a big package (the people and scripts stopped working in the disk build): the load order matters, TOWN.DAT is loaded after the first package.
 
-**Disk** (`make disk` = `make viewerdisk`; 28 files, 694 KB of 720 KB used (SAVE.SAV needs one cluster; README.TXT was cut to one cluster to make it fit), the file sizes in bytes):
+**The program is in the disk's AUTO folder** (the author, 12 Nov 2026): `AUTO\FAXANADU.PRG`, so it starts when the ST boots from the disk; TOS runs it with the root as the current folder, so the data files and SAVE.SAV stay in the root and the program opens them by name as before (`tests/test_autoboot.py` boots the image in Hatari with no hard drive and checks that TOWN.DAT was loaded). The folder takes one cluster. **Disk** (`make disk` = `make viewerdisk`; 28 files, 694 KB of 720 KB used (SAVE.SAV needs one cluster; README.TXT was cut to one cluster to make it fit), the file sizes in bytes):
 
 | File | Bytes |
 |---|---|
-| FAXANADU.PRG | 95,314 |
+| AUTO\FAXANADU.PRG | 95,314 |
 | A2P11, A2P10 (Mist) | 60,836, 57,983 |
 | A7P15 | 47,861 |
 | A6P12, A6P13, A6P14 | 45,852, 45,292, 44,722 |
@@ -283,7 +283,8 @@ src/main.s              the start-up check (will become the game)
 src/blit.s              `en_tiles` and `en_blit`, the sprite blitter of the enemies and the hero (`.text.late`)
 src/overscan_test.s     the overscan test: a 240-line screen with the bottom border open (`make overscan`)
 tools/make_prg.py       the .PRG header (a flat image, no relocation: PC-relative code only; with `--elf` and `--bss-from SYMBOL` the zero tail of the image (the song buffer and the stack) is left out of the file)
-tools/make_disk.py      a 720 KB .st image for the Gotek (`NAME=PATH` stores a file under another name, `.TXT` files get CRLF, it lists every file with its size)
+tools/make_disk.py      a 720 KB .st image for the Gotek (`NAME=PATH` stores a file under another name, `FOLDER/NAME` in a folder of the root, `.TXT` files get CRLF, it lists every file with its size)
+tests/test_autoboot.py  Hatari boots the game's disk: TOS runs AUTO\FAXANADU.PRG and it loads its data from the root
 disk/README.TXT         the text on the disk: controls and what to expect
 tests/test_save.py      the save file: the text round-trips through the model; a Guru saves, a write protected drive, CONTINUE loads, refuses a damaged file
 tests/test_music.py     which song plays when: the ROM's door rule against the port's for every door, and doors and the Start press in jsnes

@@ -2,8 +2,9 @@
 """Make a 720 KB double-sided Atari ST floppy image (.st) holding the game: FAXANADU.PRG and its data files.
 
 The image is plain FAT12 as TOS writes it (80 tracks, 2 sides, 9 sectors of 512 bytes, 2 sectors a cluster, one root
-directory of 112 entries). It is not a boot disk: open the drive on the desktop and run FAXANADU.PRG. A Gotek or HxC reads
-it as it is, and Hatari takes it as a floppy image.
+directory of 112 entries). A name with a folder, `AUTO/FAXANADU.PRG`, puts the file in that folder of the root (one level): TOS
+runs the programs of A:\AUTO when it starts from the disk, with the root as the current folder, so the data files stay in the root.
+A Gotek or HxC reads it as it is, and Hatari takes it as a floppy image.
 
     make_disk.py OUT.st FILE [FILE ...]        (each FILE is a path, stored under its upper-case 8.3 name; NAME=PATH stores PATH as NAME)
 
@@ -41,7 +42,7 @@ def short_name(name: str) -> bytes:
 
 
 def build_disk(files: list[tuple[str, bytes]], label: str = "FAXANADU", when: datetime.datetime | None = None) -> bytes:
-    """The image of a disk with `files` (name, contents) in its root directory, in the given order."""
+    """The image of a disk with `files` (name, contents) in its root directory, in the given order; `FOLDER/NAME` puts a file in a folder of the root."""
     when = when or datetime.datetime(2026, 1, 1)
     root_sectors = ROOT_ENTRIES * 32 // SECTOR
     data_start = RESERVED + FATS * PER_FAT + root_sectors
@@ -73,26 +74,59 @@ def build_disk(files: list[tuple[str, bytes]], label: str = "FAXANADU", when: da
     stamp_time = (when.hour << 11) | (when.minute << 5) | (when.second // 2)
     stamp_date = ((when.year - 1980) << 9) | (when.month << 5) | when.day
     root = (RESERVED + FATS * PER_FAT) * SECTOR
-    if len(files) + 1 > ROOT_ENTRIES:
+    folders: dict[str, list[tuple[str, bytes]]] = {}
+    plain = []
+    for name, data in files:
+        folder, _, leaf = name.rpartition("/")
+        if folder:
+            if "/" in folder:
+                raise ValueError(f"{name!r}: one level of folders only")
+            folders.setdefault(folder.upper(), []).append((leaf, data))
+        else:
+            plain.append((name, data))
+    if len(plain) + len(folders) + 1 > ROOT_ENTRIES:
         raise DiskFull("too many files")
     image[root : root + 32] = (label.upper().ljust(11).encode("ascii")[:11] + b"\x08" + bytes(10)
                                + struct.pack("<HH", stamp_time, stamp_date) + bytes(6))
-    entry = 1
     next_cluster = 2
-    for name, data in files:
+
+    def entry_bytes(name: bytes, attr: int, cluster: int, size: int) -> bytes:
+        return name + bytes([attr]) + bytes(10) + struct.pack("<HHHL", stamp_time, stamp_date, cluster, size)
+
+    def store(name: str, data: bytes) -> int:
+        nonlocal next_cluster
         need = max(1, -(-len(data) // cluster_bytes))
         if next_cluster + need > clusters + 2:
             raise DiskFull(f"{name} does not fit: {next_cluster - 2 + need} of {clusters} clusters")
+        first = next_cluster
         for k in range(need):
-            set_fat(next_cluster + k, next_cluster + k + 1 if k < need - 1 else 0xFFF)
-            at = (data_start + (next_cluster + k - 2) * PER_CLUSTER) * SECTOR
+            set_fat(first + k, first + k + 1 if k < need - 1 else 0xFFF)
+            at = (data_start + (first + k - 2) * PER_CLUSTER) * SECTOR
             chunk = data[k * cluster_bytes : (k + 1) * cluster_bytes]
             image[at : at + len(chunk)] = chunk
-        at = root + entry * 32
-        image[at : at + 32] = (short_name(name) + b"\x20" + bytes(10)
-                               + struct.pack("<HHHL", stamp_time, stamp_date, next_cluster, len(data)))
-        entry += 1
         next_cluster += need
+        return first
+
+    entries = []
+    for folder, inside in folders.items():                          # a folder: ".", ".." and its files, in clusters of its own (32 entries a cluster)
+        size = (2 + len(inside)) * 32
+        own = next_cluster
+        next_cluster += max(1, -(-size // cluster_bytes))
+        if next_cluster > clusters + 2:
+            raise DiskFull(f"{folder} does not fit")
+        listing = entry_bytes(b".".ljust(11), 0x10, own, 0) + entry_bytes(b"..".ljust(11), 0x10, 0, 0)
+        for leaf, data in inside:
+            listing += entry_bytes(short_name(leaf), 0x20, store(f"{folder}/{leaf}", data), len(data))
+        listing = listing.ljust(-(-size // cluster_bytes) * cluster_bytes, b"\0")
+        for k in range(len(listing) // cluster_bytes):
+            set_fat(own + k, own + k + 1 if k < len(listing) // cluster_bytes - 1 else 0xFFF)
+        at = (data_start + (own - 2) * PER_CLUSTER) * SECTOR
+        image[at : at + len(listing)] = listing
+        entries.append(entry_bytes(short_name(folder), 0x10, own, 0))
+    for name, data in plain:
+        entries.append(entry_bytes(short_name(name), 0x20, store(name, data), len(data)))
+    for entry, raw in enumerate(entries, 1):
+        image[root + entry * 32 : root + entry * 32 + 32] = raw
     for f in range(FATS):
         at = (RESERVED + f * PER_FAT) * SECTOR
         image[at : at + len(fat)] = fat
@@ -100,7 +134,7 @@ def build_disk(files: list[tuple[str, bytes]], label: str = "FAXANADU", when: da
 
 
 def read_disk(image: bytes) -> dict[str, bytes]:
-    """The files in the root directory of an image made by `build_disk` (for the tests and for a look inside)."""
+    """The files of an image made by `build_disk`, a file in a folder as `FOLDER/NAME` (for the tests and for a look inside)."""
     if len(image) != TOTAL_SECTORS * SECTOR:
         raise ValueError("not a 720 KB image")
     fat_at = RESERVED * SECTOR
@@ -112,21 +146,30 @@ def read_disk(image: bytes) -> dict[str, bytes]:
         pair = image[at] | (image[at + 1] << 8)
         return (pair >> 4) if n & 1 else (pair & 0xFFF)
 
-    files = {}
-    for entry in range(ROOT_ENTRIES):
-        raw = image[root + entry * 32 : root + entry * 32 + 32]
-        if raw[0] == 0:
-            break
-        if raw[11] & 0x08:
-            continue
-        name = raw[:8].decode("ascii").rstrip() + "." + raw[8:11].decode("ascii").rstrip()
-        cluster, size = struct.unpack_from("<HL", raw, 26)
+    def chain(cluster: int, size: int | None) -> bytes:
         out = bytearray()
-        while cluster < 0xFF8 and len(out) < size:
+        while 2 <= cluster < 0xFF8 and (size is None or len(out) < size):
             at = (data_start + (cluster - 2) * PER_CLUSTER) * SECTOR
             out.extend(image[at : at + PER_CLUSTER * SECTOR])
             cluster = next_of(cluster)
-        files[name] = bytes(out[:size])
+        return bytes(out if size is None else out[:size])
+
+    def listing(raw_dir: bytes, prefix: str, files: dict[str, bytes]) -> None:
+        for entry in range(len(raw_dir) // 32):
+            raw = raw_dir[entry * 32 : entry * 32 + 32]
+            if raw[0] == 0:
+                break
+            if raw[11] & 0x08 or raw[0] == ord("."):
+                continue
+            base, ext = raw[:8].decode("ascii").rstrip(), raw[8:11].decode("ascii").rstrip()
+            cluster, size = struct.unpack_from("<HL", raw, 26)
+            if raw[11] & 0x10:
+                listing(chain(cluster, None), prefix + base + "/", files)
+            else:
+                files[prefix + base + "." + ext] = chain(cluster, size)
+
+    files: dict[str, bytes] = {}
+    listing(image[root : root + ROOT_ENTRIES * 32], "", files)
     return files
 
 
@@ -146,7 +189,7 @@ def main(argv: list[str]) -> int:
         files.append((name, data))
     image = build_disk(files, when=datetime.datetime.now())
     out.write_bytes(image)
-    used = sum(-(-len(d) // (PER_CLUSTER * SECTOR)) * PER_CLUSTER * SECTOR for _, d in files)
+    used = sum(-(-len(d) // (PER_CLUSTER * SECTOR)) * PER_CLUSTER * SECTOR for _, d in files) + PER_CLUSTER * SECTOR * len({n.rpartition("/")[0] for n, _ in files} - {""})
     print(f"Wrote {out}: {len(files)} files, {used // 1024} KB of {TOTAL_SECTORS * SECTOR // 1024} KB used")
     for name, data in sorted(files, key=lambda f: -len(f[1])):
         print(f"  {name:<13}{len(data):>8} bytes")

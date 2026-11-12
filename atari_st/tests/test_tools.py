@@ -38,6 +38,14 @@ class DiskTests(unittest.TestCase):
         self.assertEqual(back["FAXANADU.PRG"], files[0][1])
         self.assertEqual(back["A.DAT"], b"x")
 
+    def test_a_file_in_a_folder_survives_a_round_trip_beside_the_root_files(self) -> None:
+        files = [("AUTO/FAXANADU.PRG", bytes(range(256)) * 40), ("A.DAT", b"x"), ("AUTO/B.PRG", b"yz")]
+        image = make_disk.build_disk(files)
+        self.assertEqual(make_disk.read_disk(image), dict(files))
+        root = (make_disk.RESERVED + make_disk.FATS * make_disk.PER_FAT) * make_disk.SECTOR
+        self.assertEqual(image[root + 32 : root + 43], b"AUTO       ")
+        self.assertEqual(image[root + 43], 0x10, "a folder entry")
+
     def test_a_file_too_big_for_the_disk_is_refused(self) -> None:
         with self.assertRaises(make_disk.DiskFull):
             make_disk.build_disk([("BIG.DAT", bytes(800 * 1024))])

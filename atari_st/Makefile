@@ -54,7 +54,7 @@ disk viewerdisk: override VIEWER_DEFS += $(DISK_DEFS)
 disk viewerdisk: override ALL = 1
 disk viewerdisk: override WORLD = $(DISK_WORLD)
 disk viewerdisk: viewer
-	$(PYTHON) $(TOOLS_DIR)/make_disk.py $(DISK) FAXANADU.PRG=$(VIEWER_PRG) disk/README.TXT $(wildcard $(BUILD_DIR)/*.DAT)
+	$(PYTHON) $(TOOLS_DIR)/make_disk.py $(DISK) AUTO/FAXANADU.PRG=$(VIEWER_PRG) disk/README.TXT $(wildcard $(BUILD_DIR)/*.DAT)
 
 # the start-up check (src/main.s, 16 colour bars) on a disk
 startdisk: all

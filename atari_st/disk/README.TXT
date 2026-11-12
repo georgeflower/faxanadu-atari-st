@@ -5,8 +5,9 @@ keep the disk to yourself.
 
 NEEDS: 512 KB, colour, low res, PAL.
 Keep this disk in the drive: the areas
-load from it. Run FAXANADU.PRG. About
-380 KB must be free: no accessories.
+load from it. Boot from it: the game
+is in the AUTO folder and starts by
+itself (or run AUTO\FAXANADU.PRG).
 
 TITLE: Up/Down/Tab pick, fire/Return
 confirm. START begins the game.
