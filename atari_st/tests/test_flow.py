@@ -289,6 +289,7 @@ class FlowTests(unittest.TestCase):
         boss is on the screen the area's song comes back and the event is over."""
         pokes = [(740, "b:inv+32", 20), (740, "w:hourglass", 10), (740, "w:item_ticks", 1), (740, "w:flow_event", 1)]
         pokes += [(775, f"b:enemies+{i * 30}", 255) for i in range(8)]
+        pokes += [(vbl, "b:hud_state", 80) for vbl in (380, 480, 580, 680)]   # power back now and then: the boss's bolts (28 each, no shield) kill him otherwise, since the boss starts in the ROM's step
         run = Run(self.BOSS, pokes, [600, 735, 770, 795], "shots_flow_boss")
         start, before, capped, gone = run.shots
         self.assertEqual((start.at("cur_music"), start.at("flow_event")), (10, 0x81), "the boss song from the first tick; the event's first tick is done")

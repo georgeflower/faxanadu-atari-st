@@ -93,6 +93,22 @@ class SideBySideTests(unittest.TestCase):
         self.assertEqual(hero, {}, sb.report(rom, port, pads))
         self.assertTrue(all(v[0] >= k for f, v in c["first"].items()), sb.report(rom, port, pads))
 
+    def test_ripasheiku_flies_shoots_and_dies_as_in_the_rom(self) -> None:
+        """Mist screen 51. The port put the boss in step 1 at its placing and the first SWITCH_BEHAVIOR added one more: it fell, then stood and shot from
+        the second pass, while the ROM's walks and climbs. Then the bolt: the ROM's hits the hero's shield (Player_CheckShieldHitByMagic, which the port
+        did not have) and costs 28 >> 3 with the Magic Shield. The whole fight agrees and the boss dies (90 experience, its gold)."""
+        pads, rom, port = self.play("boss_ripasheiku")
+        c = sb.compare(rom, port)
+        self.assertEqual(c["first"], {}, sb.report(rom, port, pads))
+        self.assertEqual(rom[-1]["s7_ent"], 255, "the boss is gone")
+        self.assertEqual(rom[-1]["exp"], 90)
+
+    def test_king_grieves_bolts_hit_the_shield_as_in_the_rom(self) -> None:
+        """Dartmoor: the one line his y was off came from the bolt that the ROM's shield stops (the knock-back moved the hero, not the boss's leap)."""
+        pads, rom, port = self.play("boss_king_grieve", 700)
+        c = sb.compare(rom, port)
+        self.assertEqual(c["first"], {}, sb.report(rom, port, pads))
+
 
 if __name__ == "__main__":
     unittest.main()

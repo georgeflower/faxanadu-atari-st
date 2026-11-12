@@ -111,11 +111,8 @@ enemies_load:
     clr.b E_XF(%a3)
     move.b %d2, E_Y(%a3)
     clr.b E_YF(%a3)
-    clr.b E_PHASE(%a3)
-    cmpi.b #0x2D, %d0                       | Ripasheiku starts in step 1 (see beh_ripasheiku)
-    bne.s 5f
-    move.b #1, E_PHASE(%a3)
-5:  move.b #0xFF, E_BEH(%a3)
+    clr.b E_PHASE(%a3)                      | (Ripasheiku too: the first op, SWITCH_BEHAVIOR, adds one, so its first update is step 1; it used to be put in
+    move.b #0xFF, E_BEH(%a3)                | step 1 here as well, and the switch made that 2: it fell, then stood and shot, side by side with the ROM)
     clr.b E_ARG1(%a3)
     clr.b E_INT(%a3)
     clr.w E_D3(%a3)
@@ -2597,7 +2594,9 @@ en_touch:
     bne.s 12f
 13: move.l #0x00200010, (%a1)
     move.l #0x00F80000, 4(%a1)
-12: moveq #0, %d0
+12: bsr.w en_shield                          | Player_CheckShieldHitByMagic comes before the touch
+    bne.w 9f
+    moveq #0, %d0
     move.b E_X(%a3), %d0
     add.w (%a1), %d0                    | the box's left
     move.w hero_x(%pc), %d1
@@ -2700,6 +2699,81 @@ en_touch:
 9:  movem.l (%sp)+, %d0-%d5/%a0-%a2
     rts
 
+    .section .text.early,"ax"               | en_shield is in the early code: .text has no room left to its data in the test builds
+| Player_CheckShieldHitByMagic and Player_HandleShieldHitByMagic: magic (category 6: the fireballs, bolts and the magic of Nash and the Hood) that
+| meets his shield is gone, with sound $0C, and hurts him by its damage halved once more than the shield's number (small 0, large 1, magic 2: 28 is
+| 14, 7, 3) with no armour taken off, and with the knock-back and the 60 frames (nothing tests them first). Not with no shield or with the Battle
+| Helmet's slot (3 and up), and not while he swings (body frames 4 to 6: the shield is not where it is drawn then). The shield is at x + SHIELD_SPRITE_OFFSETS_X and
+| y + 8 (bytes); the test: (shield x + 7 - left) & 255 < width + 7 and (shield y + 15 - top) & 255 < height + 15, the box (a1: left, top, width,
+| height, relative to the sprite; a0 = the kind) is the touch's. Z clear: it hit the shield. Keeps everything.
+en_shield:
+    movem.l %d0-%d4/%a2, -(%sp)
+    moveq #0, %d4
+    move.b inv+INV_SHIELD(%pc), %d4
+    cmpi.b #3, %d4
+    bcc.w 8f
+    cmpi.b #6, K_CAT+1(%a0)
+    bne.w 8f
+    move.w hero_frame(%pc), %d0
+    move.w %d0, %d1
+    subq.w #4, %d1
+    cmpi.w #3, %d1
+    bcs.w 8f
+    add.w %d0, %d0
+    add.w hero_flip(%pc), %d0
+    lea shield_dx(%pc), %a2
+    moveq #0, %d1
+    move.b (%a2,%d0.w), %d1
+    add.w hero_x(%pc), %d1
+    addq.w #7, %d1                          | shield x + 7 - left
+    moveq #0, %d0
+    move.b E_X(%a3), %d0
+    add.w (%a1), %d0
+    sub.w %d0, %d1
+    andi.w #0xFF, %d1
+    move.w 4(%a1), %d2
+    addq.w #7, %d2
+    andi.w #0xFF, %d2
+    cmp.w %d2, %d1
+    bcc.s 8f
+    move.w hero_y(%pc), %d1
+    addi.w #8+15, %d1                       | shield y + 15 - top
+    moveq #0, %d0
+    move.b E_Y(%a3), %d0
+    add.w 2(%a1), %d0
+    sub.w %d0, %d1
+    andi.w #0xFF, %d1
+    move.w 6(%a1), %d2
+    addi.w #15, %d2
+    andi.w #0xFF, %d2
+    cmp.w %d2, %d1
+    bcc.s 8f
+    move.w K_DMG(%a0), %d0                  | Player_HandleHitByMagic: the damage >> (shield + 1)
+    andi.w #0xFF, %d0
+    addq.w #1, %d4
+    lsr.w %d4, %d0
+    tst.w %d0
+    beq.s 7f
+    lea hero_invinc(%pc), %a2               | Player_SetDamagedBySprite: 60 frames, he faces it, knock-back
+    move.w #0x3C, (%a2)
+    moveq #1, %d1
+    btst #0, E_FLAGS(%a3)
+    beq.s 6f
+    moveq #0, %d1
+6:  move.w %d1, hero_flip-hero_invinc(%a2)
+    move.w #1, hero_knock-hero_invinc(%a2)
+    lsl.w #8, %d0
+    bsr.w en_reduce_hp
+7:  move.b #0xFF, E_ENT(%a3)
+    moveq #0x0C, %d0
+    bsr.w sound_play_sfx
+    moveq #1, %d0
+    bra.s 9f
+8:  moveq #0, %d0
+9:  movem.l (%sp)+, %d0-%d4/%a2
+    rts
+
+    .text                                   | (back to .text)
 | Player_ReduceHP: d0.w = the damage, 8.8. The power is the HUD's byte and a fraction (hero_hpl); below nothing he is dead (the Elixir lets him live).
 en_reduce_hp:
     movem.l %d0-%d1/%a0-%a1, -(%sp)
