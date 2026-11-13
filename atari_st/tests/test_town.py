@@ -576,8 +576,9 @@ class TownTests(unittest.TestCase):
         import hatari_shot as hs
 
         got = hs.decode_screen(ram, hs.video_base(log))
-        slot = got[112][80]                                                   # the frame's colour: the brightest of the palette (not black)
+        slot = got[112][80]                                                   # the frame's colour: the text colour (not black)
         self.assertNotEqual(slot, 0, "the frame's top edge is not drawn")
+        self.assertEqual(hs.read_palette(log)[slot] & 0x777, 0x777, "the text and the frames are white (the palette on the hardware while the portrait is up)")
         expected = [[0] * 320 for _ in range(200)]
         self.box_layer(expected, slot, 3, 112, 4, 80)
         portrait = por["portraits"][k]
@@ -668,6 +669,7 @@ class TownTests(unittest.TestCase):
         got = hs.decode_screen(ram, hs.video_base(log))
         slot = got[40][140]
         self.assertNotEqual(slot, 0)
+        self.assertEqual(hs.read_palette(log)[slot] & 0x777, 0x777, "the shop's text and box are white")
         expected = [[0] * 320 for _ in range(200)]
         self.box_layer(expected, slot, 7, 40, 10, 4 * 16 + 16)
         entries = [(0x00, 400), (0x90, 160), (0x92, 320), (0x60, 400)]

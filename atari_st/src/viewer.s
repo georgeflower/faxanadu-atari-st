@@ -349,6 +349,7 @@ start:
     .endif
     bsr.w pause_note                        | Start at the top of the frame (pause_key, after the frame, pauses)
     bsr.w esc_key                           | Esc: the menu (Save, Continue, Exit to GEMDOS; src/save.s)
+    bsr.w trainer_key                       | T: the trainer on or off (src/trainer.s)
     .ifdef FLOW
     bsr.w flow_tick                         | the ending's walk, boss rooms, the final boss (src/flow.s)
     .endif
@@ -405,6 +406,7 @@ start:
 14:
     .endif
     bsr.w draw_hero
+    bsr.w trainer_draw                      | the area and the screen left of the HUD while the trainer is on
     bsr.w present_swap
     bsr.w pause_key                         | Start: the pause (src/save.s), after the frame as the ROM's GameLoop_CheckPauseGame
     bra.w 12b                               | (Esc is seen at the top: esc_key)
@@ -3466,6 +3468,7 @@ early_base:                                 | the start of .text.early (tools/ch
     .ifdef FLOW
     .include "flow.s"                       | (also in .text.early)
     .endif
+    .include "trainer.s"                    | (T; also in .text.early)
 
     .section .rodata
 hud_layout:

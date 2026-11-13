@@ -544,6 +544,8 @@ portrait_open:
     moveq #15, %d2
 1:  move.w (%a0)+, (%a2)+
     dbra %d2, 1b
+    lea -30(%a0), %a0                       | the portrait's palette, colour 1: the text colour of its boxes (white)
+    bsr.w text_color_at
     bsr.w shown_screen
     bsr.s portrait_draw
     bra.s 9f

@@ -26,7 +26,8 @@ doors and talks. Left, Right, Down as
 usual. Fire or Alt: sword, Down+Fire
 item. Space: spell. Arrow keys = the
 stick. Tab: player menu. Return:
-pause. Esc: save or quit.
+pause. Esc: save or quit. T: trainer
+(no damage, area and screen shown).
 In menus fire or Space choose, Alt goes
 back.
 

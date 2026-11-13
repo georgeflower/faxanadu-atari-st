@@ -50,8 +50,8 @@
     .equ IN_MODE, 392                       | the mode of the last poll: 0 menu, 1 game (a change of mode makes no button new)
     .equ IN_REQ, 393                        | the mode the poll in progress runs in
     .equ IN_UPCNT, 394                      | polls (game mode) with Up held on the stick or the arrow key, up to 4; 1 is the press, 3 starts a jump
-    .equ IN_LATCH, 395                      | (not used any more)
     .endif
+    .equ IN_TRAINER, 395                    | the trainer (T, src/trainer.s): nonzero while it is on (every build)
 
     .equ PKT_NONE, 0
     .equ PKT_JOY0, 1
@@ -72,11 +72,7 @@ old_vbl:
 old_ikbd:
     .long 0
 input_state:
-    .ifdef JOYPAD
-    .space 396
-    .else
-    .space 392
-    .endif
+    .space 396                              | (392 to 395: the JOYPAD bytes and the trainer)
 
     .text
 

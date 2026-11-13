@@ -17,39 +17,47 @@
     .equ ENT_CELLS, 66                      | 64 characters, DEL and END
 
     .text
-| text_planes: for each of the four planes a word, $FFFF when the text colour has that plane's bit. The text colour is the palette's brightest.
+| text_planes: for each of the four planes a word, $FFFF when the text colour has that plane's bit. The text is white (the author, 12 Nov 2026): the
+| colour is the first white slot ($777) of the package's palette (a building's people's palette is the package's, scene_palette), else slot 15. While a
+| portrait is up its own palette is on the hardware: portrait_open sets the planes from it (text_color_at) and text_color leaves them. (The hardware's
+| registers are not read: their unused bits read as noise.) Every palette set has white but Branch's outside set 8.
 text_color:
-    movem.l %d0-%d5/%a0-%a1, -(%sp)
+    move.l %a0, -(%sp)
+    .ifdef NPCS
+    move.w portrait_k(%pc), -(%sp)
+    bpl.s 1f                                | a portrait is up: its colour stays
+    .else
+    clr.w -(%sp)
+    .endif
     movea.l pkg_ptr+PKG_PALETTE(%pc), %a0
-    lea 2(%a0), %a0
-    moveq #1, %d1                           | the colour looked at
-    moveq #0, %d2                           | the brightest sum so far
-    moveq #1, %d3                           | and its number
+    addq.l #2, %a0
+    bsr.s text_color_at
+1:  addq.l #2, %sp
+    movea.l (%sp)+, %a0
+    rts
+
+| a0 = a palette's colour 1: the text colour from it (above). Keeps every register.
+text_color_at:
+    movem.l %d0-%d5/%a0-%a1, -(%sp)
+    moveq #1, %d3                           | the colour looked at
 1:  move.w (%a0)+, %d0
-    move.w %d0, %d4
-    andi.w #7, %d4
-    move.w %d0, %d5
-    lsr.w #4, %d5
-    andi.w #7, %d5
-    add.w %d5, %d4
-    lsr.w #8, %d0
-    andi.w #7, %d0
-    add.w %d0, %d4
-    cmp.w %d2, %d4
-    bls.s 2f
-    move.w %d4, %d2
-    move.w %d1, %d3
-2:  addq.w #1, %d1
-    cmpi.w #16, %d1
+    andi.w #0x777, %d0
+    cmpi.w #0x777, %d0
+    beq.s 6f
+    addq.w #1, %d3
+    cmpi.w #16, %d3
     bne.s 1b
-    lea text_planes(%pc), %a0
-    moveq #3, %d1
+    moveq #15, %d3
+6:  lea text_planes(%pc), %a0                | plane 0 first (it went plane 3 first: harmless while the colour was slot 15, wrong for any slot whose bits are not symmetrical)
+    moveq #0, %d1
 3:  moveq #0, %d0
     btst %d1, %d3
     beq.s 4f
     moveq #-1, %d0
 4:  move.w %d0, (%a0)+
-    dbra %d1, 3b
+    addq.w #1, %d1
+    cmpi.w #4, %d1
+    bne.s 3b
     movem.l (%sp)+, %d0-%d5/%a0-%a1
     rts
 

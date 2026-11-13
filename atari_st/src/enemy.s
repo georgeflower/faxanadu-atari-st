@@ -2780,6 +2780,9 @@ en_reduce_hp:
     lea hero_dead(%pc), %a0                 | (he is dying already: no second death)
     tst.w (%a0)
     bne.s 9f
+    lea input_state(%pc), %a0               | the trainer (T): nothing takes power off him
+    tst.b IN_TRAINER(%a0)
+    bne.s 9f
     lea hud_state(%pc), %a0
     lea hero_hpl(%pc), %a1
     moveq #0, %d1
