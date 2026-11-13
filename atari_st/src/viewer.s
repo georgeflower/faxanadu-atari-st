@@ -139,6 +139,11 @@ start:
     move.w #0x4A, -(%sp)
     trap #1                                 | Mshrink
     lea 12(%sp), %sp
+    move.w #0x5C00, -(%sp)                  | "\" on the stack
+    pea (%sp)
+    move.w #0x3B, -(%sp)
+    trap #1                                 | Dsetpath("\"): the data files are in the root of the disk; the desktop starts a program with its own folder
+    addq.l #8, %sp                          | as the current one (A:\AUTO when it is double clicked there; booting runs AUTO with the root)
 .ifdef JUNK
     movea.l %a3, %a0                        | JUNK (test only): TOS 1.02 does not clear the memory behind the image
     adda.l #0x100+image_size, %a0
