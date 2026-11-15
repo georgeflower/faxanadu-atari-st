@@ -200,13 +200,7 @@ def walk_step(h: Hero, joy: int, impassable: list[int], left_col: list[int] | No
         if joy & JOY_RIGHT:
             return try_move_right(h, joy, impassable, right_col)
         return try_move_left(h, joy, impassable, left_col)
-    if joy & (JOY_UP | JOY_DOWN) and h.x & 15 and h.flags & FLAG_CAN_CLIMB:       # up or down on a ladder when not on it: step to it
-        h.tick = (h.tick + 1) & 0xFF
-        if h.x & 15 < 8:
-            return try_move_left(h, joy, impassable, left_col)
-        return try_move_right(h, joy, impassable, right_col)
-    h.flags &= ~FLAG_MOVING & 0xFF
-    return None
+    return _ladder_step(h, joy, impassable, left_col, right_col)        # up or down on a ladder when not on it: step to it
 
 
 def _row_blocked(impassable: list[int], index: int) -> int:
@@ -391,9 +385,22 @@ def _jump_frame(h: Hero, impassable: list[int], screen_above: bool, above_row: l
 
 
 def air_step(h: Hero, joy: int, impassable: list[int], left_col: list[int] | None = None, right_col: list[int] | None = None) -> str | None:
-    """Player_CheckHandleJump while he is in the air: he keeps going the way he was moving, he cannot turn."""
+    """Player_CheckHandleJump while he is in the air: he keeps going the way he was moving, he cannot turn; not moving, up or down steps him to a
+    ladder at his head or feet as on the ground (so a straight jump under a ladder with Up held catches it)."""
     if h.flags & FLAG_MOVING:
         return try_move_right(h, joy, impassable, right_col) if h.flags & FLAG_RIGHT else try_move_left(h, joy, impassable, left_col)
+    return _ladder_step(h, joy, impassable, left_col, right_col)
+
+
+def _ladder_step(h: Hero, joy: int, impassable: list[int], left_col: list[int] | None, right_col: list[int] | None) -> str | None:
+    """`@_playerNotMoving` of Player_CheckHandleJump, on the ground and in the air alike: up or down held with a ladder at his head or feet and
+    not square on it, he steps to it (left when x & 15 is below 8); otherwise he is not moving."""
+    if joy & (JOY_UP | JOY_DOWN) and h.x & 15 and h.flags & FLAG_CAN_CLIMB:
+        h.tick = (h.tick + 1) & 0xFF
+        if h.x & 15 < 8:
+            return try_move_left(h, joy, impassable, left_col)
+        return try_move_right(h, joy, impassable, right_col)
+    h.flags &= ~FLAG_MOVING & 0xFF
     return None
 
 

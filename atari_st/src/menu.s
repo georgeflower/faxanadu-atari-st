@@ -367,10 +367,10 @@ menu_draw_list:
 | Tab (Select) opens the player menu, unless he is dead.
 menu_key:
     movem.l %d0/%a0, -(%sp)
-    lea input_state(%pc), %a0
-    btst #5, IN_PAD_NEW(%a0)
+    lea hero_dead(%pc), %a0                 | (input_state, early in .data, is out of a PC-relative reach from here in the JOYPAD and NPCS test builds)
+    btst #5, input_state+IN_PAD_NEW-hero_dead(%a0)
     beq.s 9f
-    move.w hero_dead(%pc), %d0
+    move.w (%a0), %d0
     bne.s 9f
     move.w cur_area(%pc), %d0               | GameLoop_CheckShowPlayerMenu: not on Eolis's first screen (the ROM's screen 0 of area 0, outside the walls)
     bne.s 1f

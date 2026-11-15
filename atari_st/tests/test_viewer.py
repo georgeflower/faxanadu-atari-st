@@ -160,7 +160,8 @@ class ViewerTests(unittest.TestCase):
         args = ["ALL=1", "AREA=0", "SCREEN=1", "HERO=16,144,0,255,0,0,1", "VIEWER_DEFS=--defsym WINGS=40"]
 
         def span(pokes, stick):
-            """(frames, dy, dx) from 1 VBL after the pokes to 40 VBLs after, the hero put at x 16 by the pokes."""
+            """(frames, dy, dx) from 1 VBL after the pokes to 40 VBLs after, the hero put at x 16 by the pokes (y 48: inside the camera's window at 40,
+            so the camera does not move and stop the game for its steps)."""
             first = self.run_scenario(args, pokes, 600, "shots_wings")
             last = self.run_scenario(args, pokes, 640, "shots_wings")
             return (last[1]("step_clock") - first[1]("step_clock"), last[1]("hero_y") - first[1]("hero_y"), last[1]("hero_x") - first[1]("hero_x"), last[1])
@@ -169,17 +170,17 @@ class ViewerTests(unittest.TestCase):
         self.assertGreater(frames, 20)
         self.assertEqual(dy, -frames, "up with A: a pixel a frame")
         self.assertEqual(word("hero_frame"), 3, "the pose in the air")
-        frames, dy, _, _ = span([(599, "y", 16), (599, "joy", 2), (599, "space", 1)], 2)
+        frames, dy, _, _ = span([(599, "y", 48), (599, "joy", 2), (599, "space", 1)], 2)
         self.assertIn(dy, (frames + frames // 2, frames + (frames + 1) // 2), "down with A: a pixel and a half a frame")
-        frames, dy, _, _ = span([(599, "y", 16), (599, "space", 1)], 0)
+        frames, dy, _, _ = span([(599, "y", 48), (599, "space", 1)], 0)
         self.assertEqual(dy, frames, "A alone: gliding down a pixel a frame")
-        frames, dy, dx, _ = span([(599, "y", 16), (599, "joy", 8), (599, "space", 1)], 8)
+        frames, dy, dx, _ = span([(599, "y", 48), (599, "joy", 8), (599, "space", 1)], 8)
         self.assertEqual(dy, frames)
         self.assertGreater(dx, 20, "walking right in the air")
-        frames, dy, dx, _ = span([(599, "y", 16), (599, "joy", 4), (599, "space", 1)], 4)
+        frames, dy, dx, _ = span([(599, "y", 48), (599, "joy", 4), (599, "space", 1)], 4)
         self.assertEqual(dy, frames)
         self.assertLess(dx, -10, "and left (the hero stands at x 16: he stops at the edge of the screen)")
-        _, dy, _, _ = span([(599, "y", 16)], 0)
+        _, dy, _, _ = span([(599, "y", 48)], 0)
         self.assertGreater(dy, 60, "without A he falls 8 pixels a frame")
 
     def test_a_door_shows_the_time_as_00_until_the_next_second_of_the_wing_boots(self) -> None:
@@ -612,8 +613,8 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual(late[-1], late[0], f"frames that took longer than 20 ms during the scroll: {late}")
 
     def test_the_window_follows_the_hero_up_the_screen(self) -> None:
-        """He starts low (camera 40) and the stick is pushed up (poked): once his y is below 56 the window moves to camera 0 (both screens
-        are redrawn) and the picture is the converter's, with him where he stands."""
+        """He starts low (camera 40) and the stick is pushed up (poked): once his top passes the window's first line (y under 40) the window moves
+        to camera 0 (in steps of 8 lines: tests/test_camera.py) and the picture is the converter's, with him where he stands."""
         import faxanadu_rom as fr
         import hatari_shot as hs
         import st_convert as sc
@@ -643,7 +644,7 @@ class ViewerTests(unittest.TestCase):
         ram = (work / "ram1.bin").read_bytes()
         word = lambda name: int.from_bytes(ram[base + sym[name]:base + sym[name] + 2], "big", signed=True)
         self.assertEqual(word("camera"), 0)
-        self.assertLess(word("hero_y"), 56)
+        self.assertLess(word("hero_y"), 40)
         hero = sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 0, word("hero_frame"), bool(word("hero_flip")))
         expected = sc.expected_screen(fr.Rom(ROM), 0, 1, 0, state=dict(hp=16, mp=0, experience=0, gold=0, seconds=0), hero=hero)
         rows = hs.decode_screen(ram, shown)

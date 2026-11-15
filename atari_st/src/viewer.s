@@ -81,9 +81,10 @@
     .equ EDGE_BYTES, 5
     .equ DOOR_BUILDING, 2                   | door kinds (build_assets.py): 0 same package, 1 other palette set, 2 into a building, 3 out to another area
     .equ HERO_Y_MAX, 192                    | and at the bottom ($C1 and more: the screen below; the demo stops at $C0)
-    .equ CAMERA_UP, 56                      | the camera is 0 while the hero's y is below this (he is at the top)
-    .equ CAMERA_DOWN, 120                   | and 40 while it is above this; in between it stays
+    .equ CAMERA_ENTER, 88                   | entering a screen (a door, a respawn): camera 0 while his y is below this, else 40
     .equ CAMERA_MAX, 40
+    .equ CAMERA_STEP, 8                     | a camera move goes 8 lines at a time (camera_follow)
+    .equ HERO_LINES, 32                     | his height: the camera moves when he would leave the window
     .equ VIDEO_BASE_HI, 0xFFFF8201
     .equ VIDEO_BASE_MID, 0xFFFF8203
 
@@ -721,12 +722,11 @@ hero_step:
     bra.s 54f
 56: tst.w 36(%a1)
     bpl.s 57f                               | wing boots on: he steers in the air as on the ground
-    move.w 18(%a1), %d1                     | in the air (jumping or falling) he cannot turn: he goes on the way he went
-    andi.w #5, %d1
-    beq.s 52f
-    moveq #0, %d0
+    move.w 18(%a1), %d1                     | in the air (jumping or falling) he cannot turn: he goes on the way he went; not moving, up or
+    andi.w #5, %d1                          | down steps him to a ladder at his head or feet as on the ground (Player_CheckHandleJump's
+    beq.s 52f                               | @_playerNotMoving, with no attack test): a straight jump under a ladder with Up catches it
     tst.w 14(%a1)
-    beq.s 52f
+    beq.s 53f                               | (d0 is still the pad)
     moveq #2, %d0
     tst.w 4(%a1)
     beq.s 52f
@@ -2918,31 +2918,6 @@ set_view:
     movea.l (%sp)+, %a0
     rts
 
-| The window of the playfield follows the hero up and down: camera 0 while he is high (y below CAMERA_UP), 40 while he is low (above
-| CAMERA_DOWN), unchanged in between. Only once he has moved (the start position decides the start camera). A change needs both screens
-| redrawn (a copy of the window each, six frames): the hero stands still for a moment.
-camera_follow:
-    movem.l %d0-%d1/%a0, -(%sp)
-    move.w hero_tick(%pc), %d0
-    cmpi.w #-1, %d0
-    beq.s 9f
-    move.w hero_y(%pc), %d0
-    move.w camera(%pc), %d1
-    cmpi.w #CAMERA_UP, %d0
-    bge.s 1f
-    moveq #0, %d0
-    bra.s 3f
-1:  cmpi.w #CAMERA_DOWN, %d0
-    ble.s 9f
-    moveq #CAMERA_MAX, %d0
-3:  cmp.w %d1, %d0
-    beq.s 9f
-    lea camera(%pc), %a0
-    move.w %d0, (%a0)
-    bsr.w refresh_screens
-    bsr.w refresh_screens
-9:  movem.l (%sp)+, %d0-%d1/%a0
-    rts
 
 
 | ---------------------------------------------------------------------------------------------------------------------------- doors
@@ -3112,7 +3087,7 @@ enter_screen:
     lea camera(%pc), %a0                    | the camera for where he stands (the start camera's rule)
     move.w hero_y(%pc), %d1
     moveq #0, %d0
-    cmpi.w #(CAMERA_UP+CAMERA_DOWN)/2, %d1
+    cmpi.w #CAMERA_ENTER, %d1
     blt.s 3f
     moveq #CAMERA_MAX, %d0
 3:  move.w %d0, (%a0)
@@ -3475,6 +3450,82 @@ early_base:                                 | the start of .text.early (tools/ch
     .endif
     .include "trainer.s"                    | (T; also in .text.early)
 
+    .section .text.early,"ax"               | the camera: the last of .text.early, nearest to the code it calls (the main code has no room left: AGENTS.md 5i)
+    .even
+| The window of the playfield moves only when the hero would leave it: to camera 0 when his top is above its first line (y < camera), to
+| 40 when his feet are below its last (y + 32 > camera + 168). Only once he has left his start position (the build's CAMERA is the start camera). The
+| move is smooth: CAMERA_STEP lines at a time, each step a screen made again at that camera (camera_frame, three frames), and the last
+| camera once more for the other screen; the game stands still meanwhile, as in a scroll (40 lines: 6 screens, 18 frames).
+camera_follow:
+    movem.l %d0-%d2/%a0, -(%sp)
+    lea camera_hold(%pc), %a0
+    tst.w (%a0)
+    beq.s 6f
+    move.w hero_x(%pc), %d0
+    cmpi.w #HERO_X, %d0
+    bne.s 7f
+    move.w hero_y(%pc), %d0
+    cmpi.w #HERO_Y, %d0
+    beq.s 9f
+7:  clr.w (%a0)
+6:  move.w hero_y(%pc), %d0
+    move.w camera(%pc), %d1
+    moveq #0, %d2
+    cmp.w %d1, %d0
+    blt.s 3f                                | his top above the window: camera 0
+    sub.w %d1, %d0
+    cmpi.w #WINDOW_LINES-HERO_LINES, %d0
+    ble.s 9f                                | his feet in the window: it stays
+    moveq #CAMERA_MAX, %d2
+3:  cmp.w %d1, %d2
+    beq.s 9f
+1:  move.w %d2, %d0
+    sub.w %d1, %d0                          | what is left to go (signed)
+    beq.s 4f
+    cmpi.w #CAMERA_STEP, %d0
+    ble.s 2f
+    moveq #CAMERA_STEP, %d0
+2:  cmpi.w #-CAMERA_STEP, %d0
+    bge.s 5f
+    moveq #-CAMERA_STEP, %d0
+5:  add.w %d0, %d1
+    lea camera(%pc), %a0
+    move.w %d1, (%a0)
+    bsr.s camera_frame
+    bra.s 1b
+4:  bsr.s camera_frame                      | the other screen at the end camera too
+9:  movem.l (%sp)+, %d0-%d2/%a0
+    rts
+
+| The screen a4 gets the window of the playfield at the camera and the sprites as they stand (the main loop's order, without the updates:
+| the spell, the people, the enemies, the hero), and is shown (three frames: a half of the window each, then the sprites). Keeps d1-d2.
+camera_frame:
+    movem.l %d1-%d2, -(%sp)
+    bsr.w set_view
+    moveq #0, %d0
+    bsr.w copy_window_half
+    bsr.w wait_vbl
+    moveq #1, %d0
+    bsr.w copy_window_half
+    bsr.w wait_vbl
+    .ifndef NO_PHYSICS
+    bsr.w draw_spell
+    .endif
+    .ifdef NPCS
+    bsr.w npc_draw
+    .endif
+    .ifndef NO_PHYSICS
+    move.w hero_dead(%pc), %d0
+    bne.s 1f
+    bsr.w draw_enemies
+1:
+    .endif
+    bsr.w draw_hero
+    bsr.w present_swap
+    movem.l (%sp)+, %d1-%d2
+    rts
+    .text
+
     .section .rodata
 hud_layout:
     .incbin "hud_layout.bin"
@@ -3645,6 +3696,8 @@ en_nm:
     .long 0                                 | enemies_load: the table of inverted masks (src/blit.s) that draw_enemies and hero_draw_part give en_blit
 keep_music:
     .word -1                                | load_package: the song of the package that was in use when the area stays the same, else -1
+camera_hold:
+    .word 1                                 | camera_follow waits until the hero has left his start position (a test's CAMERA may not suit it)
 hud_states:                                 | last in .data, next to the code: the start-up code and the menus reach these from either end of .text
     .incbin "hud_states.bin"
 title_table:                                | PLAYER_TITLE_EXP_NEEDED (15 words), PLAYER_TITLE_GOLD (15 words)

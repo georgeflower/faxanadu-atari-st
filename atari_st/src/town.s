@@ -10,8 +10,8 @@
 | The code is in .text.early (see link.ld); the tables and variables are in .data.
 |
 | The box. Where the NES has it (X = 10, W = 20, H = 8 tiles: 80 pixels in from the left of the 256-pixel playfield, 160 wide) it is group 7 here (x = 112, the
-| playfield starts 32 pixels in); it is 48 high (four lines of text, BOX_PITCH apart) and sits in the window near the top (y = 40) when the hero stands at y $40 or
-| more, else at the bottom (y = 144), as the ROM moves it out of his way (its Y = 6 or 16 tiles; at camera 40 line 16 of the playfield would be half under the HUD,
+| playfield starts 32 pixels in); it is 48 high (four lines of text, BOX_PITCH apart) and sits in the window near the top (y = 40) when the hero stands $40 or
+| more below the window's first line (y - camera; the ROM: y $40 or more), else at the bottom (y = 144), as the ROM moves it out of his way (its Y = 6 or 16 tiles; at camera 40 line 16 of the playfield would be half under the HUD,
 | so the window's own top and bottom are used); with a portrait it is always at the bottom (the ROM's Y = 16). The text area is 16 columns by 4 lines at the box's
 | x + 16, y + 4. A blinking arrow (down: more after a button, up: the end, a question mark: yes or no) is in the last column's place right of the text, in the bottom line.
 |
@@ -113,8 +113,9 @@ iscript_run:
     tst.b %d0
     bmi.s 2f
     move.w hero_y(%pc), %d2
+    sub.w camera(%pc), %d2                  | his place in the window: with the camera at 40 he can stand above the ROM's $40 (camera_follow)
     cmpi.w #0x40, %d2
-    bcs.s 2f
+    blt.s 2f
     move.w #TB_TOP, %d1
 2:  lea tb_vars(%pc), %a0
     move.w %d1, TB_Y(%a0)
