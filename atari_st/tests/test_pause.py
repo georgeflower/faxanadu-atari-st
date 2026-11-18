@@ -27,6 +27,8 @@ NODE = shutil.which("node") and (ROOT / "tools" / "refnes" / "node_modules").is_
 RETURN, ESC = 0x1C, 0x01
 IN_QUIT = "b:input_state+262"
 SND_MPTR, SND_SLEFT, SND_PEND, SND_PAUSED, SND_MUTE = 4, 20, 52, 56, 57
+SAFE = [(290, "w:hero_invinc", 0x200)]      # (Eolis screen 4: a Zozura reaches him before the pause, and a knock-back now takes him over the edge to the next screen, as in the
+                                            # ROM: the scroll would be under way at the Return; invincible, he is not knocked)
 
 
 def key(vbl: int, scan: int, up: int = 4) -> list:
@@ -44,7 +46,7 @@ class PauseTests(unittest.TestCase):
     def check_pause(self, args, name) -> None:
         """He walks right; a sound effect ($08) is asked for, then Return: everything stands (hero, enemies, the song's place), the song's channels are silent, the
         effect goes on; Return again: he walks on."""
-        pokes = [(590, "joy", tf.RIGHT), (597, f"w:snd_state+{SND_PEND}", 8)] + key(600, RETURN) + key(700, RETURN)
+        pokes = SAFE + [(590, "joy", tf.RIGHT), (597, f"w:snd_state+{SND_PEND}", 8)] + key(600, RETURN) + key(700, RETURN)
         run = tf.Run(args, pokes, [596, 606, 612, 660, 698, 730], name)
         walking, p1, p2, p3, p4, after = run.shots
         self.assertEqual(snd(walking, SND_PAUSED), 0)
@@ -72,7 +74,7 @@ class PauseTests(unittest.TestCase):
         self.check_pause(args, "shots_pause_joy")
 
     def test_esc_in_the_pause_opens_the_esc_menu_and_continue_goes_on_unpaused(self) -> None:
-        pokes = [(590, "joy", tf.RIGHT)] + key(600, RETURN) + [(640, "key", ESC << 8 | 1), (640, IN_QUIT, 255), (644, "key", ESC << 8)] + key(680, RETURN)
+        pokes = SAFE + [(590, "joy", tf.RIGHT)] + key(600, RETURN) + [(640, "key", ESC << 8 | 1), (640, IN_QUIT, 255), (644, "key", ESC << 8)] + key(680, RETURN)
         run = tf.Run(self.ARGS, pokes, [630, 670, 730], "shots_pause_esc")
         paused, menu, after = run.shots
         self.assertEqual(paused.raw("pause_on", 1)[0], 0xFF)

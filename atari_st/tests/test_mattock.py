@@ -87,8 +87,10 @@ class MattockTests(unittest.TestCase):
         self.last_log = log
         self.assertEqual(len(bases), len(captures), "every capture was made")
         out = []
+        self.last_rams, self.last_bases = [], bases                    # (the RAM of each capture and the screen address the shifter has then: tests/test_present.py)
         for i in range(len(captures)):
             ram = (work / f"ram{i + 1}.bin").read_bytes()
+            self.last_rams.append(ram)
 
             def word(name: str, ram=ram) -> int:
                 symbol, _, offset = name.partition("+")
@@ -121,7 +123,7 @@ class MattockTests(unittest.TestCase):
         plain = sc.expected_screen(self.rom, 1, 12, camera, state=state)
         hero_before = sc.hero_layer(self.rom, sc.Hero(*hero_at, 0, 255, 255, word0("hero_frame"), True), pal, plan)
         sprites = {(x, y): before[y][x] for y in range(sc.ST_TOP, 200) for x in range(32, 288)
-                   if before[y][x] != plain[y][x] and (x, y + camera) not in hero_before}
+                   if before[y][x] != plain[y][x] and (x, y - sc.SPRITE_DY + camera) not in hero_before}
         stage_plain = [sc.expected_screen(self.rom, 1, 12, camera, state=state, patch=patch) for patch in patches]
         cache: dict = {}
 
@@ -131,7 +133,7 @@ class MattockTests(unittest.TestCase):
                 for (x, y), c in (sprites.items() if keep else ()):
                     want[y][x] = c
                 for (x, line), slot in sc.hero_layer(self.rom, sc.Hero(*hero_at, 0, 255, 255, frame, True), pal, plan).items():
-                    want[line - camera][x] = slot
+                    want[line + sc.SPRITE_DY - camera][x] = slot
                 cache[(n, frame)] = want
             return cache[(n, frame)]
 
@@ -148,11 +150,11 @@ class MattockTests(unittest.TestCase):
             found = None
             for n in range(len(patches)):
                 want = wanted(n, frame)
-                if rows[sc.ST_TOP:] == want[sc.ST_TOP:]:               # (the playfield: the HUD's item box is emptied after the box has gone, tests/test_items.py)
+                if all(r[32:288] == w[32:288] for r, w in zip(rows, want)):     # (the playfield: the HUD's item box, in the right margin, is emptied after the box has gone, tests/test_items.py)
                     found = n
                     break
                 # a sprite pixel whose colour was that of the old wall is not in `sprites`: where the sprite lies over the cells that change, the old picture's pixel is allowed too
-                if all(rows[y][x] == want[y][x] or (n and box[0] <= x <= box[1] and box[2] <= y <= box[3] and 80 <= x < 96 and rows[y][x] == before[y][x]) for y in range(sc.ST_TOP, 200) for x in range(320)):
+                if all(rows[y][x] == want[y][x] or (n and box[0] <= x <= box[1] and box[2] <= y <= box[3] and 80 <= x < 96 and rows[y][x] == before[y][x]) for y in range(sc.ST_TOP, 200) for x in range(32, 288)):
                     found = n
                     break
             if found is None and all(rows[y][x] == first_rows[y][x] for x, y in boxed):

@@ -125,7 +125,7 @@ class EscMenuTests(unittest.TestCase):
         pokes = [(580, "w:hero_title", 3), (580, "w:hero_next", 3)] + esc(600) + key(620, UP_KEY) + key(640, RETURN)
         run = self.scene(pokes, [660], "shots_esc_save")
         (saved_box,) = run.shots
-        self.assertEqual([row[80:240] for row in saved_box.rows[107:125]], self.message_box("Game saved."), "the box that says so")
+        self.assertEqual([row[80:240] for row in saved_box.rows[91:109]], self.message_box("Game saved."), "the box that says so")
         data = ts.saved("shots_esc_save")
         self.assertIsNotNone(data, "SAVE.SAV is on the drive")
         self.assertEqual(data, saved_box.raw("pw_text", len(data) - 2) + b"\r\n", "the text pw_encode made from the state")
@@ -144,7 +144,7 @@ class EscMenuTests(unittest.TestCase):
     def test_a_write_protected_drive_says_so_and_writes_nothing(self) -> None:
         run = self.scene(esc(600) + key(620, UP_KEY) + key(640, RETURN), [660], "shots_esc_protected", extra=["--protect-hd", "on"])
         (shot,) = run.shots
-        self.assertEqual([row[80:240] for row in shot.rows[107:125]], self.message_box("Could not save."))
+        self.assertEqual([row[80:240] for row in shot.rows[91:109]], self.message_box("Could not save."))
         self.assertEqual(shot.at("sv_status"), -1)
         self.assertIsNone(ts.saved("shots_esc_protected"))
 

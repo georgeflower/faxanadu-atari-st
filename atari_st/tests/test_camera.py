@@ -1,6 +1,6 @@
-"""The camera (`camera_follow` in src/viewer.s, AGENTS.md 5d): the window of 168 lines moves only when the hero would leave it (to 0 when
-his top is above its first line, to 40 when his feet are below its last), and then 8 lines at a time, each step a whole picture, while the
-game stands still. Entering a screen picks the camera from his height.
+"""The camera (`camera_follow` in src/viewer.s, AGENTS.md 5d): the window of 200 lines (the HUD is in the side margins) moves only when the
+hero would leave it (to 0 when his top is above its first line, to 8 when his feet are below its last), in one step of 8 lines, a whole
+picture, while the game stands still. Entering a screen picks the camera from his height.
 
 Needs the ROM, Hatari, the m68k binutils and a TOS image (TOS or TOS_PAL).
 """
@@ -107,7 +107,7 @@ class CameraTests(unittest.TestCase):
             for y in range(200):
                 for x in range(320):
                     if picture[y][x] != background[y][x]:
-                        line, col = y + camera, x - sc.ST_LEFT
+                        line, col = y - sc.SPRITE_DY + camera, x - sc.ST_LEFT     # (the NES's line: the playfield's + 32)
                         if 0 <= col < 256 and 32 <= line < 240 and halves & (1 << (((col - hero[0]) >> 3) & 1)) and opaque[line - 32][col]:
                             picture[y][x] = background[y][x]
         return picture
@@ -123,70 +123,71 @@ class CameraTests(unittest.TestCase):
             runs.insert(0, start)
         self.assertEqual(runs, path, f"cameras shown (VBL, camera, the camera variable, y): {seen}")
         first = next(i for i, s in enumerate(seen) if s[1] == path[1])
-        last = max(i for i, s in enumerate(seen) if s[1] == path[-2])
+        last = max((i for i, s in enumerate(seen) if s[1] == path[-2]), default=first)
         self.assertTrue(all(s[1] is not None for s in seen[first:last + 1]), f"a picture between the steps is not a whole camera's: {seen}")
         for c in path[1:-1]:
             self.assertEqual(sum(1 for s in seen if s[1] == c), 3, f"camera {c} not on show for three frames: {seen}")
 
     def test_a_jump_onto_a_higher_platform_keeps_the_camera(self) -> None:
-        """Trunk screen 37: he stands on a ledge at 120,80 (camera 40), jumps up onto the one above (y 48) and walks on along it to the right (the
-        author's report, Fax085: the old rule moved the window to camera 0 at his first step there, y under 56). His top never leaves the window
-        (y 40 and more): the camera stays 40 in every frame, and the picture at the end is the converter's."""
+        """Trunk screen 37: he stands on a ledge at 120,80 (camera 8), jumps up onto the one above (y 48) and walks on along it to the right (the
+        author's report, Fax085: the old rule moved the window at his first step there). His top never leaves the window (y 8 and more): the
+        camera stays 8 in every frame, and the picture at the end is the converter's."""
         captures = list(range(596, 680, 4)) + [700]
         pokes = [(599, KEYS + SPACE, 1), (599, JOY, RIGHT), (640, KEYS + SPACE, 0), (655, JOY, 0)]
-        base, sym, shots = self.run_scene(["AREA=1", "SCREEN=37", "CAMERA=40", "HERO=120,80,0,255,0,0,1", "VIEWER_DEFS=--defsym NO_ENEMIES=1"],
+        base, sym, shots = self.run_scene(["AREA=1", "SCREEN=37", "CAMERA=8", "HERO=120,80,0,255,0,0,1", "VIEWER_DEFS=--defsym NO_ENEMIES=1"],
                                           pokes, captures, "shots_cam_jump")
         ys, xs = [], []
         for v, ram, _ in shots:
             word = self.reader(ram, base, sym)
-            self.assertEqual(word("camera"), 40, f"VBL {v}")
+            self.assertEqual(word("camera"), 8, f"VBL {v}")
             ys.append(word("hero_y"))
             xs.append(word("hero_x"))
         self.assertEqual(ys[0], 80, "standing on the lower ledge first")
-        self.assertGreaterEqual(min(ys), 40, ys)
+        self.assertGreaterEqual(min(ys), 8, ys)
         self.assertEqual(ys[-1], 48, f"on the higher ledge: {ys}")
         landed = ys.index(48)
         self.assertGreater(xs[-1], xs[landed] + 8, f"and walked on along it: {xs}")
         late = [self.reader(ram, base, sym)("late_frames", 2) for _, ram, _ in shots]
         self.assertEqual(late[-1], late[0], f"late frames: {late}")
-        seen = self.cameras_shown(1, 37, base, sym, shots[-1:], (40,))
-        self.assertEqual(seen[0][1], 40, "the picture at the end")
+        seen = self.cameras_shown(1, 37, base, sym, shots[-1:], (8,))
+        self.assertEqual(seen[0][1], 8, "the picture at the end")
 
-    def test_a_flight_up_with_the_wing_boots_moves_the_camera_smoothly(self) -> None:
-        """Eolis screen 1, the wing boots on: Up and A held from the floor (y 144, camera 40) fly him up a pixel a frame. When his top passes the
-        window's first line (y 39) the game stands still and the window moves to camera 0 in five steps of 8 lines, each picture whole (the
-        converter's at that camera with him where he is); then he flies on. No frame is late."""
-        captures = list(range(690, 750))
+    def test_a_flight_up_with_the_wing_boots_moves_the_camera_in_one_step(self) -> None:
+        """Eolis screen 1, the wing boots on: Up and A held from the floor (y 144, camera 8) fly him up a pixel a frame. When his top passes the
+        window's first line (y 7) the game stands still and the window moves to camera 0 in one step of 8 lines, the picture whole (the
+        converter's at that camera with him where he is); then he flies on. Every picture is a whole camera's. No frame is late."""
+        captures = list(range(725, 760))
         pokes = [(599, KEYS + SPACE, 1), (599, JOY, UP)]
-        base, sym, shots = self.run_scene(["AREA=0", "SCREEN=1", "CAMERA=40", "HERO=144,144,0,255,0,0,1",
+        base, sym, shots = self.run_scene(["AREA=0", "SCREEN=1", "CAMERA=8", "HERO=144,144,0,255,0,0,1",
                                            "VIEWER_DEFS=--defsym NO_ENEMIES=1 --defsym WINGS=90"], pokes, captures, "shots_cam_fly")
-        seen = self.cameras_shown(0, 1, base, sym, shots, (40, 32, 24, 16, 8, 0))
-        self.assertTrue(seen[-1][2] == 0 and seen[-1][3] < 30, f"he flies on afterwards: {seen}")
-        self.assert_smooth(seen, 40, 0)
-        moving = [s[3] for s in seen if s[1] in (32, 24, 16, 8)]
-        self.assertEqual(set(moving), {39}, f"he stands still while the window moves: {seen}")
+        seen = self.cameras_shown(0, 1, base, sym, shots, (8, 0))
+        self.assertTrue(seen[-1][2] == 0 and seen[-1][3] < 5, f"he flies on afterwards: {seen}")
+        self.assert_smooth(seen, 8, 0)
+        first = next(s for s in seen if s[1] == 0)
+        self.assertEqual(first[3], 7, f"the window moves when his top passes its first line: {seen}")
         late = [self.reader(ram, base, sym)("late_frames", 2) for _, ram, _ in shots]
         self.assertEqual(late[-1], late[0], f"late frames: {late}")
 
-    def test_walking_down_moves_the_camera_smoothly(self) -> None:
+    def test_walking_down_moves_the_camera_to_8(self) -> None:
         """The demo movement (NO_PHYSICS, 2 pixels a frame) in Eolis screen 1 from y 100 with camera 0, the stick down: when his feet pass the
-        window's last line (y 137 and more) the window goes to camera 40 in steps of 8, each picture whole."""
-        captures = list(range(600, 660))
-        pokes = [(599, JOY, DOWN), (630, JOY, 0)]
+        window's last line (y 169 and more) the window goes to camera 8 (lines 8 to 207, the last of the playfield), the picture whole; it
+        goes no further however low he goes."""
+        captures = list(range(620, 680))
+        pokes = [(599, JOY, DOWN), (650, JOY, 0)]
         base, sym, shots = self.run_scene(["AREA=0", "SCREEN=1", "CAMERA=0", "HERO=144,100,0,255,0,0,1", "VIEWER_DEFS=--defsym NO_PHYSICS=1"],
                                           pokes, captures, "shots_cam_down")
-        seen = self.cameras_shown(0, 1, base, sym, shots, (0, 8, 16, 24, 32, 40))
-        self.assert_smooth(seen, 0, 40)
-        moving = {s[3] for s in seen if s[1] in (8, 16, 24, 32)}
-        self.assertEqual(len(moving), 1, seen)
-        self.assertGreater(moving.pop(), 136)
+        seen = self.cameras_shown(0, 1, base, sym, shots, (0, 8))
+        self.assert_smooth(seen, 0, 8)
+        first = next(s for s in seen if s[1] == 8)
+        self.assertGreater(first[3], 168, seen)
         word = self.reader(shots[-1][1], base, sym)
-        self.assertEqual(word("camera"), 40)
+        self.assertEqual(word("camera"), 8)
+        self.assertGreater(word("hero_y"), 176, "he went on down, the camera stayed at 8")
 
     def test_a_door_to_a_high_place_picks_camera_0(self) -> None:
-        """Entering a screen picks the camera from his height (camera 0 when his y is under 88, else 40), as before. Trunk: the door of
+        """Entering a screen picks the camera from his height (camera 0 when his feet are in lines 0-199, y under 169, else 8). Trunk: the door of
         screen 41 (block 146, no key) leads to screen 40 with him at x 208, y 48 (the ROM's door record): Up (poked) there gives camera 0, the
-        picture the converter's. (The castle door of Eolis, to y 144 and camera 40, is in test_viewer.py.)"""
+        picture the converter's; it started at camera 8. (The castle door of Eolis, to y 144 and camera 0, is in test_viewer.py.)"""
         import faxanadu_rom as fr
         import faxanadu_maps as fm
 
@@ -195,10 +196,10 @@ class CameraTests(unittest.TestCase):
         door = next(d for d in fm.doors(rom, a) if d.screen == 41)
         self.assertEqual((door.block, door.start, fm.door_destination(rom, a, door)[:3]), (146, 0x3D, (40, a.palette_index, 0)))
         pokes = [(599, JOY, UP), (602, JOY, 0)]
-        base, sym, shots = self.run_scene(["ALL=1", "AREA=1", "SCREEN=41", "CAMERA=40", "HERO=32,144,0,255,0,0,1", "VIEWER_DEFS=--defsym NO_ENEMIES=1"],
+        base, sym, shots = self.run_scene(["ALL=1", "AREA=1", "SCREEN=41", "CAMERA=8", "HERO=32,144,0,255,0,0,1", "VIEWER_DEFS=--defsym NO_ENEMIES=1"],
                                           pokes, [590, 720], "shots_cam_door")
         word = self.reader(shots[0][1], base, sym)
-        self.assertEqual((word("cur_screen"), word("hero_y"), word("camera")), (41, 144, 40))
+        self.assertEqual((word("cur_screen"), word("hero_y"), word("camera")), (41, 144, 8))
         word = self.reader(shots[-1][1], base, sym)
         self.assertEqual((word("cur_screen"), word("hero_x"), word("hero_y"), word("camera")), (40, 208, 48, 0))
         seen = self.cameras_shown(1, 40, base, sym, shots[-1:], (0,))

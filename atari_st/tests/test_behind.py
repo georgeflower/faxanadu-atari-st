@@ -424,7 +424,7 @@ class BehindOnTheStTests(unittest.TestCase):
             v = behind.halves(rom, a, 4, x, y)
             want_halves.append(v)
             for (px, line), c in behind.drop_behind(layer, x, v, opaque).items():
-                yy = line - camera
+                yy = line + sc.SPRITE_DY - camera
                 if sc.ST_TOP <= yy < 200 and sc.ST_LEFT <= px + sc.ST_LEFT < sc.ST_LEFT + 256:
                     expected[yy][px + sc.ST_LEFT] = plan.slot[c & 0x3F]
         bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
@@ -433,7 +433,7 @@ class BehindOnTheStTests(unittest.TestCase):
         plain = sc.expected_screen(rom, 0, 4, camera, state=dict(hp=hud[0], mp=hud[1], experience=int.from_bytes(hud[2:4], "big"), gold=int.from_bytes(hud[4:8], "big"), seconds=hud[8]))
         for x, y, layer in pictures:
             for (px, line), c in layer.items():
-                yy = line - camera
+                yy = line + sc.SPRITE_DY - camera
                 if sc.ST_TOP <= yy < 200 and sc.ST_LEFT <= px + sc.ST_LEFT < sc.ST_LEFT + 256:
                     plain[yy][px + sc.ST_LEFT] = plan.slot[c & 0x3F]
         self.assertGreater(sum(rows[y][x] != plain[y][x] for y in range(200) for x in range(320)), least, "the pictures would be the same without the rule")
@@ -518,10 +518,10 @@ class BehindOnTheStTests(unittest.TestCase):
                 for i, (lx, ly, layer) in enumerate(layers):
                     for target, picture in ((expected, behind.drop_behind(layer, lx, behind.halves(rom, a, 4, lx, ly), opaque)), (plain, layer)):
                         for (px, line), c in picture.items():
-                            yy = line - camera
+                            yy = line + sc.SPRITE_DY - camera
                             if sc.ST_TOP <= yy < 200 and sc.ST_LEFT <= px + sc.ST_LEFT < sc.ST_LEFT + 256:
                                 target[yy][px + sc.ST_LEFT] = plan.slot[c & 0x3F]
-                hx, hy = hero_x + sc.ST_LEFT, word("hero_y") + 32 - camera                # (his own picture is tested elsewhere: the box round him is left out)
+                hx, hy = hero_x + sc.ST_LEFT, word("hero_y") + 32 + sc.SPRITE_DY - camera                # (his own picture is tested elsewhere: the box round him is left out)
                 bad = [(px, py) for py in range(200) for px in range(320) if rows[py][px] != expected[py][px] and not (hx - 8 <= px < hx + 24 and hy - 8 <= py < hy + 40)]
                 if not bad:
                     break

@@ -106,7 +106,7 @@ en_blit:
     cmpi.w #288, %d0
     bge.w 98f
     lea 8(%a1), %a2
-    cmpi.w #HUD_LINES, %d1
+    cmpi.w #WIN_TOP, %d1
     blt.w en_clip
     cmpi.w #SCREEN_LINES-8, %d1
     bgt.w en_clip
@@ -143,13 +143,13 @@ en_clip:                                    | a tile that is cut: n lines from t
     move.w %d0, -(%sp)                      | (every register but d0-d3 holds something)
     moveq #8, %d3
     moveq #0, %d2
-    cmpi.w #HUD_LINES, %d1
+    cmpi.w #WIN_TOP, %d1
     bge.s 1f
-    move.w #HUD_LINES, %d2
+    move.w #WIN_TOP, %d2
     sub.w %d1, %d2                          | lines above the window
     sub.w %d2, %d3
     ble.w 97f
-    move.w #HUD_LINES, %d1
+    move.w #WIN_TOP, %d1
 1:  move.w #SCREEN_LINES, %d0
     sub.w %d1, %d0                          | lines left to the bottom of the screen
     ble.w 97f
@@ -216,7 +216,7 @@ bh_tile:
     blt.w en_blit                           | (nothing of these is drawn)
     cmpi.w #288, %d0
     bge.w en_blit
-    cmpi.w #HUD_LINES-7, %d1
+    cmpi.w #WIN_TOP-7, %d1
     blt.w en_blit
     cmpi.w #SCREEN_LINES, %d1
     bge.w en_blit
@@ -224,7 +224,7 @@ bh_tile:
     subi.w #LEFT_BYTES*2, %d3               | the tile's place in the world: x
     move.w %d1, %d4
     add.w %d2, %d4
-    subi.w #HUD_LINES, %d4                  | and its first line
+    subi.w #WIN_TOP, %d4                  | and its first line
     cmp.w 2(%a5), %d4
     bne.s 1f
     move.w %d3, %d5
@@ -327,7 +327,7 @@ bh_tile:
 | 40 bytes on the stack, drawn by en_blit. d6 = -1 afterwards.
 bh_draw:
     moveq #-1, %d6
-    cmpi.w #HUD_LINES, %d1
+    cmpi.w #WIN_TOP, %d1
     blt.s bh_clipped
     cmpi.w #SCREEN_LINES-8, %d1
     bgt.s bh_clipped
@@ -426,6 +426,77 @@ en_aligned_h:                               | (a loop: an aligned tile is one in
     movep.l %d0, 0(%a0)
 2:  lea STRIDE(%a0), %a0
     dbra %d7, 1b
+    rts
+
+    .section .text.early,"ax"
+    .even
+| The enemy images the package leaves to the program (tools/enemy_data.py, derive_images: an image that is another one mirrored is zeros in the file). In: a1 =
+| the pointer to the part PKG_ENEMY_IMAGES (in pkg_ptr), which is moved to the images. The part: a word n, a word the offset of the first image to make, n words (a kept image's offset + how it is mirrored: bit 0 left-right, bit 1
+| upside down), then the images; the n images from that offset on are made in order. Called by pkg_attach. Keeps every register. It is in .text.early:
+| in .text.late it pushed .rodata out of the reach of .text (.text.late lies between them), and .herodata is out of pkg_attach's reach.
+flips_expand:
+    movem.l %d0-%d7/%a0-%a6, -(%sp)
+    movea.l %a1, %a4                        | (the pointer)
+    movea.l (%a1), %a0
+    lea -256(%sp), %sp
+    movea.l %sp, %a3                        | the 256 bytes with their bits reversed
+    moveq #0, %d0
+70: move.b %d0, %d1
+    moveq #7, %d2
+71: lsr.b #1, %d1
+    roxl.b #1, %d3
+    dbra %d2, 71b
+    move.b %d3, (%a3,%d0.w)
+    addq.w #1, %d0
+    cmpi.w #256, %d0
+    bne.s 70b
+    move.w (%a0)+, %d7                      | n
+    moveq #0, %d6
+    move.w (%a0)+, %d6                      | where the first one to make goes
+    movea.l %a0, %a1                        | the recipe
+    moveq #0, %d0
+    move.w %d7, %d0
+    add.l %d0, %d0
+    adda.l %d0, %a0                         | the images
+    lea (%a0,%d6.l), %a2
+    subq.w #1, %d7
+    bmi.s 79f
+72: moveq #0, %d0
+    move.w (%a1)+, %d0
+    moveq #3, %d5
+    and.w %d0, %d5                          | how
+    sub.w %d5, %d0
+    lea (%a0,%d0.l), %a5                    | the kept image
+    moveq #40-1, %d1
+    btst #0, %d5
+    beq.s 74f
+73: moveq #0, %d2                           | left-right: every byte (mask and planes) with its bits reversed
+    move.b (%a5)+, %d2
+    move.b (%a3,%d2.w), (%a2)+
+    dbra %d1, 73b
+    bra.s 75f
+74: move.b (%a5)+, (%a2)+
+    dbra %d1, 74b
+75: btst #1, %d5
+    beq.s 78f
+    lea -40(%a2), %a5                       | upside down: the 8 mask bytes and the 8 longs of the lines in reverse order
+    lea 8(%a5), %a6
+    moveq #3, %d1
+76: move.b (%a5), %d2
+    move.b -(%a6), (%a5)+
+    move.b %d2, (%a6)
+    dbra %d1, 76b
+    lea -32(%a2), %a5
+    movea.l %a2, %a6
+    moveq #3, %d1
+77: move.l (%a5), %d2
+    move.l -(%a6), (%a5)+
+    move.l %d2, (%a6)
+    dbra %d1, 77b
+78: dbra %d7, 72b
+79: move.l %a0, (%a4)                       | the images
+    lea 256(%sp), %sp
+    movem.l (%sp)+, %d0-%d7/%a0-%a6
     rts
 
     .section .herodata

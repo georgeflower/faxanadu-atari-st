@@ -19,8 +19,8 @@ SCENE = ["ALL=1", "AREA=1", "SCREEN=16", "HERO=208,144,0,255,0,0,1", "WORLD=1", 
 
 
 def margin_pixels(shot: "tf.Shot") -> int:
-    """Pixels that are not black in the margin left of the HUD (x 0 to 31, lines 8 to 27)."""
-    return sum(1 for y in range(8, 28) for x in range(32) if shot.rows[y][x])
+    """Pixels that are not black in the left margin under the HUD (x 0 to 31, lines 176 to 195)."""
+    return sum(1 for y in range(176, 196) for x in range(32) if shot.rows[y][x])
 
 
 @unittest.skipUnless(tf.NEEDS, "needs the ROM, cc65, hatari, the m68k binutils and a TOS image")
@@ -33,7 +33,7 @@ class TrainerTests(unittest.TestCase):
         self.assertEqual(on.at("hero_dead"), 0, "the Snowman did not kill him")
         self.assertEqual(on.raw("hud_state", 1)[0], 3, "his power is still 3")
         self.assertGreater(margin_pixels(on), 40, "A1 and S16 are written left of the HUD")
-        slot = next(on.rows[y][x] for y in range(8, 28) for x in range(32) if on.rows[y][x])
+        slot = next(on.rows[y][x] for y in range(176, 196) for x in range(32) if on.rows[y][x])
         self.assertEqual(on.palette[slot] & 0x777, 0x777, "in white")
         self.assertEqual(margin_pixels(off), 0, "T again takes the words away")
         self.assertEqual(off.raw("input_state", 396)[395], 0, "and the trainer is off")

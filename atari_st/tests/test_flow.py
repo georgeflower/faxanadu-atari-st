@@ -159,7 +159,8 @@ class FlowTests(unittest.TestCase):
         state = dict(hp=80, mp=80, experience=2200, gold=800, seconds=0)
         expected = sc.expected_screen(self.rom, 4, 1, inside.at("camera"), palette_index=18, tiles_index=6, state=state, hero=sc.Hero(224, 144, 0, 255, 255, 0, False))
         bad = [(x, y) for y in range(200) for x in range(320) if inside.rows[y][x] != expected[y][x]]
-        self.assertTrue(bad and all(66 <= x < 114 and 118 <= y < 156 for x, y in bad), f"only the Guru differs from the plain room: {bad[:5]}")
+        top = 126 - inside.at("camera")                                  # (the Guru's lines 126 to 163 of the playfield)
+        self.assertTrue(bad and all(66 <= x < 114 and top <= y < top + 38 for x, y in bad), f"only the Guru differs from the plain room: {bad[:5]}")
         self.assertEqual((outside.at("cur_area"), outside.at("cur_pal"), outside.at("cur_screen")), (2, 10, 6), diag(outside))
         self.assertEqual((outside.at("hero_x"), outside.at("hero_y"), outside.at("hero_flip"), outside.at("cur_music")), (144, 128, 1, 5))
 
@@ -299,7 +300,9 @@ class FlowTests(unittest.TestCase):
 
     def test_scrolling_out_of_a_boss_room_brings_the_areas_song_back(self) -> None:
         pokes = [(330, "joy", LEFT), (400, "joy", 0)]
-        run = Run([a if not a.startswith("HERO=") else "HERO=32,48,0,255,0,0,1" for a in self.BOSS], pokes, [320, 700], "shots_flow_boss_out")
+        # (captured at 500: soon after, an enemy of screen 20 hits him from the left and the knock-back takes him over the side back into the boss
+        # room, as the ROM's does; before tests/test_knockedge.py his x wrapped to 0 and he stayed)
+        run = Run([a if not a.startswith("HERO=") else "HERO=32,48,0,255,0,0,1" for a in self.BOSS], pokes, [320, 500], "shots_flow_boss_out")
         inside, outside = run.shots
         self.assertEqual((inside.at("cur_screen"), inside.at("cur_music")), (21, 10))
         self.assertEqual((outside.at("cur_screen"), outside.at("cur_music"), outside.at("flow_event")), (20, 3, 0xFF), diag(outside))
@@ -354,7 +357,7 @@ class FlowTests(unittest.TestCase):
         120 frames, then the King's room (area 4, building 0: palette set 17, song 13, hero at x 208, y 144 facing left, people placed by id $44) and the hero walks left
         by himself (EndGame_MovePlayerTowardKing) until x < $44, where Up starts the King's script: message $A4 and FINISH_GAME, which plays the outro and shows the title."""
         pokes = [(v, "key", 0x3901) for v in range(1100, 4000, 40)] + [(v + 6, "key", 0x3900) for v in range(1100, 4000, 40)]       # (Space is the A button)
-        caps = [230, 260, 400, 560, 1000, 2500, 5400]
+        caps = [260, 290, 430, 590, 1030, 2530, 5430]           # (30 VBLs later than they were: the start takes longer now, mostly the making of the mirrored enemy images at the package's load, flips_expand, about 10 VBLs in area 7)
         run = Run(["ALL=1", "AREA=7", "SCREEN=0", "HERO=100,144,0,255,0,0,1", "HUD=80,80,0,0,0",
                    "VIEWER_DEFS=--defsym NEWGAME=1 --defsym NPCS=1 --defsym MENU=1 --defsym NO_TITLE=1 --defsym NO_ENEMIES=1"],
                   pokes, caps, "shots_flow_ending")

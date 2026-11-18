@@ -21,6 +21,8 @@ def ft_message(rom, number):
 
     return ft.message(rom, number)
 TOS = Path(os.environ.get("TOS") or os.environ.get("TOS_PAL") or "")
+FIGHT_INVINCIBLE = 0x100   # Eolis screen 4's fights: the hero faces left at x 200 and the first Zozura walks up from the left; a touch knocks him to the right, and since
+                           # knock-backs take him over the edge (the next screen, as in the ROM) he is made invincible for the first 256 frames, so that the blows land where he stands
 START_DELAY = 20           # the VBLs the program takes to unpack the hero's data and make his images before its frame counter starts (hero.s): the scenes' times are from the start of the game
 
 
@@ -48,28 +50,42 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
 
     def test_eolis_screen_1_at_the_bottom_of_the_playfield(self) -> None:
-        self.check(0, 1, 40)
+        self.check(0, 1, 8)
 
     def test_eolis_screen_8_from_the_top(self) -> None:
         self.check(0, 8, 0)
 
     def test_a_trunk_screen_part_way_down(self) -> None:
-        self.check(1, 5, 17)
+        self.check(1, 5, 5)
 
     def test_the_hero_in_other_equipment_and_at_every_pixel_phase_of_a_group(self) -> None:
         for x in (100, 101, 109, 117, 123):
             with self.subTest(x=x):
-                self.check(0, 1, 40, f"{x},144,2,2,3,1,0")
+                self.check(0, 1, 8, f"{x},144,2,2,3,1,0")
 
-    def test_the_hero_is_cut_under_the_hud_and_at_the_bottom_of_the_screen(self) -> None:
-        self.check(0, 1, 40, "144,20,1,1,1,0,1")
+    def test_the_hero_is_cut_at_the_top_and_at_the_bottom_of_the_screen(self) -> None:
+        self.check(0, 1, 8, "144,4,1,1,1,0,1")
         self.check(0, 1, 0, "144,170,3,3,3,0,0")
+
+    def test_the_hero_at_the_right_edge_leaves_the_hud_in_the_right_margin_whole(self) -> None:
+        """His sword reaches over the playfield's right edge into the margin, where the HUD's item box, experience and gold are: what he drew
+        there is put back from the clean copy of the margin (clear_margins), so the picture is the converter's (the hero cut at x 288, the HUD whole)."""
+        self.check(0, 1, 0, "239,144,2,2,3,0,1", hud="35,13,4242,1234567,7")        # (his tiles reach x 294)
+        self.check(0, 1, 8, "236,170,1,1,1,1,1", hud="80,80,65535,16777215,99")
 
     def test_the_hud_is_drawn_from_its_state_and_updates_clear_what_was_there(self) -> None:
         states = ["16,0,0,0,0", "80,80,65535,16777215,99", "35,13,4242,1234567,7", "7,1,10000,100000,10", "0,79,9,655360,60", "81,200,1,1,5"]
         for first, second in zip(states, states[1:] + states[:1]):
             with self.subTest(first=first, second=second):
-                self.check(0, 1, 40, hud=first, hud2=second)
+                self.check(0, 1, 0, hud=first, hud2=second)
+
+    def test_the_hud_shows_experience_and_gold_in_four_tiles_rounded_down(self) -> None:
+        """hud_short (src/hud.s) against st_convert.short_number at the edges: 0, 999, 1,000, 1,099, 9,999, 10,000, 65,535 (experience is a word) and 99,999,
+        999,999, 1,000,000, 9,999,999, 16,777,215 (gold), each state shown after another so that every tile changes."""
+        states = ["16,0,0,99999,0", "16,0,999,999999,0", "16,0,1000,1000000,0", "16,0,1099,9999999,0", "16,0,9999,16777215,0", "16,0,10000,1099,0", "16,0,65535,0,0"]
+        for first, second in zip(states, states[1:] + states[:1]):
+            with self.subTest(first=first, second=second):
+                self.check(0, 1, 0, hud=first, hud2=second)
 
     def test_the_hero_walks_when_the_stick_is_pushed_and_leaves_no_trail(self) -> None:
         """Hold the stick right (poked into the program's input state through Hatari's debugger) from VBL 600 to 640, let go, and
@@ -110,7 +126,7 @@ class ViewerTests(unittest.TestCase):
             reached.append((h.x, h.frac))
         self.assertIn((x, frac), reached[36:44], f"x {x} frac {frac}: not what the ROM's walking gives after about 40 frames")
         self.assertEqual(word("hero_flip"), 1)
-        expected = sc.expected_screen(fr.Rom(ROM), 0, 1, 40, hero=sc.Hero(x, 144, 0, 255, 0, 0, True))
+        expected = sc.expected_screen(fr.Rom(ROM), 0, 1, 0, hero=sc.Hero(x, 144, 0, 255, 0, 0, True))
         bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
 
@@ -309,7 +325,7 @@ class ViewerTests(unittest.TestCase):
         """Player_DrawDeathAnimation takes pixels from the pattern tiles $00-$07 only. Armour 1 without a shield stands on the tiles 0, 1, 9, 10, 11, 12, 2, 3
         (jsnes, tools/refnes/deathprobe.mjs with armour 1 and no shield: tiles 9 to 12 stay whole to the end), so the pieces of the body that use 9 to 12
         stay as they are while the others go. The picture a few passes before the fade is the background with the body drawn from tiles that have lost the
-        pixels the ROM's rule says for the phase and the tile count the program is at (death_state, as it was when the picture was drawn)."""
+        pixels the ROM's rule says for the phase and the tile count the program is at (death_state: the picture on show at the capture is the pass's own)."""
         import faxanadu_rom as fr
         import faxanadu_sprites as fs
         import hatari_shot as hs
@@ -330,7 +346,7 @@ class ViewerTests(unittest.TestCase):
             ram, word, log = self.run_scenario(args, hit, 664, "shots_death")
             phase, count = word("death_state+2"), word("death_state+4")
             self.assertTrue(0 < phase < 8 and word("death_state") < 80 and count >= 2, f"dissolving, before the fade (phase {phase}, tiles {count}, pass {word('death_state')})")
-            count -= 1                      # (the capture is after the pass's step: the picture is of the state before it)
+            # (the screen on show at the capture is the one the pass just drew, with death_state as it is now: present_swap writes the screen address before the wait)
             rom = fr.Rom(ROM)
             import faxanadu_maps as fm
             palette = fm.area(rom, 0).palette_index
@@ -347,7 +363,7 @@ class ViewerTests(unittest.TestCase):
                 tiles[t] = removed(tiles[t], phase + (1 if 0 <= count and t < count else 0))
             layer = fs.sprite_layer(body, tiles, sc.sprite_palettes(rom, palette))
             for (x, line), c in layer.items():
-                y = line - camera
+                y = line + sc.SPRITE_DY - camera
                 if sc.ST_TOP <= y < 200 and sc.ST_LEFT <= x + sc.ST_LEFT < sc.ST_LEFT + 256:
                     expected[y][x + sc.ST_LEFT] = plan.slot[c & 0x3F]
             self.assertNotEqual(expected, background)
@@ -370,7 +386,7 @@ class ViewerTests(unittest.TestCase):
         props = fm.block_properties(rom, a)
         impassable = [hp.IMPASSABLE[props[b] & 15] for b in fm.decode_screen(rom, a, 1)]
         for spell in range(5):
-            args = ["AREA=0", "SCREEN=1", "CAMERA=40", "HERO=100,144,0,255,0,0,1", "HUD=16,80,0,0,0", f"VIEWER_DEFS=--defsym MAGIC={spell}"]
+            args = ["AREA=0", "SCREEN=1", "CAMERA=8", "HERO=100,144,0,255,0,0,1", "HUD=16,80,0,0,0", f"VIEWER_DEFS=--defsym MAGIC={spell}"]
             ram, word, log = self.run_scenario(args, [(599, "joy", 0x81), (601, "joy", 0)], 616, "shots_magic")
             flags = word("spell_state+2")
             self.assertEqual(flags & 0x40, 0x40 if word("hero_flip") else 0, "it flies the way he faces")
@@ -385,7 +401,7 @@ class ViewerTests(unittest.TestCase):
                     found = n
                     break
             self.assertIsNotNone(found, f"spell {spell}: its state ({[word(f'spell_state+{o}') for o in range(0, 18, 2)]}) is one the model reaches")
-            x, y = word("spell_state+4"), word("spell_state+8") + 32 - word("camera")     # (the sprites lie 32 lines, the HUD, below the game's y)
+            x, y = word("spell_state+4"), word("spell_state+8") + 32 + sc.SPRITE_DY - word("camera")     # (the sprites lie 32 lines, the HUD, below the game's y)
             rows = hs.decode_screen(ram, hs.video_base(log))
             expected = sc.expected_screen(rom, 0, 1, word("camera"), state=dict(hp=16, mp=word("hud_state") & 0xFF, experience=0, gold=0, seconds=0),
                                           hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 0, word("hero_frame"), bool(word("hero_flip"))))
@@ -403,7 +419,7 @@ class ViewerTests(unittest.TestCase):
     def test_a_spell_needs_up_the_power_and_a_chosen_spell(self) -> None:
         """B alone (no Up), Up and B with too little magic power (Thunder costs 4), and Up and B with no spell chosen cast nothing and take no power;
         the M key chooses the first spell and fills the magic, and then Up and B cast."""
-        base = ["AREA=0", "SCREEN=1", "CAMERA=40", "HERO=100,144,0,255,0,0,1"]
+        base = ["AREA=0", "SCREEN=1", "CAMERA=8", "HERO=100,144,0,255,0,0,1"]
         _, word, _ = self.run_scenario(base + ["HUD=16,80,0,0,0", "VIEWER_DEFS=--defsym MAGIC=0"], [(599, "joy", 0x80), (601, "joy", 0)], 616, "shots_magic")
         self.assertEqual((word("spell_state"), word("hud_state") & 0xFF), (-1, 80), "no Up")
         _, word, _ = self.run_scenario(base + ["HUD=16,3,0,0,0", "VIEWER_DEFS=--defsym MAGIC=1"], [(599, "joy", 0x81), (601, "joy", 0)], 616, "shots_magic")
@@ -432,8 +448,8 @@ class ViewerTests(unittest.TestCase):
         self.assertGreaterEqual(len(seen), 2)
 
     def test_a_hud_change_during_play_reaches_both_screens(self) -> None:
-        """The program is told through the debugger (poke hud_state, then hud_dirty) that the HUD changed; the HUD lines of both screens
-        and of the clean background must show the new state."""
+        """The program is told through the debugger (poke hud_state, then hud_dirty) that the HUD changed; the margins (the HUD) of both screens
+        must show the new state, and the clean copy of the right margin's first group (margin_ptr, what clear_box puts back) must hold it too."""
         import faxanadu_rom as fr
         import hatari_shot as hs
         import st_convert as sc
@@ -457,12 +473,19 @@ class ViewerTests(unittest.TestCase):
         script = "".join(f"b VBL > {v} :once :file {work / f}\n" for v, f in ((599, "poke.ini"), (699, "cap.ini")))
         hs.run_hatari(hatari, TOS, prg, work, 700, "0", script, None)
         ram = (work / "ram1.bin").read_bytes()
-        expected = sc.expected_screen(fr.Rom(ROM), 0, 1, 40, state=state, hero=sc.Hero())
+        expected = sc.expected_screen(fr.Rom(ROM), 0, 1, 0, state=state, hero=sc.Hero())
         for name in ("buf_a", "buf_b"):
             address = int.from_bytes(ram[base + sym[name]:base + sym[name] + 4], "big")
             rows = hs.decode_screen(ram, address)
-            bad = [(x, y) for y in range(32) for x in range(320) if rows[y][x] != expected[y][x]]
+            bad = [(x, y) for y in range(200) for x in [*range(32), *range(288, 320)] if rows[y][x] != expected[y][x]]
             self.assertEqual(bad[:5], [], f"{name}: {len(bad)} HUD pixels differ")
+        address = int.from_bytes(ram[base + sym["margin_ptr"]:base + sym["margin_ptr"] + 4], "big")
+        copy = bytearray(32000)
+        for y in range(200):
+            copy[y * 160 + 144:y * 160 + 152] = ram[address + 8 * y:address + 8 * y + 8]
+        rows = hs.decode_screen(bytes(copy), 0)
+        bad = [(x, y) for y in range(200) for x in range(288, 304) if rows[y][x] != expected[y][x]]
+        self.assertEqual(bad[:5], [], f"the clean copy of the margin: {len(bad)} pixels differ")
 
     def test_walking_off_the_right_edge_scrolls_to_the_next_screen_in_steps_of_16_pixels(self) -> None:
         self.scroll_test(True)
@@ -476,7 +499,7 @@ class ViewerTests(unittest.TestCase):
 
     def scroll_test(self, to_the_right: bool, equipment: tuple[int, int, int] | None = None) -> None:
         """He stands at the right edge of Eolis screen 1 and the stick is pushed right (poked): the picture is captured at several moments
-        of the scroll; each must be the two screens side by side moved by what the program says (shown_offset), the hero as the ROM
+        of the scroll; each must be the two screens side by side moved by what the program says (pending_offset, the screen just shown), the hero as the ROM
         places him (257 - offset), and at the end the new screen with the hero at its left edge."""
         import faxanadu_rom as fr
         import faxanadu_maps as fm
@@ -521,7 +544,7 @@ class ViewerTests(unittest.TestCase):
         for v, shown in zip(moments, bases):
             ram = (work / f"ram{v}.bin").read_bytes()
             word = lambda name: int.from_bytes(ram[base + sym[name]:base + sym[name] + 2], "big")
-            offset, cur = word("shown_offset"), word("cur_screen")
+            offset, cur = word("pending_offset"), word("cur_screen")      # (the offset of the screen whose address the shifter holds at the VBL: present_swap writes it before the wait and makes it shown_offset after)
             late.append(int.from_bytes(ram[base + sym["late_frames"]:base + sym["late_frames"] + 4], "big"))
             rows = hs.decode_screen(ram, shown)
             if cur == 0 and offset == 0:                          # not scrolling yet (or the hero still walks)
@@ -532,15 +555,15 @@ class ViewerTests(unittest.TestCase):
             if cur == 0:
                 step = offset // 16
                 hero = sc.Hero(261 - offset if to_the_right else offset - 20, 144, armour, shield, weapon, step & 1, to_the_right)
-                expected = sc.expected_scroll_screen(rom, 0, 1, target, offset, to_the_right, 40, hero=hero)
+                expected = sc.expected_scroll_screen(rom, 0, 1, target, offset, to_the_right, 0, hero=hero)
             else:
                 hero = sc.Hero(1 if to_the_right else 240, 144, armour, shield, weapon, 0, to_the_right)
-                expected = sc.expected_scroll_screen(rom, 0, target, target, 0, True, 40, hero=hero)
+                expected = sc.expected_scroll_screen(rom, 0, target, target, 0, True, 0, hero=hero)
             bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
             if cur == 0 and offset == 16:
                 # The ROM's 8-bit sprite arithmetic wraps or drops cells of a hero this close to the edge (a sword at the far
                 # edge, the body gone); the port clips by position instead (AGENTS.md, deliberate differences): his lines are not compared.
-                bad = [(x, y) for (x, y) in bad if not 120 <= y < 180]
+                bad = [(x, y) for (x, y) in bad if not 120 + 32 - 40 <= y < 180 + 32 - 40]       # (camera 0 now: his lines are 8 lower than at the old camera 40 under the HUD)
             self.assertEqual(bad[:5], [], f"VBL {v}, offset {offset}, screen {cur}: {len(bad)} pixels differ")
         self.assertGreaterEqual(len(seen), 5, f"offsets seen: {sorted(seen)}")
         self.assertEqual(late[-1], late[0], f"frames that took longer than 20 ms during the scroll: {late}")
@@ -554,7 +577,7 @@ class ViewerTests(unittest.TestCase):
     def vscroll_test(self, down: bool) -> None:
         """Trunk (area 1): screen 3 has screen 4 above it (and 4 has 3 below). The hero stands at the top (or the bottom) and the stick is
         pushed (poked): the picture is captured at several moments; each must be the two playfields one above the other, the window
-        from the line the program reports (shown_vtop), the hero fixed where the game puts him (y 192 going up, 0 going down), and
+        from the line the program reports (pending_vtop), the hero fixed where the game puts him (y 192 going up, 0 going down), and
         at the end the new screen with the camera of its hero."""
         import faxanadu_rom as fr
         import hatari_shot as hs
@@ -563,7 +586,7 @@ class ViewerTests(unittest.TestCase):
 
         start, target = (4, 3) if down else (3, 4)
         hero_start = "144,192,0,255,0,0,1" if down else "144,0,0,255,0,0,1"
-        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=1", f"SCREEN={start}", f"CAMERA={40 if down else 0}", f"HERO={hero_start}",
+        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=1", f"SCREEN={start}", f"CAMERA={8 if down else 0}", f"HERO={hero_start}",
                         "VIEWER_DEFS=--defsym NO_PHYSICS=1"], check=True, capture_output=True)
         nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
         sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
@@ -594,7 +617,7 @@ class ViewerTests(unittest.TestCase):
         for v, shown in zip(moments, bases):
             ram = (work / f"ram{v}.bin").read_bytes()
             word = lambda name: int.from_bytes(ram[base + sym[name]:base + sym[name] + 2], "big", signed=True)
-            top, cur = word("shown_vtop"), word("cur_screen")
+            top, cur = word("pending_vtop"), word("cur_screen")           # (as pending_offset in scroll_test)
             late.append(int.from_bytes(ram[base + sym["late_frames"]:base + sym["late_frames"] + 4], "big"))
             rows = hs.decode_screen(ram, shown)
             if top == -1 and cur == 0:
@@ -602,10 +625,10 @@ class ViewerTests(unittest.TestCase):
             seen.append(top)
             if top != -1:
                 hero = sc.Hero(144, 0 if down else 192, 0, 255, 0, 0, True)
-                expected = sc.expected_vscroll_screen(rom, 1, start, target, down, top, 0 if down else 40, state=state, hero=hero)
+                expected = sc.expected_vscroll_screen(rom, 1, start, target, down, top, 0 if down else sc.CAMERA_MAX, state=state, hero=hero)
             else:
                 hero = sc.Hero(144, 0 if down else 192, 0, 255, 0, 0, True)
-                expected = sc.expected_screen(rom, 1, target, 0 if down else 40, state=state, hero=hero)
+                expected = sc.expected_screen(rom, 1, target, 0 if down else sc.CAMERA_MAX, state=state, hero=hero)
             bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
             self.assertEqual(bad[:5], [], f"VBL {v}, top {top}, screen {cur}: {len(bad)} pixels differ")
         self.assertGreaterEqual(len(seen), 5, f"tops seen: {seen}")
@@ -619,7 +642,7 @@ class ViewerTests(unittest.TestCase):
         import hatari_shot as hs
         import st_convert as sc
 
-        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=0", "SCREEN=1", "CAMERA=40", "HERO=144,100,0,255,0,0,1",
+        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=0", "SCREEN=1", "CAMERA=8", "HERO=144,100,0,255,0,0,1",
                         "VIEWER_DEFS=--defsym NO_PHYSICS=1"], check=True, capture_output=True)
         nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
         sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
@@ -644,7 +667,7 @@ class ViewerTests(unittest.TestCase):
         ram = (work / "ram1.bin").read_bytes()
         word = lambda name: int.from_bytes(ram[base + sym[name]:base + sym[name] + 2], "big", signed=True)
         self.assertEqual(word("camera"), 0)
-        self.assertLess(word("hero_y"), 40)
+        self.assertLess(word("hero_y"), 8)
         hero = sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 0, word("hero_frame"), bool(word("hero_flip")))
         expected = sc.expected_screen(fr.Rom(ROM), 0, 1, 0, state=dict(hp=16, mp=0, experience=0, gold=0, seconds=0), hero=hero)
         rows = hs.decode_screen(ram, shown)
@@ -656,7 +679,7 @@ class ViewerTests(unittest.TestCase):
         starts a jump, in the air his y is above the floor with the jumping bit set, and he lands on the floor again."""
         import hatari_shot as hs
 
-        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=0", "SCREEN=1", "CAMERA=40", "HERO=144,40,0,255,0,0,1"], check=True, capture_output=True)
+        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=0", "SCREEN=1", "CAMERA=8", "HERO=144,40,0,255,0,0,1"], check=True, capture_output=True)
         nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
         sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
         image = (ROOT / "build" / "viewer.bin").read_bytes()
@@ -708,7 +731,7 @@ class ViewerTests(unittest.TestCase):
         import hatari_shot as hs
         import hero_physics as hp
 
-        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=2", "SCREEN=0", "CAMERA=40", f"HERO=32,170,0,255,0,0,{left}", "VIEWER_DEFS=--defsym NO_ENEMIES=1"], check=True, capture_output=True)
+        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=2", "SCREEN=0", "CAMERA=8", f"HERO=32,170,0,255,0,0,{left}", "VIEWER_DEFS=--defsym NO_ENEMIES=1"], check=True, capture_output=True)
         nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
         sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
         image = (ROOT / "build" / "viewer.bin").read_bytes()
@@ -756,18 +779,19 @@ class ViewerTests(unittest.TestCase):
         m = re.findall(r"^00FF8200: ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2}) ([0-9a-fA-F]{2})", log, re.M)[-1]
         shown = (int(m[1], 16) << 16) | (int(m[3], 16) << 8)
         flip = (word(700, "hero_mtick") >> 4) & 1                 # (the tick alone: the ROM stores it over the facing, checked on a ladder in jsnes: tests/test_sprites.py)
-        expected = sc.expected_screen(rom, 2, 0, 40, state=dict(hp=16, mp=0, experience=0, gold=0, seconds=0),
+        camera = word(700, "camera")
+        expected = sc.expected_screen(rom, 2, 0, camera, state=dict(hp=16, mp=0, experience=0, gold=0, seconds=0),
                                       hero=sc.Hero(word(700, "hero_x"), word(700, "hero_y"), 0, 255, 0, 7, bool(flip)))
         # the ladder of Mist screen 0 is under blocks that sprites go behind (property 4): the hero's pixels over their opaque pixels are hidden (src/enemy.s behind_set)
         import behind
         hx, hy = word(700, "hero_x"), word(700, "hero_y")
         halves = behind.halves(rom, a, 0, hx, hy)
         opaque = behind.opaque_screen(rom, a, 0)
-        background = sc.expected_screen(rom, 2, 0, 40, state=dict(hp=16, mp=0, experience=0, gold=0, seconds=0))
+        background = sc.expected_screen(rom, 2, 0, camera, state=dict(hp=16, mp=0, experience=0, gold=0, seconds=0))
         for y in range(200):
             for x in range(320):
                 if expected[y][x] != background[y][x]:
-                    line, col = y + 40, x - sc.ST_LEFT
+                    line, col = y - sc.SPRITE_DY + camera, x - sc.ST_LEFT        # (the NES's line: the playfield's + 32)
                     if 0 <= col < 256 and 32 <= line < 240 and halves & (1 << (((col - hx) >> 3) & 1)) and opaque[line - 32][col]:
                         expected[y][x] = background[y][x]
         rows = hs.decode_screen((work / "ram700.bin").read_bytes(), shown)
@@ -782,7 +806,7 @@ class ViewerTests(unittest.TestCase):
         import hatari_shot as hs
         import st_convert as sc
 
-        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=0", "SCREEN=1", "CAMERA=40", "HERO=144,144,0,255,0,0,1"], check=True, capture_output=True)
+        subprocess.run(["make", "-C", str(ROOT), "viewer", "AREA=0", "SCREEN=1", "CAMERA=8", "HERO=144,144,0,255,0,0,1"], check=True, capture_output=True)
         nm = subprocess.run(["m68k-linux-gnu-nm", str(ROOT / "build" / "viewer.elf")], check=True, capture_output=True, text=True).stdout.split("\n")
         sym = {line.split()[2]: int(line.split()[0], 16) for line in nm if len(line.split()) == 3}
         image = (ROOT / "build" / "viewer.bin").read_bytes()
@@ -811,7 +835,7 @@ class ViewerTests(unittest.TestCase):
             word = lambda name: int.from_bytes(ram[base + sym[name]:base + sym[name] + 2], "big", signed=True)
             frames.append(word("hero_frame"))
             shown = (int(m[1], 16) << 16) | (int(m[3], 16) << 8)
-            expected = sc.expected_screen(rom, 0, 1, 40, state=dict(hp=16, mp=0, experience=0, gold=0, seconds=0),
+            expected = sc.expected_screen(rom, 0, 1, word("camera"), state=dict(hp=16, mp=0, experience=0, gold=0, seconds=0),
                                           hero=sc.Hero(word("hero_x"), word("hero_y"), 0, 255, 0, word("hero_frame"), bool(word("hero_flip"))))
             rows = hs.decode_screen(ram, shown)
             bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
@@ -824,7 +848,7 @@ class ViewerTests(unittest.TestCase):
     def test_up_at_the_castle_door_leads_to_screen_1_of_eolis(self) -> None:
         """The viewer has every screen of Eolis (ALL=1) and the hero stands at the castle door of screen 0 (block 156); Up (poked into the
         stick for one frame) takes him through, as the ROM does (verified there: screen 1, hero at x 144, y 144): the picture is screen 1
-        with the hero there, the door's own palette and the camera of a hero who stands low."""
+        with the hero there, the door's own palette and the camera of a hero whose feet are in lines 0-199 (camera 0)."""
         import faxanadu_rom as fr
         import hatari_shot as hs
         import st_convert as sc
@@ -853,9 +877,9 @@ class ViewerTests(unittest.TestCase):
         ram = (work / "ram1.bin").read_bytes()
         self.assertEqual(word(ram, "cur_screen"), 1)
         self.assertEqual((word(ram, "hero_x"), word(ram, "hero_y")), (144, 144))
-        self.assertEqual(word(ram, "camera"), 40)
+        self.assertEqual(word(ram, "camera"), 0)
         rows = hs.decode_screen(ram, hs.video_base(log))
-        expected = sc.expected_screen(fr.Rom(ROM), 0, 1, 40, hero=sc.Hero(144, 144, 0, 255, 0, 0, True))
+        expected = sc.expected_screen(fr.Rom(ROM), 0, 1, 0, hero=sc.Hero(144, 144, 0, 255, 0, 0, True))
         bad = [(x, y) for y in range(200) for x in range(320) if rows[y][x] != expected[y][x]]
         self.assertEqual(bad[:5], [], f"{len(bad)} pixels differ")
 
@@ -1049,13 +1073,13 @@ class ViewerTests(unittest.TestCase):
                         if sp.ent == em.NONE or not em.is_drawn(sp.ent, sp.phase, counter, sp.d2, sp.flags):
                             continue
                         app = fs.appearance(rom, ed.entity(rom, sp.ent)["appearance"] + em.appearance_offset(sp.ent, sp.phase, counter, sp.d2, sp.internal), "TILEINFO_ENTITY_ADDRS")
-                        layer = fs.sprite_layer(fs.place(app, sp.x, sp.y, masks[i]), fs.entity_tiles(rom, sp.ent), palettes)
+                        layer = fs.sprite_layer(fs.place(app, sp.x, sp.y, masks[i]), ed.kind_tiles(rom, sp.ent), palettes)
                         layer = behind.drop_behind(layer, sp.x, behind.halves(rom, fm.area(rom, area), screen, sp.x, sp.y), opaque)      # (a column over a block that sprites go behind: src/enemy.s behind_tile, src/blit.s bh_tile)
                         for (x, line), c in layer.items():
-                            y = line - word("camera")
+                            y = line + sc.SPRITE_DY - word("camera")
                             if sc.ST_TOP <= y < 200 and sc.ST_LEFT <= x + sc.ST_LEFT < sc.ST_LEFT + 256:
                                 expected[y][x + sc.ST_LEFT] = plan.slot[c & 0x3F]
-                    hx, hy = word("hero_x") + sc.ST_LEFT, word("hero_y") + 32 - word("camera")        # (his own picture is tested elsewhere: not the box round him, nor what of it the NES wraps round to the left edge)
+                    hx, hy = word("hero_x") + sc.ST_LEFT, word("hero_y") + 32 + sc.SPRITE_DY - word("camera")        # (his own picture is tested elsewhere: not the box round him, nor what of it the NES wraps round to the left edge)
                     bad = [(px, py) for py in range(200) for px in range(320) if rows[py][px] != expected[py][px] and not ((hx - 24 <= px < hx + 40 or hx - 280 <= px < hx - 216) and hy - 8 <= py < hy + 40)]
                     worst.append(bad)
                 box = lambda b: (min(x for x, _ in b), min(y for _, y in b), max(x for x, _ in b), max(y for _, y in b)) if b else None
@@ -1127,10 +1151,10 @@ class ViewerTests(unittest.TestCase):
         """Eolis screen 4, a Long Sword (it reaches a Zozura, the dagger does not), the hero faces left and swings every 24 frames while two Zozuras walk
         up: each dies of one blow and gives 30 experience (`ENEMY_EXPERIENCE`); a touch takes the damage (7) off the power, and nothing while he is
         invincible (tests/test_enemy.py checks the rules against the game frame by frame)."""
-        pokes = []
-        for v in range(400, 1100, 24):
+        pokes = [(255, "w:hero_invinc", FIGHT_INVINCIBLE)]
+        for v in range(260, 1100, 24):
             pokes += [(v, "b", 1), (v + 3, "b", 0)]
-        ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=4", "HERO=200,144,0,255,1,0,1", "WORLD=1", "HUD=80,80,0,0,0"], pokes, 1100, "shots_fight")
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=4", "HERO=200,144,0,255,1,0,0", "WORLD=1", "HUD=80,80,0,0,0"], pokes, 1100, "shots_fight")
         state = word.raw("hud_state", 10)
         power, exp = state[0], int.from_bytes(state[2:4], "big")
         self.assertGreater(exp, 0)
@@ -1175,6 +1199,15 @@ class ViewerTests(unittest.TestCase):
         self.assertIn(0x15, slots)
         self.assertIn(0x54, slots, "a fireball in flight")
         self.assertEqual(word.raw("hud_state", 1)[0], 80)
+
+    def test_charrons_fireball_and_the_hoods_magic_are_drawn(self) -> None:
+        """Charron's fireball (the author's report on Fax086, Trunk screen 26: Charron cast, nothing showed; here screen 25, where it flies far from the hero, whose box
+        the picture check leaves out) and screen 16 of area 7 (the Execution Hood, whose magic is Nash's): the magic is in a slot at the capture and the picture
+        is the model's, the magic drawn with the tiles the ROM draws it with: the common sprite tiles (`enemy_data.kind_tiles`; the package had none for it)."""
+        for area, screen, hero, vbl, magic in ((1, 25, "85,144", 360, 0x54), (7, 16, "112,144", 292, 0x51)):
+            ram, word, _ = self.run_scenario(["ALL=1", f"AREA={area}", f"SCREEN={screen}", f"HERO={hero},0,255,0,0,1", "WORLD=1", "HUD=80,80,0,0,0"], [], vbl, "shots_magic_drawn")
+            self.assertIn(magic, [word.raw("enemies", 8 * 30)[i * 30] for i in range(8)], "the magic is in flight at the capture")
+        self.enemies_are_drawn(((1, 25, "85,144", 360), (7, 16, "112,144", 292)))
 
     def test_a_fireball_takes_eight_power_and_is_gone(self) -> None:
         """Area 1 screen 25, the hero on Charron's floor (96, 64): two fireballs hit him in the first 400 frames (8 off the power each) and are gone."""
@@ -1240,21 +1273,24 @@ class ViewerTests(unittest.TestCase):
         self.assertIn(inv[31], (18, 19, 20))                            # (it runs: a second off every 64 frames)
 
     def two_blows(self, inv: list[tuple[int, int]]) -> int:
-        """Eolis screen 4, a Long Sword (strength 8), the first enemy given 200 hit points and five swings (two of them hit): how many hit points it lost. `inv`: bytes of the
+        """Eolis screen 4, a Long Sword (strength 8), the first enemy given 200 hit points and five swings as it walks up: how many hit points it lost. `inv`: bytes of the
         inventory block to set first (offset, value)."""
-        pokes = [(395, "hp", 200)] + [(390 + i, "inv", o << 8 | v) for i, (o, v) in enumerate(inv)]
-        for v in range(400, 520, 24):
+        pokes = [(255, "hp", 200), (255, "w:hero_invinc", FIGHT_INVINCIBLE)] + [(250 + i, "inv", o << 8 | v) for i, (o, v) in enumerate(inv)]
+        for v in range(260, 380, 24):
             pokes += [(v, "b", 1), (v + 3, "b", 0)]
-        ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=4", "HERO=200,144,0,255,1,0,1", "WORLD=1", "HUD=80,80,0,0,0"], pokes, 560, "shots_fight")
+        ram, word, _ = self.run_scenario(["ALL=1", "AREA=0", "SCREEN=4", "HERO=200,144,0,255,1,0,0", "WORLD=1", "HUD=80,80,0,0,0"], pokes, 420, "shots_fight")
         return 200 - word.raw("enemies", 8 * 30)[7 * 30 + 15]
 
     def test_the_sword_takes_a_quarter_more_without_the_pendant_and_the_glove_adds_its_own(self) -> None:
         """Long Sword, 8 a blow: 10 without the pendant (the ROM's bug), 8 with it; the glove (while its time runs) adds 4 (INV_SPECIAL 29: bit 1 the pendant,
         INV_GLOVE 31)."""
-        self.assertEqual(self.two_blows([]), 20)
-        self.assertEqual(self.two_blows([(31, 20)]), 28)
-        self.assertEqual(self.two_blows([(29, 2)]), 16)
-        self.assertEqual(self.two_blows([(29, 2), (31, 20)]), 24)
+        plain = self.two_blows([])
+        self.assertGreater(plain, 0, "a blow landed")
+        self.assertEqual(plain % 10, 0, plain)
+        blows = plain // 10                                    # (the same blows land each time: the run is the same but for the inventory)
+        self.assertEqual(self.two_blows([(31, 20)]), 14 * blows)
+        self.assertEqual(self.two_blows([(29, 2)]), 8 * blows)
+        self.assertEqual(self.two_blows([(29, 2), (31, 20)]), 12 * blows)
 
     def test_nothing_hurts_while_the_ointment_is_in_force(self) -> None:
         """Eolis screen 4: a Zozura that walks into him takes 7 power without the ointment; with 30 seconds of it nothing."""
@@ -1376,15 +1412,16 @@ class ViewerTests(unittest.TestCase):
         self.assert_picture(rows, sc.expected_screen(rom, 1, 0, word("camera"), hero=sc.Hero(16, 160, 0, 255, 0, 0, True)))
 
     def test_walking_off_the_side_of_trunk_screen_7_leads_to_apolune(self) -> None:
-        """Trunk screen 7 has no screen to its right: the ROM's town table (AREA_TOWN_TRANSITIONS_DATA) sends him to area 3 (the towns) screen 0
-        at 32,144 in palette 27. (He is held at y 112 without physics, so that only the edge is tested.)"""
+        """Trunk screen 7 has no screen to its right: he stops at x 240, on the blocks of the way out (property 13, rows 10 and 11), and the ROM's
+        town table (AREA_TOWN_TRANSITIONS_DATA) sends him to area 3 (the towns) screen 0 at 32,144 in palette 27 (`Player_CheckSwitchScreen`;
+        tests/test_knockedge.py has the same against jsnes)."""
         import faxanadu_rom as fr
         import hatari_shot as hs
         import st_convert as sc
 
         rom = fr.Rom(ROM)
-        ram, word, log = self.run_scenario(["ALL=1", "AREA=1", "SCREEN=7", "HERO=240,112,0,255,0,0,1", "WORLD=3", "VIEWER_DEFS=--defsym NO_PHYSICS=1"],
-                                           [(599, "joy", 8), (602, "joy", 0)], 799, "shots_edge")
+        ram, word, log = self.run_scenario(["ALL=1", "AREA=1", "SCREEN=7", "HERO=224,160,0,255,0,0,1", "WORLD=3", "VIEWER_DEFS=--defsym NO_ENEMIES=1"],
+                                           [(599, "joy", 8), (640, "joy", 0)], 799, "shots_edge")
         self.assertEqual((word("cur_area"), word("cur_pal"), word("cur_screen")), (3, 27, 0))
         self.assertEqual((word("hero_x"), word("hero_y")), (32, 144))
         rows = hs.decode_screen(ram, hs.video_base(log))
@@ -1439,7 +1476,9 @@ class ViewerTests(unittest.TestCase):
         slot, font = self.bright_slot(rom, palette_index), ft.font(rom)
         lines = text.split("\n")
         height = 10 * len(lines) + 8
-        y0 = 32 + (168 - height) // 2
+        import st_convert as sc
+
+        y0 = sc.ST_TOP + (sc.WINDOW_LINES - height) // 2
         self.box_layer(rows, slot, 5, y0, 10, height)
         self.text_layer(rows, font, slot, [(96 + 8 * i, y0 + 4 + 10 * n, c, False) for n, line in enumerate(lines) for i, c in enumerate(line)])
 

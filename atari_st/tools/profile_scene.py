@@ -123,7 +123,7 @@ def main() -> None:
     passes_total = busy_total = 0
     for p in pieces:
         r = p["routines"]
-        passes = r.get("input_poll", [0])[0]
+        passes = r.get("input_poll", [0])[0] + r.get("input_poll_game", [0])[0]      # (the disk's controls, JOYPAD=1, poll the game with input_poll_game)
         waiting = r.get("wait_vbl", [0, 0, 0])[2]
         busy = p["total"] - waiting
         if passes:

@@ -21,6 +21,12 @@ SPAWNED = {0x15: 0x54, 0x0D: 0x51, 0x10: 0x51, 0x0F: 0x51, 0x2D: 0x0A, 0x32: 0x0
 ROM_FRAMES = {3: (3, 5), 0x52: (4, 5, 6)}                # kinds that use only some of the ROM's frames (the rock: 3 and 5): the pictures are made for those, and the rule counts them 0, 1
 EXTRAS = (0x13, 0x14, 1, 2, 0x64)
 WATER = (0x52, 0x61, 0x62, 0x63)          # the fountain on the way to Mascon and the three springs of Trunk (category 3: nothing touches them, the quests decide what they show)             # what an enemy leaves: they are in every package that has enemies (the boss death only where a boss is); their tiles are the common sprite tiles
+# Where the tiles of a sprite that another one makes come from. Its pictures count tiles from the PPU offset its maker gives it (`CurrentSprites_PPUOffsets`): 0 for
+# Charron's fireball ($54), the magic of Nash and the Execution Hood ($51) and Shadow Eura's bolt ($53), $80 for the bolt of Ripasheiku and King Grieve ($0A,
+# `Sprite_CastMagic`): the common sprite tiles ($40 to $8F of the pattern table), which the game always holds; the tiles these kinds bring of their own
+# (`SPRITES_PPU_TILE_COUNTS`: 0, or 7 for the bolt) are never loaded. The rock (3) gets Zorugeriru's offset and is drawn with his tiles $1A to $1F.
+# Checked in jsnes (the pattern table under the sprite's offset). A number: that kind's tiles; a pair: the common tiles from that pattern number.
+TILES_FROM = {0x54: ("common", 0), 0x51: ("common", 0), 0x53: ("common", 0), 0x0A: ("common", 0x80), 3: 0x31}
 KIND_BYTES = 32
 PLACE_BYTES = 6
 
@@ -174,6 +180,53 @@ def death_pieces(ent: int, base: int, frame: int) -> list[tuple[int, int, int, i
 IMAGE_BYTES = 40
 
 
+def kind_tiles(rom: fr.Rom, ent: int) -> dict[int, bytes]:
+    """The tiles a kind's pictures are drawn with, by the numbers its frames use: the common tiles for what an enemy leaves, the common tiles from the
+    maker's offset for the magic (`TILES_FROM`), the maker's tiles for the rock, else its own (`faxanadu_sprites.entity_tiles`)."""
+    if ent in EXTRAS:
+        return fs.common_tiles(rom)
+    source = TILES_FROM.get(ent, ent)
+    if isinstance(source, tuple):
+        common = fs.common_tiles(rom)
+        return {n - source[1]: tile for n, tile in common.items() if n >= source[1]}
+    return fs.entity_tiles(rom, source)
+
+
+def flip_image(image: bytes, how: int) -> bytes:
+    """An image of `column_image` mirrored: how bit 0 left-right (every byte's bits reversed), bit 1 upside down (the 8 mask bytes and the 8 longs in reverse order)."""
+    if how & 1:
+        image = bytes(int(f"{b:08b}"[::-1], 2) for b in image)
+    if how & 2:
+        image = image[7::-1] + b"".join(image[8 + 4 * line:12 + 4 * line] for line in range(7, -1, -1))
+    return image
+
+
+def derive_images(images: list[bytes]) -> tuple[list[bytes], list[int], list[int]]:
+    """The images of a package with every one that is another one mirrored (left-right, upside down or both) moved to the end and left as zeros, for the
+    program to make (`flips_expand`, src/blit.s): most enemies face both ways, so about half the images need not be on the disk, and the zeros pack to almost
+    nothing. Out: the images in their new order, the new place of each old one, and the recipe: for each made image, in order, the byte offset of its source
+    (a kept image) + how it is mirrored (bits 0-1; the offsets are multiples of 40, so those bits are free)."""
+    kept, made, source = [], [], {}
+    for i, image in enumerate(images):
+        for how in (1, 2, 3):
+            if flip_image(image, how) in source:                   # it is a kept image mirrored: (kept index, how)
+                made.append((i, source[flip_image(image, how)], how))
+                break
+        else:
+            source.setdefault(image, len(kept))
+            kept.append(i)
+    order = [0] * len(images)
+    for n, i in enumerate(kept):
+        order[i] = n
+    for n, (i, _, _) in enumerate(made):
+        order[i] = len(kept) + n
+    out = [images[i] for i in kept] + [bytes(IMAGE_BYTES)] * len(made)
+    recipe = [k * IMAGE_BYTES | how for _, k, how in made]
+    for (i, k, how) in made:
+        assert flip_image(images[kept[k]], how) == images[i]
+    return out, order, recipe
+
+
 def column_image(image: bytes) -> bytes:
     """A sprite image (`st_convert.sprite_image`: a mask byte and four plane bytes a line) as the enemies are drawn: the 8 mask bytes, then for each line the
     four plane bytes as one long (plane 0 first), so that a whole byte column of the four planes is one `movep.l`."""
@@ -203,14 +256,14 @@ def package_parts(rom: fr.Rom, area: int, screens: list[int], palette_index: int
     images: list[bytes] = []
     index: dict[tuple, int | None] = {}
     kept: dict[bytes, int] = {}
-    records, firsts = [], {}
+    poses, firsts = [], {}
     scripts, entries = bytearray(), {}
     for ent in used:
         chunk, entry, _ = script_chunk(rom, rom.word("SPRITE_BSCRIPTS", ent), len(scripts))
         entries[ent] = len(scripts) + entry
         scripts += chunk
-        tiles = fs.common_tiles(rom) if ent in EXTRAS else fs.entity_tiles(rom, ent)
-        firsts[ent] = len(records)
+        tiles = kind_tiles(rom, ent)
+        firsts[ent] = len(poses)
         for count in range(KINDS[ent]):
             frame = ROM_FRAMES[ent][count] if ent in ROM_FRAMES else count
             base = rom.byte("SPRITE_APPEARANCE_PHASE_OFFSETS", ent)
@@ -231,16 +284,20 @@ def package_parts(rom: fr.Rom, area: int, screens: list[int], palette_index: int
                                     kept[picture] = len(images)
                                     images.append(picture)
                                 index[key] = kept[picture]
-                        entries_.append((sp.x - sc.ANIM_BASE + sc.ST_LEFT, sp.y + 1 - sc.ANIM_BASE, index[key]))
+                        entries_.append((sp.x - sc.ANIM_BASE + sc.ST_LEFT, sp.y + 1 - sc.ANIM_BASE, index[key]))      # (the y keeps the NES's 32 HUD lines: bytes, never negative; draw_enemies takes them off)
                 x0, y0 = min(e[0] for e in entries_), min(e[1] for e in entries_)
                 box = (x0, max(e[0] for e in entries_) + 8, y0, max(e[1] for e in entries_) + 8)
                 assert all(0 <= v < 0x80 for v in box), box       # bytes, so that a negative x ends the list
-                record = bytes(box)
-                for x, y, number in entries_:
-                    if number is not None:                          # (a tile with nothing in it is not drawn)
-                        assert 0 <= x < 0x80 and 0 <= y < 0x80, (x, y)
-                        record += bytes((x, y)) + (number * IMAGE_BYTES).to_bytes(2, "big")
-                records.append(record + b"\xff\xff")
+                poses.append((box, entries_))
+    images, order, recipe = derive_images(images)
+    records = []
+    for box, entries_ in poses:
+        record = bytes(box)
+        for x, y, number in entries_:
+            if number is not None:                                  # (a tile with nothing in it is not drawn)
+                assert 0 <= x < 0x80 and 0 <= y < 0x80, (x, y)
+                record += bytes((x, y)) + (order[number] * IMAGE_BYTES).to_bytes(2, "big")
+        records.append(record + b"\xff\xff")
     assert len(images) * IMAGE_BYTES < 0x10000, "an image's offset is one word"
     offsets, at, placed, shared = [], 2 * len(records), {}, []
     for record in records:                                          # a pose with the same record as an earlier one points at it
@@ -264,7 +321,8 @@ def package_parts(rom: fr.Rom, area: int, screens: list[int], palette_index: int
         body += b"\xff\xff"
     return {
         "enemy_places": b"".join(o.to_bytes(2, "big") for o in places) + bytes(body), "enemy_kinds": bytes(kinds) + b"\xff\xff",
-        "enemy_anim": b"".join(o.to_bytes(2, "big") for o in offsets) + b"".join(shared), "enemy_images": b"".join(images), "enemy_scripts": bytes(scripts),
+        "enemy_anim": b"".join(o.to_bytes(2, "big") for o in offsets) + b"".join(shared), "enemy_images": len(recipe).to_bytes(2, "big") + ((len(images) - len(recipe)) * IMAGE_BYTES).to_bytes(2, "big") + b"".join(w.to_bytes(2, "big") for w in recipe)
+        + b"".join(images), "enemy_scripts": bytes(scripts),
     }
 
 

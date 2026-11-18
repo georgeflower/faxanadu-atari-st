@@ -258,7 +258,7 @@ class IScriptTests(unittest.TestCase):
                         expected = fs.sprite_layer(fs.place(app, sc.ANIM_BASE, sc.ANIM_BASE, 0x40 if mirrored else 0), tiles, nes)
                         self.assertEqual(len(layer), len(expected))
                         for (ex, ey), colour in expected.items():
-                            self.assertEqual(rgb(layer[(ex - sc.ANIM_BASE + sc.ST_LEFT, ey - sc.ANIM_BASE)]), sc.st_rgb(colour), f"entity {ent:#x} frame {f} set {set_number:#x}")
+                            self.assertEqual(rgb(layer[(ex - sc.ANIM_BASE + sc.ST_LEFT, ey - sc.ANIM_BASE + sc.SPRITE_DY)]), sc.st_rgb(colour), f"entity {ent:#x} frame {f} set {set_number:#x}")
 
     def test_placements_of_eolis_and_its_buildings(self) -> None:
         places = self.isc.parse_npc_file(self.files["npc.bin"])["places"]

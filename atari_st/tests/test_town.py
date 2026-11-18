@@ -295,7 +295,7 @@ class TownTests(unittest.TestCase):
                     bit = col if attr & 0x40 else 7 - col
                     value = (data[row] >> bit & 1) | (data[8 + row] >> bit & 1) << 1
                     px, py = x + dx + col, y - camera + dy + row
-                    if value and left and 32 <= py < 200 and px < 288:
+                    if value and left and 0 <= py < 200 and px < 288:
                         rows[py][px] = slots[(attr & 3) * 4 + value]
 
     def person(self, npc: dict, area: int, screen: int, entity: int) -> tuple[int, int, int]:
@@ -821,7 +821,7 @@ class TownTests(unittest.TestCase):
         self.text_box(expected, self.rom, 0, ft.message(self.rom, 0xA9))
         text = ft.message(self.rom, 0xA9)
         height = 10 * len(text.split("\n")) + 8
-        y0 = 32 + (168 - height) // 2
+        y0 = sc.ST_TOP + (sc.WINDOW_LINES - height) // 2
         bad = [(x, y) for y in range(y0, y0 + height) for x in range(80, 240) if got[y][x] != expected[y][x]]
         self.assertEqual(bad[:5], [], "the door's hint is on a box over the window")
         self.assertGreater(first, 0)

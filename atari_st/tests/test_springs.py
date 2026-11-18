@@ -233,11 +233,11 @@ class SpringsOnTheStTests(unittest.TestCase):
             layer = fs.sprite_layer(fs.place(app, x, y, mask), fs.entity_tiles(self.rom, ent), palettes)
             layer = behind.drop_behind(layer, x, behind.halves(self.rom, area, screen, x, y), opaque)
             for (px, line), c in layer.items():
-                py = line - word("camera")
+                py = line + sc.SPRITE_DY - word("camera")
                 if sc.ST_TOP <= py < 200 and 0 <= px < 256:
                     expected[py][px + sc.ST_LEFT] = plan.slot[c & 0x3F]
-        hx, hy = word("hero_x") + sc.ST_LEFT, word("hero_y") + 32 - word("camera")
-        return [(px, py) for py in range(32, 200) for px in range(320) if rows[py][px] != expected[py][px] and not (hx - 24 <= px < hx + 40 and hy - 8 <= py < hy + 40)]
+        hx, hy = word("hero_x") + sc.ST_LEFT, word("hero_y") + 32 + sc.SPRITE_DY - word("camera")
+        return [(px, py) for py in range(sc.ST_TOP, 200) for px in range(320) if rows[py][px] != expected[py][px] and not (hx - 24 <= px < hx + 40 and hy - 8 <= py < hy + 40)]
 
     def assert_shown(self, shots, k, screen, patch, label):
         """The screen on show at capture k is the picture of the state at capture k or k - 1 (a capture falls between a frame's update and its show)."""

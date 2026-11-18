@@ -25,7 +25,7 @@ portraits.bin: the 11 portraits, in the ROM's own form but re-packed. Header: wo
 npc.bin: the 18 people (entities $34-$45), where they stand and the colours. Header: word kinds (18), word sets (28), then long offsets: kind records (a table of 18 longs), set colours, building
   palettes, places. Kind record: byte entity, byte frames, byte animation rule, byte mirror rule, four bytes of bounds (left signed, top, width, height: `Sprite_GetBounds` bank 14 $B273),
   word tiles (n), the n tiles (16 bytes, ROM form; tile k = the entity's tile k), then a table of 2 * frames words (offset from the record start of the pose of frame f, mirrored = 0 / 1, at 2 * f + mirrored),
-  then the poses: cells of four bytes (dx, dy signed bytes: ST screen coordinates relative to the person's x and y, the playfield x plus 32 and the line plus 32 + 1; tile; attribute: bits 0-1 sprite
+  then the poses: cells of four bytes (dx, dy signed bytes: ST screen coordinates relative to the person's x and y, the playfield x plus 32 and the line plus 1 (`st_convert.SPRITE_DY`); tile; attribute: bits 0-1 sprite
   palette, bit 6 mirrored) ended by dx = $80. Animation rule: 0 frame = (counter >> 4) & 1, 1 walking: (0, 1, 0, 2)[(counter >> 3) & 3] (frame 0 while the phase is 2), 2 the King: ((counter >> 4) & 1)
   + (0, 2)[phase - 1]. Mirror rule: 0 never mirrored, 1 always, 2 mirrored when the person faces right (flag bit 0). Set colours: for each of the 28 palette sets 16 bytes: the palette slot of
   colour c (1-3) of sprite palette p (0-3) at p * 4 + c, for the sprite palettes the ROM loads there (inside palettes in the building sets $11-$1A, outside elsewhere). Building palettes: for each of the 10
@@ -337,7 +337,7 @@ def npc_pose(rom: fr.Rom, ent: int, frame: int, mirrored: bool) -> list[tuple[in
     """The cells of one picture: (dx, dy, tile, attribute) in ST screen coordinates relative to the person's x and playfield y (see the file description)."""
     first = rom.byte("SPRITE_APPEARANCE_PHASE_OFFSETS", ent)
     app = fs.appearance(rom, first + frame, "TILEINFO_ENTITY_ADDRS")
-    return [(s.x - sc.ANIM_BASE + sc.ST_LEFT, s.y + 1 - sc.ANIM_BASE, s.tile, s.attr & 0x43) for s in fs.place(app, sc.ANIM_BASE, sc.ANIM_BASE, 0x40 if mirrored else 0)]
+    return [(s.x - sc.ANIM_BASE + sc.ST_LEFT, s.y + 1 - sc.ANIM_BASE + sc.SPRITE_DY, s.tile, s.attr & 0x43) for s in fs.place(app, sc.ANIM_BASE, sc.ANIM_BASE, 0x40 if mirrored else 0)]
 
 
 def npc_kind(rom: fr.Rom, ent: int) -> bytes:

@@ -651,7 +651,7 @@ mattock_show:
     addi.w #16, %d3                         | x1
     move.w %d2, %d1
     lsl.w #4, %d1
-    addi.w #HUD_LINES, %d1
+    addi.w #WIN_TOP, %d1
     sub.w camera(%pc), %d1                  | y0
     move.w %d1, %d2
     addi.w #32, %d2                         | y1 (two blocks)

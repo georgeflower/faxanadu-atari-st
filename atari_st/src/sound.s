@@ -29,8 +29,9 @@
     .equ SND_BUSY, 55                       | ticks left that the engine counts that effect as running (0: a new effect is always taken)
     .equ SND_PAUSED, 56                     | the Start pause (sound_pause): the song stands still and is silent, an effect goes on (Audio_HandlePaused)
     .equ SND_MUTE, 57                       | channels of the song kept silent (bit 0 A, 1 B, 2 C): set by the pause, a channel's bit goes when the song writes that channel again
-    .equ SND_SIZE, 58
-    .equ SND_SONG_MAX, 15360                | what a song may be unpacked (build_sound.SONG_MAX; the biggest is 15,304)
+    .equ SND_PREV, 58                       | SND_OUT of the tick before: what the chip has (12 bytes; sound_silence keeps it right)
+    .equ SND_SIZE, 70
+    .equ SND_SONG_MAX, 15360                | what a song may be unpacked (build_sound.SONG_MAX; the biggest is 12,018)
 
     .section .data
     .even
@@ -223,7 +224,12 @@ sound_tick:
     move.w %d0, SND_MLEFT(%a0)
 
     | What goes to the YM: the song's registers, with the channels the sound effect takes over.
-8:  lea SND_MREGS(%a0), %a2
+8:  lea SND_OUT(%a0), %a2
+    lea SND_PREV(%a0), %a1
+    move.l (%a2)+, (%a1)+
+    move.l (%a2)+, (%a1)+
+    move.l (%a2)+, (%a1)+
+    lea SND_MREGS(%a0), %a2
     lea SND_OUT(%a0), %a1
     move.l (%a2)+, (%a1)+
     move.l (%a2)+, (%a1)+
@@ -269,7 +275,12 @@ sound_tick:
     MIXER_MERGE 0x20
     btst #2, %d1
     bne.s 84f
-    move.b 10(%a2), %d2                     | the noise alone: as loud as the louder of the two on channel C
+    andi.b #0x24, %d2
+    cmpi.b #0x24, %d2
+    bne.s 88f
+    clr.b 10(%a1)                           | tone C and the noise both off (the effect's noise pauses over the song's): a volume would be a held level, a click
+    bra.s 84f
+88: move.b 10(%a2), %d2                     | the noise alone: as loud as the louder of the two on channel C
     cmp.b 10(%a1), %d2
     bls.s 84f
     move.b %d2, 10(%a1)
@@ -278,32 +289,90 @@ sound_tick:
     subq.w #1, %d0
     move.w %d0, SND_SLEFT(%a0)
 snd_mixed:
-
-    | Registers 0-10 into the YM (register 14 has the floppy select lines: not touched).
-    lea SND_OUT(%a0), %a2
-    movea.l #YM_SELECT, %a1
-    moveq #0, %d0
-    moveq #10, %d2
-91: move.b %d0, (%a1)
-    move.b (%a2)+, 2(%a1)
-    addq.b #1, %d0
-    dbra %d2, 91b
+    bsr.w snd_write
 9:  movem.l (%sp)+, %d0-%d3/%a0-%a2
     rts
 
-sound_silence:
-    movem.l %d0/%a1, -(%sp)
+
+    .section .text.early,"ax"               | (.text has no room: these reach no variable but snd_state, from in front of .data)
+    .even
+
+| a0 = snd_state. SND_OUT into the chip, SND_PREV being what it has. Registers 0-10 (register 14 has the floppy select lines: not touched), in an
+| order that makes no click between two writes (a click there is short, but an exact emulation or the real chip plays it): a channel whose tone
+| and noise are both off holds its volume as a level, and a period of 0 is a tone of 125 kHz. The periods first (the song keeps a silent channel's
+| period, so nothing changes for a channel going quiet, and a note's own period is there before its volume; a tone's coarse register first when
+| it goes up, its fine one first otherwise: the chip never has a period shorter than the old and the new one), then the volumes that go down
+| (A, B, C), the mixer, and the volumes that go up or stay (C, B, A): a channel the mixer turns off is quiet first, one it turns on gets its
+| volume after.
+snd_write:
     movea.l #YM_SELECT, %a1
+    moveq #0, %d0
+95: move.b SND_OUT+1(%a0,%d0.w), %d1        | the coarse register
+    cmp.b SND_PREV+1(%a0,%d0.w), %d1
+    bls.s 96f
+    addq.b #1, %d0                          | it goes up: coarse, then fine
+    move.b %d0, (%a1)
+    move.b %d1, 2(%a1)
+    subq.b #1, %d0
+    move.b %d0, (%a1)
+    move.b SND_OUT(%a0,%d0.w), 2(%a1)
+    bra.s 97f
+96: move.b %d0, (%a1)                       | fine, then coarse
+    move.b SND_OUT(%a0,%d0.w), 2(%a1)
+    addq.b #1, %d0
+    move.b %d0, (%a1)
+    move.b %d1, 2(%a1)
+    subq.b #1, %d0
+97: addq.b #2, %d0
+    cmpi.b #6, %d0
+    bne.s 95b
+    move.b %d0, (%a1)
+    move.b SND_OUT+6(%a0), 2(%a1)
+    moveq #8, %d0
+91: move.b SND_OUT(%a0,%d0.w), %d1
+    cmp.b SND_PREV(%a0,%d0.w), %d1
+    bcc.s 92f                               | not lower
+    move.b %d0, (%a1)
+    move.b %d1, 2(%a1)
+92: addq.b #1, %d0
+    cmpi.b #11, %d0
+    bne.s 91b
     move.b #7, (%a1)
-    move.b #0xFF, 2(%a1)
+    move.b SND_OUT+7(%a0), 2(%a1)
+    moveq #10, %d0
+93: move.b SND_OUT(%a0,%d0.w), %d1
+    cmp.b SND_PREV(%a0,%d0.w), %d1
+    bcs.s 94f                               | lower: written already
+    move.b %d0, (%a1)
+    move.b %d1, 2(%a1)
+94: subq.b #1, %d0
+    cmpi.b #8, %d0
+    bcc.s 93b
+    rts
+
+| The volumes, then the mixer; with no interrupt between a select and its write (the VBL writes the chip too, and the value would go to the
+| register it selected). SND_OUT says so too: the next tick knows what the chip has.
+sound_silence:
+    movem.l %d0/%a0-%a1, -(%sp)
+    move.w %sr, -(%sp)
+    ori.w #0x0700, %sr
+    movea.l #YM_SELECT, %a1
+    lea snd_state+SND_OUT(%pc), %a0
     moveq #8, %d0
 1:  move.b %d0, (%a1)
     clr.b 2(%a1)
+    clr.b 0(%a0,%d0.w)
     addq.b #1, %d0
     cmp.b #11, %d0
     bne.s 1b
-    movem.l (%sp)+, %d0/%a1
+    move.b #7, (%a1)
+    move.b #0xFF, 2(%a1)
+    move.b #0xFF, 7(%a0)
+    move.w (%sp)+, %sr
+    movem.l (%sp)+, %d0/%a0-%a1
     rts
+
+    .text
 
     .ifndef NEWGAME                         | a test key: not in the disk build
 | Debug keys. A sound starts when its key goes down and the key is not the one that started the last (SND_LASTKEY).

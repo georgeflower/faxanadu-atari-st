@@ -40,10 +40,12 @@ import lz  # noqa: E402
 PAL_CPU = 1662607.0                             # the Europe NES; its sound engine's note table is tuned for it
 YM_CLOCK = 2000000.0
 FRAME = 12
-SONG_MAX = 15360                                # the player's buffer for the unpacked song (SND_SONG_MAX in src/sound.s); the biggest song is 15,304
+SONG_MAX = 15360                                # the player's buffer for the unpacked song (SND_SONG_MAX in src/sound.s); the biggest song is 12,018
 
 # the NES volume 0-15 as a YM2149 level (3 dB a step); the triangle has no volume, it sounds like a pulse about this loud
 TRIANGLE_LEVEL = 12
+# the triangle's first frame, and the last of a note of 3 frames or more, at this level (half the amplitude of 12): see triangle_levels
+TRIANGLE_EDGE = 10
 
 
 def ym_volume(v: int) -> int:
@@ -64,9 +66,9 @@ def noise_period(p: int) -> int:
     return min(31, max(1, round(p * YM_CLOCK / (16 * PAL_CPU))))
 
 
-def ym_frame(state: list) -> tuple[bytes, int]:
+def ym_frame(state: list, triangle_level: int = TRIANGLE_LEVEL) -> tuple[bytes, int]:
     """A recorded frame ([pulse1, pulse2, triangle, noise]) as the 11 YM registers and the channels that sound: (registers, bits).
-    The bits are 1 pulse 1, 2 pulse 2, 4 triangle, 8 noise."""
+    The bits are 1 pulse 1, 2 pulse 2, 4 triangle, 8 noise. triangle_level is channel C's level while the triangle sounds."""
     (p1, v1, _), (p2, v2, _), (pt, on), (pn, vn, _) = state
     regs = [0] * 11
     bits = 0
@@ -82,7 +84,7 @@ def ym_frame(state: list) -> tuple[bytes, int]:
     if on and pt:
         f = triangle_period(pt)
         regs[4], regs[5] = f & 255, f >> 8
-        volume_c = TRIANGLE_LEVEL
+        volume_c = triangle_level
         mixer &= ~4
         bits |= 4
     if vn > 0:
@@ -95,11 +97,54 @@ def ym_frame(state: list) -> tuple[bytes, int]:
     return bytes(regs), bits
 
 
+PERIODS = ((0, 2), (2, 4), (4, 6), (6, 7))       # the tone periods A, B, C and the noise period in a frame
+
+
+def hold_periods(frames: list[bytes], fill_leading: bool) -> list[bytes]:
+    """The frames with every period of 0 (a channel that is silent: the NES gives no period then) replaced by the last one before it, and with
+    fill_leading the zeros at the start by the first one after them (a channel never used gets 256). Nothing of that is heard: the volume is 0.
+    It keeps the chip from ever having a period of 0 (a tone of 125 kHz) or a period from a note long gone when a volume goes up before the
+    periods of its frame are written (src/sound.s writes the mixer and the volumes first), and it writes fewer registers."""
+    out = [bytearray(f) for f in frames]
+    for a, b in PERIODS:
+        last = None
+        if fill_leading:
+            last = next((f[a:b] for f in out if any(f[a:b])), None) or (b"\1" if b - a == 1 else b"\0\1")
+        for f in out:
+            if any(f[a:b]):
+                last = bytes(f[a:b])
+            elif last is not None:
+                f[a:b] = last
+    return [bytes(f) for f in out]
+
+
+def triangle_levels(states: list, edge: int = TRIANGLE_EDGE) -> list[int]:
+    """Channel C's level for the triangle in each frame. The NES triangle holds its output where it stops, so a note starts and ends with no
+    step; a YM square of level 12 goes from silence to an average of half its amplitude at once and back, a step (a thump) at every note's
+    edges. The first frame of a note, and the last of one of 3 frames or more, have the level `edge` (10: half the amplitude): the step comes
+    in two halves 20 ms apart. The note keeps its length and the frames between keep TRIANGLE_LEVEL; with the noise on channel C too the
+    louder of the two counts, as before (ym_frame)."""
+    on = [bool(s[2][1] and s[2][0]) for s in states]
+    out = [TRIANGLE_LEVEL] * len(on)
+    i = 0
+    while i < len(on):
+        j = i
+        while j < len(on) and on[j] == on[i]:
+            j += 1
+        if on[i]:
+            out[i] = edge
+            if j - i >= 3:
+                out[j - 1] = edge
+        i = j
+    return out
+
+
 def music_frames(rec: dict) -> list[bytes]:
     """A song's frames, up to where the ROM stopped it (Music_Current went to 0) or the end of the recording."""
     mc = rec["musicCurrent"]
     n = mc.index(0) if 0 in mc else len(mc)
-    frames = [ym_frame(s)[0] + b"\0" for s in rec["state"][:n]]
+    states = rec["state"][:n]
+    frames = [ym_frame(s, t)[0] + b"\0" for s, t in zip(states, triangle_levels(states))]
     if 0 in mc:                                 # a song that ends: its silence is cut and one silent frame ends it (the player goes quiet there)
         while frames and frames[-1][8:11] == b"\0\0\0":
             frames.pop()
@@ -160,7 +205,7 @@ def sfx_frames(rec: dict) -> list[bytes]:
                 mask |= 1 << b
         regs = bytearray(conv[i][0])
         out.append(bytes(regs) + bytes([mask]))
-    return out[1:]
+    return hold_periods(out[1:], False)
 
 
 def sfx_engine(rec: dict) -> tuple[int, int]:
@@ -280,6 +325,7 @@ def build(rec_dir: Path | None, n_music: int = 16, n_sfx: int = 28) -> tuple[byt
                         raise SystemExit(f"song {i} does not repeat within {len(frames)} frames: record it for longer")
                     loop = found[0]
                     frames = frames[:found[0] + found[1]]
+                frames = hold_periods(frames, True)
                 data = song_record(frames, loop)
             else:
                 frames, loop = sfx_frames(rec), None

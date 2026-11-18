@@ -180,8 +180,81 @@ def expected_window(rom: fr.Rom, area_index: int, screen: int, camera: int, line
 
 
 # ---------------------------------------------------------------------------------------------------------------------- HUD
-HUD_TILES_ST = 64
+HUD_TILES_ST = 65                   # the 60 of the ROM, the item box's four ($3C-$3F) and the point ($40)
+HUD_DOT, HUD_K, HUD_M = 0x40, 0x1A, 0x1C    # "." (the message font's, not among the ROM's HUD tiles), "K" and "M" (the HUD's own letters: A is $10)
+
+
+def short_number(value: int) -> str:
+    """Experience and gold as the ST's HUD shows them, in four characters (one line of four tiles in the right margin), right-aligned and rounded down
+    (never more than he has): 0-999 the number, 1,000-9,999 "1.0K" to "9.9K", 10,000-999,999 "10K" to "999K", 1,000,000-9,999,999 "1.0M" to "9.9M", and from
+    10,000,000 "10M" on (gold reaches 16,777,215: "16M"). "99.9K" and "1.00M" would take five tiles."""
+    if value < 1000:
+        text = str(value)
+    elif value < 10_000:
+        text = f"{value // 1000}.{value % 1000 // 100}K"
+    elif value < 1_000_000:
+        text = f"{value // 1000}K"
+    elif value < 10_000_000:
+        text = f"{value // 1_000_000}.{value % 1_000_000 // 100_000}M"
+    else:
+        text = f"{value // 1_000_000}M"
+    assert len(text) <= 4, text
+    return text.rjust(4)
+
+
+def short_tiles(value: int) -> list[int]:
+    """The four HUD tile ids of `short_number` (a blank is tile 0)."""
+    ids = {" ": 0, ".": HUD_DOT, "K": HUD_K, "M": HUD_M}
+    return [ids[c] if c in ids else gfx.DIGIT_0 + int(c) for c in short_number(value)]
+
+
+def st_hud_layout(hp: int, mp: int, experience: int, gold: int, seconds: int) -> list[list[int]]:
+    """The HUD's 128 tile ids as the ST makes them (src/hud.s hud_build): the game's (faxanadu_gfx.hud_layout), but experience and gold in four tiles each
+    (`short_tiles`: row 2 columns 17-20 and row 3 columns 19-22; the other digit columns stay blank and have no place)."""
+    rows = gfx.hud_layout(hp, mp, experience, gold, seconds)
+    rows[2][16:21] = [0] + short_tiles(experience)
+    rows[3][16:23] = [0, 0, 0] + short_tiles(gold)
+    return rows
+
+
+def dot_tile(rom: fr.Rom) -> bytes:
+    """The point of the message font (bank 13, character 46) as a HUD tile of 16 bytes: both planes, colour 3, as the HUD's own letters."""
+    import faxanadu_text as ft
+
+    glyph = ft.font(rom)[(ord(".") - 32) * 8:(ord(".") - 31) * 8]
+    return bytes(glyph) + bytes(glyph)
 HUD_START = dict(hp=16, mp=0, experience=0, gold=0, seconds=0)     # the game's state at the start of a new game
+BAR_TILES = {0x07, 0x08, 0x09, 0x0B, 0x0C, 0x0D}                   # empty, full (power, magic), the end, partial (power, magic): turned upright
+
+
+def _hud_places() -> dict[tuple[int, int], tuple[int, int]]:
+    """Where each tile of the NES HUD (row 2 or 3, column 0-31) goes on the ST: (column 0-39, tile row 0-24) of the 320x200 screen. The
+    playfield fills all 200 lines between x 32 and 287, so the HUD stands in the two margins of four columns: on the left the magic and the
+    power bars upright (columns 0 and 2) under "M" and "P" (filling from the bottom, the end tile on top) and the time "T:00" under them; on the right the item box,
+    "E:" and "G:", each with its value on one line of four tiles under it (`short_number`). Tiles not named are not drawn (the
+    NES's blanks). src/hud.s has the same table (hud_places)."""
+    places: dict[tuple[int, int], tuple[int, int]] = {}
+    places[(2, 1)] = (0, 2)                                             # M over the magic bar (the colons are left out: they would touch the
+    places[(3, 1)] = (2, 2)                                             # P over the power bar   playfield's edge)
+    for k in range(11):                                                 # the bars: the first tile at the bottom (row 13), the end on top (row 3)
+        places[(2, 3 + k)] = (0, 13 - k)
+        places[(3, 3 + k)] = (2, 13 - k)
+    for k in range(4):                                                  # T: and two digits
+        places[(2, 22 + k)] = (k, 15)
+    for k in range(4):                                                  # the item box
+        places[(2, 27 + k)] = (36 + k, 2)
+        places[(3, 27 + k)] = (36 + k, 3)
+    places[(2, 14)], places[(2, 15)] = (36, 5), (37, 5)                 # E: and the experience in four tiles under it (short_number)
+    for k in range(4):
+        places[(2, 17 + k)] = (36 + k, 6)
+    places[(3, 14)], places[(3, 15)] = (36, 8), (37, 8)                 # G: and the gold likewise
+    for k in range(4):
+        places[(3, 19 + k)] = (36 + k, 9)
+    return places
+
+
+HUD_PLACES = _hud_places()
+TRAINER_LINES = (176, 188)          # the trainer's two words (src/trainer.s), at x 0 in the left margin, under the HUD
 
 
 def ui_palette_row(rom: fr.Rom, palette_index: int) -> int:
@@ -203,20 +276,39 @@ def st_tile_image(raw: bytes, palette: list[int], plan: PalettePlan) -> bytes:
     return bytes(out)
 
 
+def rotate_bar_tile(img: bytes) -> bytes:
+    """A bar tile (32 bytes, 8 lines of four plane bytes) turned a quarter left: the bar that fills from the left fills from the bottom, its end
+    (on the right) is on top. The bars stand in the left margin (HUD_PLACES)."""
+    px = [[sum(((img[y * 4 + p] >> (7 - x)) & 1) << p for p in range(4)) for x in range(8)] for y in range(8)]
+    out = bytearray()
+    for y in range(8):
+        slots = [px[x][7 - y] for x in range(8)]         # new (x, y) = old (7 - y, x)
+        for plane in range(4):
+            byte = 0
+            for slot in slots:
+                byte = (byte << 1) | ((slot >> plane) & 1)
+            out.append(byte)
+    return bytes(out)
+
+
 def hud_tile_images(rom: fr.Rom, palette_index: int, plan: PalettePlan, hp: int, mp: int) -> bytes:
     """The HUD tiles for the ST: 8 lines of four plane bytes (32 bytes a tile), in the set's HUD palette. The 60 tiles of bank 10 are
-    followed by four blank ones: the item box uses tiles $3C-$3F for the item's picture, which is blank when no item is selected."""
+    followed by four blank ones: the item box uses tiles $3C-$3F for the item's picture, which is blank when no item is selected. The bar
+    tiles (BAR_TILES) are turned a quarter left: the bars stand upright in the left margin."""
     bg, _ = palette_set(rom, palette_index)
     palette = bg[ui_palette_row(rom, palette_index)]
-    out = b"".join(st_tile_image(raw, palette, plan) for raw in gfx.hud_tile_data(rom, hp, mp))
-    return out + bytes(32 * (HUD_TILES_ST - gfx.HUD_TILE_COUNT))
+    out = [st_tile_image(raw, palette, plan) for raw in gfx.hud_tile_data(rom, hp, mp)]
+    out = [rotate_bar_tile(img) if n in BAR_TILES else img for n, img in enumerate(out)]
+    out += [bytes(32)] * (HUD_DOT - gfx.HUD_TILE_COUNT) + [st_tile_image(dot_tile(rom), palette, plan)]
+    assert len(out) == HUD_TILES_ST
+    return b"".join(out)
 
 
 def hud_partial_images(rom: fr.Rom, palette_index: int, plan: PalettePlan) -> bytes:
     """The partial bar tile for every value & 7 (8 of 32 bytes), first of the power bar, then of the magic bar (its halves swapped)."""
     bg, _ = palette_set(rom, palette_index)
     palette = bg[ui_palette_row(rom, palette_index)]
-    return b"".join(st_tile_image(gfx.partial_tile(rom, v, bar), palette, plan) for bar in (0, 1) for v in range(8))
+    return b"".join(rotate_bar_tile(st_tile_image(gfx.partial_tile(rom, v, bar), palette, plan)) for bar in (0, 1) for v in range(8))
 
 
 def hud_state_bytes(state: dict) -> bytes:
@@ -231,33 +323,53 @@ def title_table_bytes(rom: fr.Rom) -> bytes:
     return b"".join(w.to_bytes(2, "big") for w in words)
 
 
-def hud_pixels(rom: fr.Rom, palette_index: int, plan: PalettePlan, state: dict | None = None) -> list[list[int]]:
-    """The HUD's 32 lines of 256 pixels as slot numbers."""
+def hud_tile_pixels(rom: fr.Rom, palette_index: int, plan: PalettePlan, state: dict | None = None) -> dict[int, list[list[int]]]:
+    """The ST pictures of the HUD's tiles (as slot numbers) for a state: {tile: 8x8}, the bar tiles upright, the item box's inner tiles the
+    item's picture when the state has one."""
     state = state or HUD_START
-    layout = gfx.hud_layout(state["hp"], state["mp"], state["experience"], state["gold"], state["seconds"])
     bg, _ = palette_set(rom, palette_index)
     palette = bg[ui_palette_row(rom, palette_index)]
     tiles = [rs.decode_tile(t) for t in gfx.hud_tile_data(rom, state["hp"], state["mp"])]
-    if state.get("item") is not None:                # the selected item's picture in the item box (tiles $3C-$3F), as the ROM's UI_DrawSelectedItem puts it
+    if state.get("item") is not None:
         import iscripts as isc
 
         picture_tiles, pictures = isc.item_pictures(rom)
         tiles += [rs.decode_tile(picture_tiles[n]) for n in pictures[isc.ITEM_FIRST[4] + state["item"]]]
-    rows = [[0] * 256 for _ in range(32)]
-    for r in range(4):
-        for c in range(32):
-            tile = layout[r][c]
-            px = tiles[tile] if tile < len(tiles) else rs.BLANK_TILE
-            for y in range(8):
-                for x in range(8):
-                    rows[r * 8 + y][c * 8 + x] = plan.slot[palette[px[y][x]] & 0x3F]
-    return rows
+    tiles += [rs.BLANK_TILE] * (HUD_DOT - len(tiles)) + [rs.decode_tile(dot_tile(rom))]
+    out = {}
+    for n, px in enumerate(tiles):
+        img = [[plan.slot[palette[v] & 0x3F] for v in row] for row in px]
+        if n in BAR_TILES:
+            img = [[img[x][7 - y] for x in range(8)] for y in range(8)]
+        out[n] = img
+    return out
+
+
+def draw_hud(out: list[list[int]], rom: fr.Rom, palette_index: int, plan: PalettePlan, state: dict | None = None) -> None:
+    """The HUD into a 320x200 picture (slot numbers): its tiles at their places in the side margins (HUD_PLACES)."""
+    state = state or HUD_START
+    layout = st_hud_layout(state["hp"], state["mp"], state["experience"], state["gold"], state["seconds"])
+    tiles = hud_tile_pixels(rom, palette_index, plan, state)
+    for (r, c), (col, row) in HUD_PLACES.items():
+        px = tiles.get(layout[r][c], rs.BLANK_TILE)
+        for y in range(8):
+            out[row * 8 + y][col * 8:col * 8 + 8] = px[y]
+
+
+def hud_margins(rom: fr.Rom, palette_index: int, plan: PalettePlan, state: dict | None = None) -> list[list[int]]:
+    """The whole screen with only the HUD on it (the margins; the playfield black)."""
+    out = [[0] * 320 for _ in range(200)]
+    draw_hud(out, rom, palette_index, plan, state)
+    return out
 
 
 # -------------------------------------------------------------------------------------------------------------------- hero
 SPRITE_IMAGE_BYTES = 40     # 8 lines of: mask, plane 0, plane 1, plane 2, plane 3 (one byte each, leftmost pixel in the top bit)
 ST_LEFT = 32                # the playfield's left edge on the 320-pixel screen
-ST_TOP = 32                 # the first line below the HUD
+ST_TOP = 0                  # the screen line of the window's first line (the HUD is in the side margins: the playfield has all 200 lines)
+WINDOW_LINES = 200          # the playfield's lines on show: 200 of 208, from line `camera`
+CAMERA_MAX = 8              # the camera: 0 (lines 0-199) or 8 (lines 8-207)
+SPRITE_DY = ST_TOP - fs.HUD_LINES   # a sprite's ST line is its NES screen line (the 32-line HUD included) + this - the camera
 
 
 @dataclass(frozen=True)
@@ -321,7 +433,7 @@ def hero_assets(rom: fr.Rom, hero: Hero, palette_index: int, plan: PalettePlan, 
         if key not in index:
             index[key] = len(images)
             images.append(sprite_image(tiles.get(s.tile, bytes(16)), key[2], palettes[key[1]], plan))
-        entries += (s.x + ST_LEFT).to_bytes(2, "big") + (s.y + 1 - camera).to_bytes(2, "big", signed=True) + index[key].to_bytes(2, "big")
+        entries += (s.x + ST_LEFT).to_bytes(2, "big") + (s.y + 1 + SPRITE_DY - camera).to_bytes(2, "big", signed=True) + index[key].to_bytes(2, "big")
     entries += b"\xff\xff"
     return bytes(entries), b"".join(images)
 
@@ -375,7 +487,7 @@ def hero_equip_assets(rom: fr.Rom) -> bytes:
                 entries = []
                 for sp in sprites:
                     assert sp.attr & 3 < 2 and not sp.attr & 0xBC and sp.tile < 64, sp
-                    entries.append((sp.x - ANIM_BASE + ST_LEFT, sp.y + 1 - ANIM_BASE, sp.tile * 4 + (sp.attr & 3) * 2 + (1 if sp.attr & 0x40 else 0)))
+                    entries.append((sp.x - ANIM_BASE + ST_LEFT, sp.y + 1 - ANIM_BASE + SPRITE_DY, sp.tile * 4 + (sp.attr & 3) * 2 + (1 if sp.attr & 0x40 else 0)))
                 table.append(entries)
         return _pose_table(table)
 
@@ -463,7 +575,7 @@ def magic_anim_assets(rom: fr.Rom, palette_index: int, plan: PalettePlan, burst_
                 piece = n - MAGIC_APPEARANCES
                 flags = (sp.attr >> 6) & 3                                 # (burst_make's: bit 0 left-right, the attribute's bit 6; bit 1 upside down, bit 7)
                 assert sp.tile == first[q ^ flags].tile and not sp.attr & 3 and flags == (0, 2, 1, 3)[piece]
-                entries.append((sp.x - ANIM_BASE + ST_LEFT, sp.y + 1 - ANIM_BASE, 4 * piece + q))
+                entries.append((sp.x - ANIM_BASE + ST_LEFT, sp.y + 1 - ANIM_BASE + SPRITE_DY, 4 * piece + q))
                 continue
             key = (sp.tile, sp.attr & 3, bool(sp.attr & 0x40), bool(sp.attr & 0x80))
             if key not in index:
@@ -475,7 +587,7 @@ def magic_anim_assets(rom: fr.Rom, palette_index: int, plan: PalettePlan, burst_
                         kept[picture] = len(images)
                         images.append(picture)
                     index[key] = kept[picture]
-            entries.append((sp.x - ANIM_BASE + ST_LEFT, sp.y + 1 - ANIM_BASE, index[key]))
+            entries.append((sp.x - ANIM_BASE + ST_LEFT, sp.y + 1 - ANIM_BASE + SPRITE_DY, index[key]))
         x0, y0 = min(e[0] for e in entries), min(e[1] for e in entries)
         box = (x0, max(e[0] for e in entries) + 8, y0, max(e[1] for e in entries) + 8)
         record = b"".join(v.to_bytes(2, "big", signed=True) for v in box)
@@ -505,6 +617,14 @@ def hero_weapon_assets(rom: fr.Rom, hero: Hero) -> bytes:
     return bytes(out)
 
 
+def _put_hero(out: list[list[int]], rom: fr.Rom, hero: Hero | None, pal: int, plan: PalettePlan, camera: int) -> None:
+    if hero is not None:
+        for (x, line), slot in hero_layer(rom, hero, pal, plan).items():
+            y = line + SPRITE_DY - camera
+            if ST_TOP <= y < 200 and ST_LEFT <= x < ST_LEFT + 256:
+                out[y][x] = slot
+
+
 def expected_scroll_screen(rom: fr.Rom, area_index: int, from_screen: int, to_screen: int, offset: int, to_the_right: bool, camera: int,
                            state: dict | None = None, hero: Hero | None = None, tiles_index: int | None = None) -> list[list[int]]:
     """The ST screen while the picture has moved `offset` pixels (0-256, a multiple of 16) from one screen to the one on its right or left:
@@ -512,18 +632,14 @@ def expected_scroll_screen(rom: fr.Rom, area_index: int, from_screen: int, to_sc
     a = fm.area(rom, area_index)
     pal = a.palette_index
     plan = plan_for_set(rom, pal)
-    old = expected_window(rom, area_index, from_screen, camera, 168)
-    new = expected_window(rom, area_index, to_screen, camera, 168)
+    old = expected_window(rom, area_index, from_screen, camera, WINDOW_LINES)
+    new = expected_window(rom, area_index, to_screen, camera, WINDOW_LINES)
     out = expected_screen(rom, area_index, from_screen, camera, state=state)
-    for y in range(168):
+    for y in range(WINDOW_LINES):
         row = old[y] + new[y] if to_the_right else new[y] + old[y]
         start = offset if to_the_right else 256 - offset
-        out[32 + y][32:288] = row[start:start + 256]
-    if hero is not None:
-        for (x, line), slot in hero_layer(rom, hero, pal, plan).items():
-            y = line - camera
-            if ST_TOP <= y < 200 and ST_LEFT <= x < ST_LEFT + 256:
-                out[y][x] = slot
+        out[ST_TOP + y][32:288] = row[start:start + 256]
+    _put_hero(out, rom, hero, pal, plan, camera)
     return out
 
 
@@ -539,33 +655,23 @@ def expected_vscroll_screen(rom: fr.Rom, area_index: int, from_screen: int, to_s
     new = expected_window(rom, area_index, to_screen, 0, 208)
     both = old + new if going_down else new + old
     out = expected_screen(rom, area_index, from_screen, camera, state=state)
-    for y in range(168):
-        out[32 + y][32:288] = both[top + y]
-    if hero is not None:
-        for (x, line), slot in hero_layer(rom, hero, pal, plan).items():
-            y = line - camera
-            if ST_TOP <= y < 200 and ST_LEFT <= x < ST_LEFT + 256:
-                out[y][x] = slot
+    for y in range(WINDOW_LINES):
+        out[ST_TOP + y][32:288] = both[top + y]
+    _put_hero(out, rom, hero, pal, plan, camera)
     return out
 
 
 def expected_screen(rom: fr.Rom, area_index: int, screen: int, camera: int, palette_index: int | None = None,
                     state: dict | None = None, hero: Hero | None = None, tiles_index: int | None = None, patch: dict[int, int] | None = None) -> list[list[int]]:
-    """The whole 320x200 ST screen as slot numbers: the HUD in lines 0-31, then the playfield window of 168 lines, both 256 wide
-    and 32 pixels from the left."""
+    """The whole 320x200 ST screen as slot numbers: the playfield window of 200 lines from line `camera`, 256 wide and 32 pixels from the
+    left, and the HUD in the two side margins (HUD_PLACES)."""
     a = fm.area(rom, area_index)
     pal = a.palette_index if palette_index is None else palette_index
     plan = plan_for_set(rom, pal)
-    hud = hud_pixels(rom, pal, plan, state)
-    window = expected_window(rom, area_index, screen, camera, 168, palette_index, tiles_index=tiles_index, patch=patch)
+    window = expected_window(rom, area_index, screen, camera, WINDOW_LINES, palette_index, tiles_index=tiles_index, patch=patch)
     out = [[0] * 320 for _ in range(200)]
-    for y in range(32):
-        out[y][32:288] = hud[y]
-    for y in range(168):
-        out[32 + y][32:288] = window[y]
-    if hero is not None:
-        for (x, line), slot in hero_layer(rom, hero, pal, plan).items():
-            y = line - camera
-            if ST_TOP <= y < 200 and ST_LEFT <= x < ST_LEFT + 256:
-                out[y][x] = slot
+    draw_hud(out, rom, pal, plan, state)
+    for y in range(WINDOW_LINES):
+        out[ST_TOP + y][32:288] = window[y]
+    _put_hero(out, rom, hero, pal, plan, camera)
     return out

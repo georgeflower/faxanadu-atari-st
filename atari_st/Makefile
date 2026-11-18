@@ -89,10 +89,10 @@ overscan:
 	$(PYTHON) $(TOOLS_DIR)/make_prg.py $(BUILD_DIR)/overscan.bin $(OVERSCAN_PRG)
 
 # The viewer: one screen of the game on the ST, from your ROM (ext/Faxanadu_Europe.nes).
-#   make viewer AREA=0 SCREEN=1 CAMERA=40
+#   make viewer AREA=0 SCREEN=1 CAMERA=0
 AREA ?= 0
 SCREEN ?= 1
-CAMERA ?= 40
+CAMERA ?= 0
 # the hero: x,y,armour,shield,weapon,frame,faces-left (default: after the castle door, start equipment)
 HERO ?= 144,144,0,255,0,0,1
 # the HUD drawn first and the state drawn over it: power,magic,experience,gold,seconds

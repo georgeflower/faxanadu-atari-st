@@ -367,7 +367,7 @@ class GameTests(unittest.TestCase):
 
     def test_up_on_a_ladder_climbs_a_little_at_a_time_and_does_not_jump(self) -> None:
         """Mist screen 0: the ladder in column 2; he hangs on it at y 170. Up held: 5/8 of a pixel a frame (a jump would start with 8)."""
-        run = tf.Run(["AREA=2", "SCREEN=0", "CAMERA=40", "HERO=32,170,0,255,0,0,1", f"VIEWER_DEFS={self.DEFS}"], [(self.UP_AT, "joy", UP), (640, "joy", 0)],
+        run = tf.Run(["AREA=2", "SCREEN=0", "CAMERA=8", "HERO=32,170,0,255,0,0,1", f"VIEWER_DEFS={self.DEFS}"], [(self.UP_AT, "joy", UP), (640, "joy", 0)],
                      [600] + list(range(604, 616)) + [630], "shots_jp_ladder")
         ys = self.ys(run)
         self.assertEqual(ys[0], 170, "he hangs on the ladder")

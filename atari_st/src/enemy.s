@@ -3475,6 +3475,7 @@ water_frame:                                | SPRITE_FOUNTAIN_PHASES by (counter
     moveq #0, %d5
     move.b E_Y(%a3), %d5
     sub.w camera(%pc), %d5
+    subi.w #ENEMY_POSE_DY, %d5              | (the poses' lines are bytes with the NES's 32 HUD lines in them: tools/enemy_data.py)
     moveq #0, %d0
     move.b (%a5)+, %d0                      | the pose's box: four bytes
     add.w %d4, %d0

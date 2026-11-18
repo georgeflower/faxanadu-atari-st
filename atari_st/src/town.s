@@ -10,9 +10,9 @@
 | The code is in .text.early (see link.ld); the tables and variables are in .data.
 |
 | The box. Where the NES has it (X = 10, W = 20, H = 8 tiles: 80 pixels in from the left of the 256-pixel playfield, 160 wide) it is group 7 here (x = 112, the
-| playfield starts 32 pixels in); it is 48 high (four lines of text, BOX_PITCH apart) and sits in the window near the top (y = 40) when the hero stands $40 or
-| more below the window's first line (y - camera; the ROM: y $40 or more), else at the bottom (y = 144), as the ROM moves it out of his way (its Y = 6 or 16 tiles; at camera 40 line 16 of the playfield would be half under the HUD,
-| so the window's own top and bottom are used); with a portrait it is always at the bottom (the ROM's Y = 16). The text area is 16 columns by 4 lines at the box's
+| playfield starts 32 pixels in); it is 48 high (four lines of text, BOX_PITCH apart) and sits in the window near the top (y = 8) when the hero stands $40 or
+| more below the window's first line (y - camera; the ROM: y $40 or more), else at the bottom (y = 144), as the ROM moves it out of his way (its Y = 6 or 16 tiles;
+| the window's own top and bottom are used, 8 lines in); with a portrait it is always at the bottom (the ROM's Y = 16). The text area is 16 columns by 4 lines at the box's
 | x + 16, y + 4. A blinking arrow (down: more after a button, up: the end, a question mark: yes or no) is in the last column's place right of the text, in the bottom line.
 |
 | The text. One byte of the message every four frames (`TextBox_ShowNextChar`: the timer is counted each frame, a byte is read when it is a multiple of 4), sound 1 for a
@@ -24,8 +24,8 @@
     .equ TB_GROUP, 7                        | the box's first group of 16 pixels (x = 112)
     .equ TB_GROUPS, 10                      | its width: 160 pixels
     .equ TB_HEIGHT, 4*BOX_PITCH+8           | and height
-    .equ TB_TOP, HUD_LINES+8                | its y near the top of the window,
-    .equ TB_BOTTOM, HUD_LINES+WINDOW_LINES-TB_HEIGHT-8 | and at the bottom
+    .equ TB_TOP, WIN_TOP+8                | its y near the top of the window,
+    .equ TB_BOTTOM, WIN_TOP+WINDOW_LINES-TB_HEIGHT-8 | and at the bottom
     .equ TB_COLS, 16
     .equ TB_ROWS, 4
     .equ TB_TEXT_X, 16*TB_GROUP+16          | where the text starts (a group of 16 pixels)
@@ -113,7 +113,7 @@ iscript_run:
     tst.b %d0
     bmi.s 2f
     move.w hero_y(%pc), %d2
-    sub.w camera(%pc), %d2                  | his place in the window: with the camera at 40 he can stand above the ROM's $40 (camera_follow)
+    sub.w camera(%pc), %d2                  | his place in the window: with the camera at 8 he can stand above the ROM's $40 (camera_follow)
     cmpi.w #0x40, %d2
     blt.s 2f
     move.w #TB_TOP, %d1

@@ -149,16 +149,16 @@ splash_load:
     move.l %d0, %d4                         | the size
     movea.l %a0, %a3                        | the name
     bsr.w loading_show
+    move.w %sr, -(%sp)
+    ori.w #0x0700, %sr                      | no VBL of ours between the silence and TOS's vector (load_package)
     bsr.w sound_silence
     move.l old_vbl(%pc), %d2
     beq.s 8f
     lea saved_vbl(%pc), %a1
-    move.w %sr, -(%sp)
-    ori.w #0x0700, %sr
     move.l VBL_VECTOR, (%a1)
     move.l %d2, VBL_VECTOR
-    move.w (%sp)+, %sr
-8:  moveq #-1, %d3                          | the result
+8:  move.w (%sp)+, %sr
+    moveq #-1, %d3                          | the result
     clr.w -(%sp)                            | Fopen(name, read)
     move.l %a3, -(%sp)
     move.w #0x3D, -(%sp)

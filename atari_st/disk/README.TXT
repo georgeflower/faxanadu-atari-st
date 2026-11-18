@@ -33,4 +33,7 @@ back.
 
 Not as in the game: the timing of the
 intro, the ending and the fades is
-approximate.
+approximate. The status bar is in the
+side margins, so the whole screen
+height is on show; experience and gold
+are shortened (1.0K, 10K, 1.0M).

@@ -97,20 +97,20 @@ sv_choose:
 | The disk is about to be used / is done with. Keep every register.
 sv_disk_on:
     movem.l %d0/%a0-%a1, -(%sp)
-    bsr.w sound_silence
     lea sv_crit_old(%pc), %a0
     move.l ETV_CRITIC, (%a0)
     lea sv_crit(%pc), %a1
     move.l %a1, ETV_CRITIC
+    move.w %sr, -(%sp)
+    ori.w #0x0700, %sr                      | no VBL of ours between the silence and TOS's vector (load_package)
+    bsr.w sound_silence
     move.l old_vbl(%pc), %d0
     beq.s 1f
     lea saved_vbl(%pc), %a1
-    move.w %sr, -(%sp)
-    ori.w #0x0700, %sr
     move.l VBL_VECTOR, (%a1)
     move.l %d0, VBL_VECTOR
-    move.w (%sp)+, %sr
-1:  movem.l (%sp)+, %d0/%a0-%a1
+1:  move.w (%sp)+, %sr
+    movem.l (%sp)+, %d0/%a0-%a1
     rts
 
 sv_disk_off:

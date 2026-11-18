@@ -53,7 +53,7 @@ class BoxTests(unittest.TestCase):
             end = shots[stages.index(0)][0]
             for i in range(stages.index(0)):
                 rows = shots[i][0]
-                differ = sum(rows[y][x] != end[y][x] for y in range(40, 88) for x in range(112, 272))
+                differ = sum(rows[y][x] != end[y][x] for y in range(8, 56) for x in range(112, 272))      # (the box at the top of the window: town.s TB_TOP)
                 if stages[i] is None and differ > 2000:
                     stages[i] = "box"
         self.assert_sequence(stages, first, 1)
@@ -78,7 +78,7 @@ class BoxTests(unittest.TestCase):
         pal = fm.area(self.rom, 1).palette_index
         plan = sc.plan_for_set(self.rom, pal)
         plain = sc.expected_screen(self.rom, 1, 12, camera, state=self.STATE)
-        hero = {(x, line - camera) for (x, line) in sc.hero_layer(self.rom, sc.Hero(40, 160, 0, 255, 255, word0("hero_frame"), True), pal, plan)}
+        hero = {(x, line + sc.SPRITE_DY - camera) for (x, line) in sc.hero_layer(self.rom, sc.Hero(40, 160, 0, 255, 255, word0("hero_frame"), True), pal, plan)}
         sprites = {(x, y) for y in range(sc.ST_TOP, 200) for x in range(32, 288) if before[y][x] != plain[y][x]}
         self.assertGreater(len(sprites - hero), 60, "the Hornet is on the screen before the menu")
         self.assertTrue(hero <= sprites or len(hero - sprites) < 40, "and the hero")

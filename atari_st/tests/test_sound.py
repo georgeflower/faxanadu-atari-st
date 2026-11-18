@@ -123,6 +123,53 @@ class ConverterTests(unittest.TestCase):
         self.assertEqual(regs[7], 0xFF & ~0x20 & ~4)                                    # both
         self.assertEqual(regs[10], max(bs.TRIANGLE_LEVEL, bs.ym_volume(10)))
 
+    def test_the_triangle_comes_and_goes_in_two_steps(self) -> None:
+        """The first frame of a triangle note, and the last of one of 3 frames or more, are at TRIANGLE_EDGE (half the amplitude of
+        TRIANGLE_LEVEL): the step of channel C's average comes in two halves. The note keeps its frames."""
+        def tri(pattern):                                   # "x" a frame with the triangle, "." one without
+            return [[[0, 0, 0], [0, 0, 0], [155, 1] if c == "x" else [0, 0], [4, 0, 0]] for c in pattern]
+        E, L = bs.TRIANGLE_EDGE, bs.TRIANGLE_LEVEL
+        self.assertEqual(bs.triangle_levels(tri(".xxxxx..x.xx.xxx")),
+                         [L, E, L, L, L, E, L, L, E, L, E, L, L, E, L, E])
+        self.assertEqual(bs.triangle_levels(tri("xxxx")), [E, L, L, E])
+        self.assertLess(bs.ym_volume(15) - E, 15)
+        self.assertAlmostEqual(10 ** ((E - L) * 3 / 20), 0.5, delta=0.01)   # 6 dB: half the amplitude
+        states = tri("..xxxxx..xx..") + [[[0, 0, 0], [0, 0, 0], [155, 1], [32, 4, 0]]] * 3 + tri("x..")
+        frames = bs.music_frames({"musicCurrent": [7] * len(states), "state": states})
+        plain = [bs.ym_frame(s)[0] for s in states]
+        self.assertEqual([f[:10] for f in frames], [f[:10] for f in plain])            # periods and mixer: the note's length is the ROM's
+        self.assertEqual([f[10] for f in frames], [0, 0, E, L, L, L, E, 0, 0, E, L, 0, 0]
+                         + [max(E, bs.ym_volume(4)), L, L, E, 0, 0])               # one note of 4 frames, the noise on its first 3
+        # the noise louder than the triangle: it decides channel C's level, as before
+        loud = [[[0, 0, 0], [0, 0, 0], [155, 1], [32, 12, 0]]]
+        self.assertEqual(bs.music_frames({"musicCurrent": [7], "state": loud})[0][10], bs.ym_volume(12))
+
+    def test_no_song_steps_the_triangle_at_once(self) -> None:
+        """In the built songs (when there are any) channel C never goes between silence and the full triangle in one frame while the noise
+        is off: its average moves by half a step at most. Effects have no triangle."""
+        built = ROOT / "build" / "generated" / "sound.bin"
+        if not built.is_file():
+            self.skipTest("no sound.bin built")
+        data = bs.unpack_songs(built.read_bytes())
+        n_music = struct.unpack_from(">H", data, 0)[0]
+        if not n_music:
+            self.skipTest("built without sound")
+        offsets = [struct.unpack_from(">L", data, 4 + 4 * i)[0] for i in range(n_music)]
+        tone_c = lambda f: not f[7] & 4 and f[7] & 0x20          # the triangle alone on C
+        notes = 0
+        for i in range(n_music):
+            frames = bs.parse_song(data, offsets[i])
+            for k, (a, b) in enumerate(zip(frames, frames[1:])):
+                if tone_c(b) and b[10]:
+                    self.assertGreaterEqual(b[10], bs.TRIANGLE_EDGE, f"song {i + 1}, frame {k + 1}")
+                for x, y in ((a, b), (b, a)):
+                    if not y[10] and tone_c(x):
+                        notes += x is b
+                        self.assertEqual(x[10], bs.TRIANGLE_EDGE, f"song {i + 1}, frame {k + 1}: the triangle starts or ends at once")
+        self.assertGreater(notes, 1000)
+        for k, f in effects_of(data).items():
+            self.assertFalse(any(not g[7] & 4 and g[11] & 4 for g in f[2]), f"effect {k} has a triangle")
+
     def test_the_loop_is_found_in_the_middle_of_jitter(self) -> None:
         frames = [bs.ym_frame(s)[0] + b"\0" for s in song_states()]
         self.assertEqual(bs.find_loop(frames), (40, 20))
@@ -139,7 +186,8 @@ class ConverterTests(unittest.TestCase):
         frames, loop_left, loop_offset = struct.unpack_from(">HHL", data, offsets[0])
         self.assertEqual((frames, loop_left), (60, 20))
         self.assertEqual(info["m1"][:2], (60, 40))
-        expected = [bs.ym_frame(s)[0] for s in song_states()[:60]]
+        states = song_states()[:60]
+        expected = bs.hold_periods([bs.ym_frame(s, t)[0] for s, t in zip(states, bs.triangle_levels(states))], True)   # see hold_periods
         self.assertEqual(bs.parse_song(data, offsets[0]), expected)
         # the loop point is stored whole: the 68000 jumps there without having seen the frames before
         self.assertEqual(data[offsets[0] + 8 + loop_offset], 0xFF)
@@ -154,6 +202,29 @@ class ConverterTests(unittest.TestCase):
         self.assertEqual(len(parsed), frames)
         self.assertNotEqual(parsed[-2][8:11], b"\0\0\0")
         self.assertEqual(parsed[-1][7:11], b"\xFF\0\0\0")
+
+    def test_no_frame_holds_a_level_or_has_a_period_of_0(self) -> None:
+        """A channel with tone and noise both off and a volume is a held level (a step in the output: a click); a period of 0 is a tone of
+        125 kHz. No song frame and no frame of an effect's own channels has either (the songs of the ROM too when they have been built)."""
+        with tempfile.TemporaryDirectory() as d:
+            write_recordings(Path(d))
+            data, _ = bs.build(Path(d), 2, 3)
+        sets = [data]
+        built = ROOT / "build" / "generated" / "sound.bin"
+        if built.is_file():
+            sets.append(bs.unpack_songs(built.read_bytes()))
+        for data in sets:
+            n_music, n_sfx = struct.unpack_from(">HH", data, 0)
+            offsets = [struct.unpack_from(">L", data, 4 + 4 * i)[0] for i in range(n_music + n_sfx)]
+            frames = [(f"song {i + 1}", f, 7) for i in range(n_music) for f in bs.parse_song(data, offsets[i])]
+            for k, f in effects_of(data).items():
+                frames += [(f"effect {k}", g, g[11]) for g in f[2]]
+            for name, f, owned in frames:
+                for c in range(3):
+                    if owned >> c & 1 or (c == 2 and owned & 8):
+                        self.assertFalse(f[8 + c] and f[7] >> c & 1 and f[7] >> (c + 3) & 1, f"{name}: channel {'ABC'[c]} held at a level")
+                    if owned >> c & 1 and (f[8 + c] or owned == 7):
+                        self.assertTrue(f[2 * c] or f[2 * c + 1], f"{name}: channel {'ABC'[c]} with a period of 0")
 
     def test_a_sound_effect_takes_the_channels_it_uses_from_its_first_sound_to_its_last(self) -> None:
         frames = bs.sfx_frames({"state": [silent()] + sfx_states() + [silent()] * 5})
@@ -383,14 +454,82 @@ class PlayerTests(unittest.TestCase):
         self.assertEqual(self.out(mc), b"\0" * 7 + b"\xFF" + b"\0\0\0")
         self.assertEqual(mc.mem.r8(0xFF8802), 0)                                      # nothing was sent to the chip
 
+    def chip_writes(self, mc, name: str, d0: int = 0) -> list[tuple[int, int]]:
+        """(register, value) of every write to the chip that routine `name` makes (a write to $FF8802 goes to the register last selected)."""
+        log = []
+        mc.mem.set_trace_mode(True)
+        mc.mem.set_trace_func(lambda *a: log.append(a))
+        self.call(mc, name, d0=d0)
+        mc.mem.set_trace_mode(False)
+        sel, out = None, []
+        for kind, _, addr, val in log:
+            if kind == "W" and addr == 0xFF8800:
+                sel = val
+            elif kind == "W" and addr == 0xFF8802:
+                out.append((sel, val))
+        return out
+
     def test_the_chip_is_given_registers_0_to_10_and_not_the_floppy_lines(self) -> None:
         mc = self.machine()
         self.call(mc, "sound_init", a0=BIN_AT, a1=SONG_AT)
         self.call(mc, "sound_play_music", d0=1)
-        mem = mc.mem
-        self.call(mc, "sound_tick")
-        self.assertEqual(mem.r8(0xFF8800), 10)                                        # the last register selected
-        self.assertEqual(mem.r8(0xFF8802), self.out(mc)[10])
+        for _ in range(30):
+            writes = self.chip_writes(mc, "sound_tick")
+            self.assertEqual(sorted(r for r, _ in writes), list(range(11)))             # each of 0-10 once a tick, never 14 (the floppy lines)
+            self.assertEqual(dict(writes), dict(enumerate(self.out(mc))))
+
+    def test_no_write_order_makes_a_click(self) -> None:
+        """Between two writes of a tick the chip must never hold a state that neither the frame before nor the frame after has: a channel's
+        average level (its volume, halved by the tone or the noise, a quarter by both, whole when both are off: the level is held) stays between
+        its level before and after, and a tone that sounds has a period no shorter than its old and its new one. The song and its effects, ticked
+        frame by frame (the old order, registers 0 to 10, held the mixer's "off" at the old volume for some microseconds at every note's end)."""
+        def level(regs, c):
+            vol = regs[8 + c]
+            tone, noise = not regs[7] >> c & 1, not regs[7] >> (c + 3) & 1
+            return vol * (0.25 if tone and noise else 0.5 if tone or noise else 1.0)
+
+        for requests in ([], [(12, 1)], [(5, 2), (30, 3)]):
+            mc = self.machine()
+            self.call(mc, "sound_init", a0=BIN_AT, a1=SONG_AT)
+            self.call(mc, "sound_play_music", d0=1)
+            chip = [0] * 7 + [0xFF, 0, 0, 0]
+            for t in range(140):
+                for at, sfx in requests:
+                    if at == t:
+                        self.call(mc, "sound_play_sfx", d0=sfx)
+                before = list(chip)
+                writes = self.chip_writes(mc, "sound_tick")
+                after = list(self.out(mc))
+                for i, (reg, val) in enumerate(writes):
+                    chip[reg] = val
+                    for c in range(3):
+                        lo, hi = sorted((level(before, c), level(after, c)))
+                        if not lo <= level(chip, c) <= hi:
+                            # a channel whose volume and mixer bits both change cannot go in one write: then the two writes come one after the other
+                            pair = {reg, writes[i + 1][0]} if i + 1 < len(writes) else set()
+                            self.assertEqual(pair, {7, 8 + c}, f"tick {t}, after the write of register {reg}: channel {'ABC'[c]}")
+                        period = lambda r: r[2 * c] | r[2 * c + 1] << 8
+                        if chip[8 + c] and not chip[7] >> c & 1:
+                            self.assertGreaterEqual(period(chip), min(period(before), period(after)) or 1, f"tick {t}, register {reg}")
+                self.assertEqual(chip, after)
+                for c in range(3):
+                    self.assertFalse(after[8 + c] and after[7] >> c & 1 and after[7] >> (c + 3) & 1, f"tick {t}: channel {'ABC'[c]} held at a level")
+
+    def test_sound_silence_is_not_split_by_the_vbl(self) -> None:
+        """sound_silence runs outside the VBL (before a disk access): a VBL between a select and its write would send the value to another
+        register. It masks the interrupts, and it tells the player what the chip has now (SND_OUT), so the next tick turns no channel on in the
+        wrong order."""
+        mc = self.machine()
+        self.call(mc, "sound_init", a0=BIN_AT, a1=SONG_AT)
+        self.call(mc, "sound_play_music", d0=1)
+        for _ in range(5):
+            self.call(mc, "sound_tick")
+        writes = self.chip_writes(mc, "sound_silence")
+        self.assertEqual(writes, [(8, 0), (9, 0), (10, 0), (7, 0xFF)])                 # the volumes first, then the mixer
+        out = self.out(mc)
+        self.assertEqual(out[7:11], b"\xFF\0\0\0")
+        image = self.image[self.sym["sound_silence"] - LOAD:self.sym["sound_silence"] - LOAD + 16]
+        self.assertIn(bytes.fromhex("007c0700"), image, "ori.w #$0700, %sr before the first write")
 
 
 def sfx_recordings() -> Path:
@@ -460,8 +599,10 @@ class EngineInTheRomTests(unittest.TestCase):
                 mask = frame[11] if frame else 0
                 for bit, idx, vol in channels:
                     if mask >> bit & 1:
-                        self.assertEqual([frame[k] for k in idx + (vol,)], [regs[k] for k in idx + (vol,)], f"{key}: frame {j}, channel {bit}")
-                if mask & 8:
+                        self.assertEqual(frame[vol], regs[vol], f"{key}: frame {j}, channel {bit}")
+                        if regs[vol]:                       # a silent channel keeps its last period (build_sound.hold_periods): not heard
+                            self.assertEqual([frame[k] for k in idx], [regs[k] for k in idx], f"{key}: frame {j}, channel {bit}")
+                if mask & 8 and not regs[7] & 0x20:
                     self.assertEqual(frame[6], regs[6], f"{key}: frame {j}, the noise")
         self.assertGreater(refused, 10, "some of the pairs were refused")
         self.assertGreater(taken_over, 10, "and some took over a running effect")

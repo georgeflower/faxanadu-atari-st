@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Make the ST data of one Faxanadu screen from your ROM, for the viewer (src/viewer.s).
 
-    build_assets.py [--rom ext/Faxanadu_Europe.nes] [--area 0] [--screen 1] [--camera 40] [--world 0,1] [--out build/generated]
+    build_assets.py [--rom ext/Faxanadu_Europe.nes] [--area 0] [--screen 1] [--camera 0] [--world 0,1] [--out build/generated]
 
 Writes hero_list.bin and hero_images.bin (the hero's sprites for the ST), hud_tiles.bin (the 60 HUD tiles, 32 bytes each) and hud_layout.bin (its 4 rows of 32 tile ids, as at the start of a game),
 palette.bin (16 ST colour words), blocks.bin (the 128-byte block images the screen uses), block_index.bin (1024 words:
@@ -99,6 +99,7 @@ def edge_table(rom: fr.Rom, a: fm.Area, ids: list[int], world: dict[int, list[in
 
 # "blocking" and "ladders" hold no data: the program makes them (a flag a block position, in memory behind the package) from the screens and
 # "block_flags" (a byte a block id: 1 a block he cannot walk through, 2 a ladder) when it loads a package, which keeps the disk smaller.
+# block_flags bits 4 and 5: the block is a sideways (property 12 or 13) or an up-and-down (9 or 10) way out of the area (Player_CheckSwitchScreen; switch_check in src/viewer.s).
 FLAG_ROOM = 6 * 2 * 208                  # the block flags of 6 screens (src/viewer.s: FLAG_SLOTS), made when asked for, behind the package
 PACKAGE_PARTS = ("palette", "screens", "neighbours", "blocking", "ladders", "doors", "edges", "block_index", "blocks", "hud_tiles", "hud_partial",
                  "hero_list", "hero_images", "hero_colours", "magic_anim", "magic_images", "block_flags",
@@ -139,12 +140,29 @@ def make_package(parts: dict[str, bytes], counts: dict[str, int]) -> bytes:
     return (b"".join(o.to_bytes(4, "big") for o in offsets) + b"".join(counts[n].to_bytes(2, "big") for n in HEADER_WORDS) + bytes(body))
 
 
+def hud_places_bytes() -> bytes:
+    """src/hud.s's hud_places: for the HUD's tiles 64 to 127 (rows 2 and 3 of the NES's HUD) two words: the byte of the screen where the
+    tile's first line goes (line * 160 + 8 * group + the byte in it) and the same in the clean copy of the right margin's first group
+    (x 288 to 303, 8 bytes a line: what sprites reach into, see hud_margin), $FFFF for none; a tile without a place is not drawn."""
+    out = bytearray()
+    for n in range(64, 128):
+        place = sc.HUD_PLACES.get((n >> 5, n & 31))
+        screen = margin = 0xFFFF
+        if place:
+            col, row = place
+            screen = row * 8 * 160 + (col >> 1) * 8 + (col & 1)
+            if col >> 1 == 18:
+                margin = row * 8 * 8 + (col & 1)
+        out += screen.to_bytes(2, "big") + margin.to_bytes(2, "big")
+    return bytes(out)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--rom", type=Path, default=fr.DEFAULT_ROM)
     parser.add_argument("--area", type=int, default=0)
     parser.add_argument("--screen", type=int, default=1)
-    parser.add_argument("--camera", type=int, default=40, help="first line of the 208-line playfield shown in the 168-line window (0-40)")
+    parser.add_argument("--camera", type=int, default=0, help="first line of the 208-line playfield shown in the 200-line window (0-8)")
     parser.add_argument("--hero", default="144,144,0,255,0,0,1",
                         help="the hero: x,y,armour,shield,weapon,frame,faces-left (default: where he stands after the castle door, start equipment)")
     parser.add_argument("--reach", type=int, default=2, help="screens within this many steps of --screen are included (the viewer can scroll between them)")
@@ -158,8 +176,8 @@ def main() -> int:
     args = parser.parse_args()
     if not args.rom.is_file():
         raise SystemExit(f"{args.rom} is missing: put your Faxanadu (Europe) ROM there (it is never committed)")
-    if not 0 <= args.camera <= 40:
-        raise SystemExit("--camera is 0 to 40")
+    if not 0 <= args.camera <= sc.CAMERA_MAX:
+        raise SystemExit(f"--camera is 0 to {sc.CAMERA_MAX}")
     rom = fr.Rom(args.rom)
     a = fm.area(rom, args.area)
     # the start screen first, then the screens around it (breadth first): the viewer scrolls between them
@@ -260,7 +278,8 @@ def main() -> int:
         parts = {
             "palette": plan.words(), "screens": bytes(blocks), "neighbours": bytes(around),
             "blocking": b"", "ladders": b"",
-            "block_flags": bytes(hp.IMPASSABLE[props[b] & 15] | hp.CLIMBABLE[props[b] & 15] << 1 | (props[b] & 15 == 2) << 2 | (props[b] & 15 == 6) << 3 for b in range(256)),
+            "block_flags": bytes(hp.IMPASSABLE[props[b] & 15] | hp.CLIMBABLE[props[b] & 15] << 1 | (props[b] & 15 == 2) << 2 | (props[b] & 15 == 6) << 3
+                                 | (props[b] & 15 in (12, 13)) << 4 | (props[b] & 15 in (9, 10)) << 5 for b in range(256)),
             "doors": doors, "edges": edges, "block_index": b"".join(v.to_bytes(2, "big") for v in table), "blocks": b"".join(images),
             "hud_tiles": sc.hud_tile_images(rom, pal_index, plan, start["hp"], start["mp"]), "hud_partial": sc.hud_partial_images(rom, pal_index, plan),
             "hero_list": hero_list, "hero_images": hero_images, "hero_colours": sc.hero_colours(rom, pal_index, plan),
@@ -298,8 +317,9 @@ def main() -> int:
     # a package is unpacked where it lies: the packed file sits at the end of the span, and the data never overtakes it
     span = max(-(-biggest // 4) * 4 + expand, -(-packed // 4) * 4 + over + 4)
     span += -span % 4
-    layout = gfx.hud_layout(start["hp"], start["mp"], start["experience"], start["gold"], start["seconds"])
+    layout = sc.st_hud_layout(start["hp"], start["mp"], start["experience"], start["gold"], start["seconds"])
     (args.out / "hud_layout.bin").write_bytes(bytes(t for row in layout for t in row))
+    (args.out / "hud_places.bin").write_bytes(hud_places_bytes())
     (args.out / "assets.inc").write_text(
         f"| generated by tools/build_assets.py from the ROM: area {args.area}, screen {args.screen}\n"
         f"    .equ CAMERA, {args.camera}\n"

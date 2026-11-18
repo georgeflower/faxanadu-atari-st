@@ -1,6 +1,6 @@
 | The trainer (the author, 12 Nov 2026; in every build, the disk's too). T turns it on and off (sound $0B). While it is on nothing takes power off him
 | (en_reduce_hp leaves the power as it is: enemies, their magic, a fall into nothing does not exist in this game) and the area and the screen are shown in
-| the black margin left of the HUD, for debugging: "A1" and "S21" (cur_area; cur_screen, which with the whole areas is the ROM's own screen number, and in a
+| the left margin under the HUD (lines 176 and 188, x 0 to 31; the HUD's bars and time end at line 127), for debugging: "A1" and "S21" (cur_area; cur_screen, which with the whole areas is the ROM's own screen number, and in a
 | building the building's). The flag is input_state's byte IN_TRAINER, which en_reduce_hp in .text reaches. Everything here is in .text.early.
 
     .section .text.early,"ax"
@@ -26,8 +26,8 @@ trainer_key:
 9:  movem.l (%sp)+, %d0-%d1/%a0
     rts
 
-| a4 = the screen being drawn (before present_swap): the area and the screen in the margin left of the HUD, in white, or blanks when the trainer is off
-| (so the words go when it is turned off). Two lines of four 8-pixel cells: x 0 to 31, lines 8 and 20.
+| a4 = the screen being drawn (before present_swap): the area and the screen in the left margin under the HUD, in white, or blanks when the trainer is off
+| (so the words go when it is turned off). Two lines of four 8-pixel cells: x 0 to 31, lines 176 and 188.
 trainer_draw:
     movem.l %d0-%d7/%a0-%a3, -(%sp)
     lea input_state(%pc), %a0
@@ -68,10 +68,10 @@ trainer_draw:
     lsr.w #1, %d1
     lsl.w #3, %d1
     add.w %d2, %d1
-    move.w #8*160, %d2                      | line 8
+    move.w #176*160, %d2                    | line 176
     cmpi.w #4, %d5
     bcs.s 3f
-    move.w #20*160, %d2                     | line 20
+    move.w #188*160, %d2                    | line 188
 3:  add.w %d2, %d1
     lea (%a4,%d1.w), %a1
     bsr.w text_glyph

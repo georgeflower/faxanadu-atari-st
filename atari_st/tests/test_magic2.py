@@ -216,13 +216,13 @@ class DeathEffectOnTheStTests(unittest.TestCase):
         tiles = fs.common_tiles(rom)
         base = rom.byte("SPRITE_APPEARANCE_PHASE_OFFSETS", 0x14)
         seen_frames, seen_blank = set(), 0
-        for vbl in (319, 320, 322, 324, 326):                          # (the picture on show at VBL v is the previous pass's: 132, 134, 136, 138 are drawn with their count 1, 3, 5, 7 at VBL 320, 322, 324, 326, and 131 is blank)
+        for vbl in range(319, 326):                                   # (the picture on show at VBL v is the pass's that just ended: present_swap writes the screen address before the wait; the effect's counts 1 to 7, drawn on every other update; at VBL 326 it has become its drop)
             pokes = [(100, "w:hero_invinc", 30000), (255, "mem:enemies+210", 255), (257, "hp6", 1), (261, "joy", 0x81), (263, "joy", 0)]
             ram, word, log = run_scenario(["ALL=1", "AREA=0", "SCREEN=4", "HERO=240,144,0,255,0,0,0", "WORLD=1", "HUD=80,80,0,0,0", "VIEWER_DEFS=--defsym MAGIC=3"], pokes, vbl, "shots_death_effect")
             n = word("en_counter")
             raw = word.raw("enemies", 8 * 30)
             slot = raw[6 * 30:7 * 30]
-            gone = slot[0] == 255                                         # (VBL 326: pass 139 has ended the effect, the picture on show is still pass 138's, count 7)
+            gone = slot[0] == 255                                         # (the effect has ended: the count it would have had)
             self.assertIn(slot[0], (0x14, 255), f"VBL {vbl}: the slot holds the magic kill's effect")
             if gone:
                 slot = bytes(slot[:11]) + bytes([8]) + bytes(slot[12:])
@@ -240,10 +240,10 @@ class DeathEffectOnTheStTests(unittest.TestCase):
                     for number, dx, dy, mirror in ed.death_pieces(0x14, base, d2):
                         sprites += fs.place(fs.appearance(rom, number, "TILEINFO_ENTITY_ADDRS"), sx + dx, sy + dy, mirror)
                     for (x, line), c in fs.sprite_layer(sprites, tiles, palettes).items():
-                        y = line - camera
+                        y = line + sc.SPRITE_DY - camera
                         if sc.ST_TOP <= y < 200 and sc.ST_LEFT <= x + sc.ST_LEFT < sc.ST_LEFT + 256:
                             expected[y][x + sc.ST_LEFT] = plan.slot[c & 0x3F]
-                hx, hy = word("hero_x") + sc.ST_LEFT, word("hero_y") + 32 - word("camera")
+                hx, hy = word("hero_x") + sc.ST_LEFT, word("hero_y") + 32 + sc.SPRITE_DY - word("camera")
                 bad = [(px, py) for py in range(200) for px in range(320) if rows[py][px] != expected[py][px] and not (hx - 24 <= px < hx + 40 and hy - 8 <= py < hy + 40)]
                 if not bad:
                     if k % 2 == 0:
@@ -253,7 +253,7 @@ class DeathEffectOnTheStTests(unittest.TestCase):
                     break
             else:
                 self.fail(f"VBL {vbl}, pass {n}, count {slot[11]}: {len(bad)} pixels differ, e.g. {[(px, py, rows[py][px], expected[py][px]) for px, py in bad[:5]]}")
-        self.assertEqual(sorted(seen_frames), [1, 3, 5, 7], "the four pictures")
+        self.assertIn(sorted(seen_frames), ([1, 3, 5, 7], [2, 4, 6]), "every other picture (which ones: the counter's parity at the kill, which the start-up timing moves)")
         self.assertGreaterEqual(seen_blank, 1, "and not drawn in between")
 
 
@@ -286,8 +286,8 @@ class TilteExplosionOnTheStTests(unittest.TestCase):
             rows = hs.decode_screen(ram, hs.video_base(log))
             camera = word("camera")
             raw = word.raw("enemies", 8 * 30)
-            skip = [(word("hero_x") + sc.ST_LEFT - 24, word("hero_y") + 32 - camera - 8, 64, 48)]                      # his own picture is tested elsewhere
-            skip += [(raw[i * 30 + 2] + sc.ST_LEFT - 8, raw[i * 30 + 4] + 32 - camera - 8, 32, 32) for i in range(8) if raw[i * 30] != 255]          # and the enemies'
+            skip = [(word("hero_x") + sc.ST_LEFT - 24, word("hero_y") + 32 + sc.SPRITE_DY - camera - 8, 64, 48)]                      # his own picture is tested elsewhere
+            skip += [(raw[i * 30 + 2] + sc.ST_LEFT - 8, raw[i * 30 + 4] + 32 + sc.SPRITE_DY - camera - 8, 32, 32) for i in range(8) if raw[i * 30] != 255]          # and the enemies'
             candidates = [counter, counter - 1, counter + 1] if kind == 11 else [None, 15] if counter == 16 else [None]       # (a capture can fall between a pass's update and its show:
                                                                                                                       # the last piece, 15, can still be on show when the spell is gone)
             for c in candidates:
@@ -296,7 +296,7 @@ class TilteExplosionOnTheStTests(unittest.TestCase):
                 if c is not None and 1 <= c <= 15:
                     sprites = [fs.Sprite(x, y, t, a) for y, t, a, x in burst_pieces(rom, sx, sy, c)]
                     for (x, line), col in fs.sprite_layer(sprites, tiles, palettes).items():
-                        y = line - camera
+                        y = line + sc.SPRITE_DY - camera
                         if sc.ST_TOP <= y < 200 and sc.ST_LEFT <= x + sc.ST_LEFT < sc.ST_LEFT + 256:
                             expected[y][x + sc.ST_LEFT] = plan.slot[col & 0x3F]
                 bad = [(px, py) for py in range(200) for px in range(320) if rows[py][px] != expected[py][px] and not any(a <= px < a + w and b <= py < b + h for a, b, w, h in skip)]

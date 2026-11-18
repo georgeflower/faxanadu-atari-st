@@ -155,8 +155,9 @@ class PlayerMenuTests(unittest.TestCase):
                 ram, word, log = self.run_scenario(ARGS, pokes, 640, "shots_hud_item")
                 got = hs.decode_screen(ram, hs.video_base(log))
                 plan = sc.plan_for_set(self.rom, 0)
-                want = sc.hud_pixels(self.rom, 0, plan, dict(hp=80, mp=80, experience=0, gold=0, seconds=0, **state))
-                self.same_in(got, [[0] * 32 + row + [0] * 32 for row in want] + [[0] * 320] * 168, 32, 288, 0, 32)
+                want = sc.hud_margins(self.rom, 0, plan, dict(hp=80, mp=80, experience=0, gold=0, seconds=0, **state))
+                self.same_in(got, want, 288, 320, 0, 200)          # (the item box is in the right margin; the left one has the bars and the time)
+                self.same_in(got, want, 0, 32, 0, 160)
 
     def test_select_does_not_open_the_menu_on_eolis_first_screen_but_does_elsewhere(self) -> None:
         """The ROM's screen 0 of area 0 (outside the walls) has no menu. With the menu open the game stands still, so the hero's step counter stops (it reads about VBL - 185 while the game runs and stays near 415 from the VBL of the key on)."""

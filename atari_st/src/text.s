@@ -261,7 +261,7 @@ draw_text_box:
     move.w #WINDOW_LINES, %d1
     sub.w %d3, %d1
     lsr.w #1, %d1
-    addi.w #HUD_LINES, %d1                  | its y
+    addi.w #WIN_TOP, %d1                  | its y
     move.w %d1, %d4
     moveq #5, %d0
     moveq #10, %d2

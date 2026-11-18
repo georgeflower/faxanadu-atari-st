@@ -128,7 +128,9 @@ class SaveSceneTests(unittest.TestCase):
 
         lines = text.split("\n")
         height = 10 * len(lines) + 8
-        y0 = 32 + (168 - height) // 2
+        import st_convert as sc
+
+        y0 = sc.ST_TOP + (sc.WINDOW_LINES - height) // 2
         rows = [[0] * 320 for _ in range(200)]
         slot, font = self.bright_slot(self.rom, 0), ft.font(self.rom)
         self.box_layer(rows, slot, 5, y0, 10, height)
@@ -177,7 +179,7 @@ class SaveSceneTests(unittest.TestCase):
         t = self.after_peace()
         pokes = self.press(t + 20) + self.press(t + 80)
         ram, word, log = self.guru("shots_save_ok", self.press(t + 20), tt.START + t + 60)
-        got = self.region(ram, log, 80, 107, 240, 125)
+        got = self.region(ram, log, 80, 91, 240, 109)
         self.assertEqual(got, self.message_box("Game saved."), "the box that says so")
         self.assertEqual(saved("shots_save_ok"), pm.save_file(POKED), "SAVE.SAV is the mantra of what he has, and a line end")
         self.assertEqual(word("sv_status"), 0)
@@ -200,7 +202,7 @@ class SaveSceneTests(unittest.TestCase):
         t = self.after_peace()
         mantra = pm.password(POKED)
         ram, word, log = self.guru("shots_save_protected", self.press(t + 20), tt.START + t + 60, extra=["--protect-hd", "on"])
-        self.assertEqual(self.region(ram, log, 80, 107, 240, 125), self.message_box("Could not save."))
+        self.assertEqual(self.region(ram, log, 80, 91, 240, 109), self.message_box("Could not save."))
         self.assertEqual(word("sv_status"), -1)
         ram, word, log = self.guru("shots_save_protected2", self.press(t + 20) + self.press(t + 80), tt.START + t + 200, extra=["--protect-hd", "on"])
         self.assertEqual(word.raw("pw_text", len(mantra) + 1), mantra.encode() + b"\0")
@@ -250,7 +252,7 @@ class SaveSceneTests(unittest.TestCase):
         text = pm.password(FILE_STATE)
         bad = (text[:5] + ("B" if text[5] != "B" else "C") + text[6:]).encode() + b"\r\n"
         ram, word, log = self.scene(self.TITLE, self.CONTINUE + self.A, 600, "shots_save_bad", {"SAVE.SAV": bad})
-        self.assertEqual(self.region(ram, log, 80, 107 - 5, 240, 107 + 23), self.message_box("Mantra is in\nthe wrong."))
+        self.assertEqual(self.region(ram, log, 80, 91 - 5, 240, 91 + 23), self.message_box("Mantra is in\nthe wrong."))
         self.assertEqual((word("hero_title"), word("hero_spawn")), (0, 0), "nothing was taken from it")
         self.assertEqual(word("sv_status"), -1)
         ram, word, log = self.scene(self.TITLE, self.CONTINUE + self.A + [(600, "space", 1), (602, "space", 0)], 700, "shots_save_bad2", {"SAVE.SAV": bad})
