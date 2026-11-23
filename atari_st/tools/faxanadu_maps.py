@@ -165,6 +165,21 @@ def edges(rom: fr.Rom, area_index: int) -> list[tuple[int, int, int, int, int]]:
     return out
 
 
+def vertical_ways(rom: fr.Rom, area_index: int) -> list[tuple[int, int, int, int]]:
+    """The up-and-down ways out of a screen (`Player_CheckSwitchScreen` when the second block is of property 9 or 10): records of four bytes
+    (screen, new screen of the same area, start position, palette set), ended by $FF, one list a area (`AREA_SCREEN_COMPARATORS`). Only
+    Trunk has any: screen 12 to 22 and back."""
+    lab = rom.label("AREA_SCREEN_COMPARATORS")
+    table = lab.offset + 2 * area_index
+    pointer = rom.data[table] | (rom.data[table + 1] << 8)
+    o = lab.offset - lab.addr + pointer
+    out = []
+    while rom.data[o] != 0xFF:
+        out.append(tuple(rom.data[o:o + 4]))
+        o += 4
+    return out
+
+
 def building(rom: fr.Rom, index: int) -> dict:
     """What Player_EnterDoorToInside takes from the building tables: palette set, tileset, start position (Y/16 << 4 | X/16), music."""
     return dict(palette=rom.byte("BUILDING_PALETTES", index), tiles=rom.byte("BUILDING_MAYBE_TILES_INDEXES", index),

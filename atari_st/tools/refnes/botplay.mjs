@@ -77,6 +77,7 @@ function record() {
     b[16 + i * 4] = slot(i, "Entities"); b[17 + i * 4] = slot(i, "XPos_Full"); b[18 + i * 4] = slot(i, "YPos"); b[19 + i * 4] = slot(i, "HP");
   }
   b[59] = g.rd(g.addr("CurrentSprites_XPos_Frac") + 6); b[60] = g.rd(g.addr("CurrentSprites_XPos_Frac") + 7);
+  b[61] = g.rd(g.addr("CurrentSprites_YPos_Frac") + 6); b[62] = g.rd(g.addr("CurrentSprites_YPos_Frac") + 7);
   b[56] = g.rd("Player_PosX_Frac"); b[57] = g.rd("Player_MoveAcceleration_U"); b[58] = g.rd("Player_MoveAcceleration");
   b[48] = g.rd("Music_Current"); b[49] = g.rd("CastMagic_Type"); b[50] = g.rd("CastMagic_XPos_Full"); b[51] = g.rd("CastMagic_YPos_Full");
   return b;
@@ -115,6 +116,16 @@ const given = seg.policy === "pads" ? fs.readFileSync(seg.pads) : null;
 const frames = given ? Math.min(seg.frames ?? given.length, given.length) : seg.frames;
 const pads = Buffer.alloc(frames), trace = Buffer.alloc(frames * REC);
 const hook = g.romLabels["Game_MainLoop"][0] + 11 - 1;               // (LDX, TXS, LDX, JSR MMC1_UpdateROMBank, JSR WaitForNextFrame: 11 bytes)
+// Probes (environment): UPDATES=file writes a JSON record at every entry of Sprites_UpdateAll ("update") and after every frame ("frame"): the frame, the pass,
+// Screen_ScrollDirection, the scroll registers, the screen, the hero's x, Random_Offset, every CurrentSprites_ array, the sprites jsnes shows (their x) and, for
+// a frame, where the CPU is (pc, bank, the top of the stack). RAMDUMP=file writes RAM $400-$6FF at the end (the block properties, the screen buffer).
+// CLEAR_LEFTOVERS=1 clears the slots' behaviour data when a scroll loads the new screen's sprites (to tell their effect from the fractions').
+const updLog = process.env.UPDATES ? [] : null, updHook = g.romLabels["Sprites_UpdateAll"][0] - 1;
+const arrays = Object.keys(g.labels).filter((k) => k.startsWith("CurrentSprites_") && !/_\d+_$/.test(k));
+const updRec = (what) => ({what, frame: g.frames, pass: passes, dir: g.rd("Screen_ScrollDirection"), sx: g.rd("PPU_ScrollX"), sy: g.rd("PPU_ScrollY"),
+  screen: g.rd("Area_CurrentScreen"), hx: g.rd("Player_PosX_Block"), rnd: g.rd("Random_Offset"),
+  all: arrays.map((k) => [k, [...Array(8).keys()].map((i) => slot(i, k.slice(15)))]), oam: g.oam().filter((o) => o[0] < 239).map((o) => o[3]),
+  slots: [...Array(8).keys()].map((i) => [slot(i, "Entities"), slot(i, "XPos_Full"), slot(i, "XPos_Frac"), slot(i, "YPos"), slot(i, "YPos_Frac")])});
 let passes = 0, idle = 0;
 const cpu = g.nes.cpu, emulate = cpu.emulate.bind(cpu);
 cpu.emulate = function () {
@@ -131,6 +142,10 @@ cpu.emulate = function () {
     for (const [bit, btn] of BITS) (pad & bit ? g.nes.buttonDown : g.nes.buttonUp).call(g.nes, 1, btn);
     if (seg.heal && g.rd("Player_HP_U") < 40) g.wr("Player_HP_U", 80);
   }
+  if (process.env.CLEAR_LEFTOVERS && cpu.REG_PC === g.romLabels["Screen_LoadSpriteInfo"][0] - 1 && g.rd("Screen_ScrollDirection") !== 0xff)
+    for (const n of ["BehaviorArg1", "BehaviorData2", "BehaviorData3", "InternalBehaviorStates", "BehaviorState_XFrac", "BehaviorState_XFull", "BehaviorState_YFrac", "BehaviorState_YFull", "Values"])
+      if (("CurrentSprites_" + n) in g.labels) for (let i = 0; i < 8; i++) g.wr(g.addr("CurrentSprites_" + n) + i, 0);
+  if (updLog && cpu.REG_PC === updHook && g.rd("CurrentROMBank") === 14) updLog.push(updRec("update"));
   return emulate();
 };
 let shot = 0;
@@ -138,6 +153,12 @@ for (let n = 0; passes < frames && n < frames * 4 + 1000; n++) {
   // a frame that is no pass (a box, a scroll, a death): A every eighth frame takes messages away, as the port's replay does
   if (++idle > 2) for (const [bit, btn] of BITS) (bit === 0x80 && (n & 12) === 12 ? g.nes.buttonDown : g.nes.buttonUp).call(g.nes, 1, btn);
   g.run(1);
+  if (updLog) {
+    const r = updRec("frame");
+    r.pc = cpu.REG_PC + 1; r.bank = g.rd("CurrentROMBank");
+    r.stack = [...Array(8).keys()].map((i) => g.nes.cpu.mem[0x100 + ((cpu.REG_SP + 1 + i) & 255)]);
+    updLog.push(r);
+  }
   if (seg.png_every && Math.floor(passes / seg.png_every) > shot) {
     shot = Math.floor(passes / seg.png_every);
     g.ppm(path.join(outDir, `rom_${String(shot * seg.png_every).padStart(5, "0")}.ppm`));
@@ -145,4 +166,6 @@ for (let n = 0; passes < frames && n < frames * 4 + 1000; n++) {
 }
 fs.writeFileSync(path.join(outDir, "pads.bin"), pads.subarray(0, passes));
 fs.writeFileSync(path.join(outDir, "trace.bin"), trace.subarray(0, passes * REC));
+if (updLog) fs.writeFileSync(process.env.UPDATES, JSON.stringify(updLog));
+if (process.env.RAMDUMP) fs.writeFileSync(process.env.RAMDUMP, Buffer.from(g.nes.cpu.mem.slice(0x400, 0x700)));
 console.log(JSON.stringify({frames: passes, start: g.state()}));

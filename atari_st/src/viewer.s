@@ -80,6 +80,7 @@
     .equ HERO_Y_MIN, 0                      | at the top of the playfield (the game's Player_PosY): scrolls to the screen above
     .equ BUILDING_AREA, 4
     .equ EDGE_BYTES, 5
+    .equ VERT_CUT, 22                       | the VBLs an up-and-down way keeps the picture black (the ROM: 24 from screen 12, 20 from 22)
     .equ DOOR_BUILDING, 2                   | door kinds (build_assets.py): 0 same package, 1 other palette set, 2 into a building, 3 out to another area
     .equ HERO_Y_MAX, 192                    | and at the bottom ($C1 and more: the screen below; the demo stops at $C0)
     .equ CAMERA_MAX, 8                      | the window shows lines 0-199 (camera 0) or 8-207 (camera 8)
@@ -408,7 +409,7 @@ start:
     lea hero_dead(%pc), %a0                 | Player_HandleDeath is a loop of its own in the ROM: the sprites are cleared, nothing moves and nothing touches him until the death is over
     tst.w (%a0)
     bne.s 13f                               | (an enemy on him would start the death again and again)
-    bsr.w enemies_update
+    bsr.w pass_enemies                      | enemies_update, but not for the new screen's enemies in the pass that scrolled (scroll_wait)
     bsr.w items_tick
 13: bsr.w draw_spell
     .ifdef NPCS
@@ -2567,15 +2568,14 @@ scroll_check:
     rts
 
 | ---------------------------------------------------------------------------------------------------------------------------- scrolling
-| d0 = the screen to scroll to (its number in the table), d1 = 1 for the right neighbour, 0 for the left. The ROM waits 14 frames and then
-| moves the picture 4 pixels a frame for 64 frames, hero included, with nothing else going on. The ST moves it 16 pixels every 4 frames:
+| d0 = the screen to scroll to (its number in the table), d1 = 1 for the right neighbour, 0 for the left. The ROM waits 14 frames (its pass goes on: the
+| enemies' update, drawn, then the hero alone: scroll_wait) and then moves the picture 4 pixels a frame for 64 frames, hero included, with nothing else going on. The ST moves it 16 pixels every 4 frames:
 | the clean background shifts one group of 16 pixels (in place, one frame), the window is copied into the screen being drawn (two frames),
 | the hero is drawn and the screen shown (one frame). a4 and slot_index come back as present_swap leaves them; everything else is kept.
 do_scroll:
     movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
     bsr.w hero_sync                         | (a change of equipment or colours unpacks the hero's data into the second playfield: not while it holds the next screen)
     bsr.w spell_clear
-    bsr.w enemies_clear
     lea scroll_dir(%pc), %a0
     move.w %d1, (%a0)
     lea scroll_target(%pc), %a0
@@ -2590,14 +2590,8 @@ do_scroll:
     adda.l %d0, %a5
     bsr.w draw_playfield
     movea.l (%sp)+, %a4
-    moveq #13, %d7
-1:  bsr.w wait_vbl
-    .ifdef JOYPAD
-    bsr.w input_poll_game
-    .else
-    bsr.w input_poll
-    .endif
-    dbra %d7, 1b
+    moveq #0, %d0
+    bsr.w scroll_wait                       | 14 frames: the enemies' update of this pass, drawn, then the hero alone
     moveq #1, %d7                           | the step: 1 to 16
 2:  move.w %d7, %d0
     bsr.w scroll_bg_step
@@ -2650,7 +2644,6 @@ do_vscroll:
     movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
     bsr.w hero_sync                         | (a change of equipment or colours unpacks the hero's data into the second playfield: not while it holds the next screen)
     bsr.w spell_clear
-    bsr.w enemies_clear
     move.w %d1, %d6                         | 1 down, 0 up
     lea vscroll_down(%pc), %a0
     move.w %d1, (%a0)
@@ -2680,14 +2673,9 @@ do_vscroll:
     adda.l %d0, %a5
     bsr.w draw_playfield
     movea.l (%sp)+, %a4
-    moveq #13, %d7
-4:  bsr.w wait_vbl
-    .ifdef JOYPAD
-    bsr.w input_poll_game
-    .else
-    bsr.w input_poll
-    .endif
-    dbra %d7, 4b
+    move.w vscroll_down(%pc), %d0
+    addq.w #1, %d0
+    bsr.w scroll_wait                       | 14 frames (1 up, 2 down): his y on the new screen, the enemies' update of this pass, drawn, then no sprites
     | the viewport: its top line T in the two playfields (416 lines): d4 now, d3 at the end; the camera and the hero of the end
     move.w vscroll_down(%pc), %d6           | (draw_playfield clobbers the registers)
     lea hero_x(%pc), %a0
@@ -3067,6 +3055,7 @@ enter_screen:
 3:  move.w %d0, (%a0)
     bsr.w refresh_screens
     bsr.w refresh_screens
+    bsr.w cut_wait                          | (an up-and-down way: the black lasts as long as the ROM's)
     movea.l pkg_ptr+PKG_PALETTE(%pc), %a0
     movea.l #PALETTE, %a1
     moveq #15, %d7
@@ -3166,8 +3155,10 @@ edge_leave:
     subq.w #1, %d4
     move.w cur_screen(%pc), %d0
 2:  cmp.b (%a0), %d0
-    beq.s 3f
-    addq.l #EDGE_BYTES, %a0
+    bne.s 4f
+    tst.b 1(%a0)
+    bpl.s 3f                                | (bit 7: an up-and-down way, vert_leave's)
+4:  addq.l #EDGE_BYTES, %a0
     dbra %d4, 2b
     bra.s 9f
 3:  moveq #0, %d2
@@ -3520,7 +3511,7 @@ right_edge:
 | Player_CheckSwitchScreen, the way out to the side: when the block at his x and at x + 15 (8-bit, in the row of his y) are both ways out
 | (properties 9, 10, 12, 13; the second 12 or 13, block_flags bits 4 and 5), the area's table sends him on (edge_leave: AREA_TOWN_TRANSITIONS_DATA
 | for this screen, nothing when it has none) or, in a building, back out. Every frame, whatever the stick: walking, jumping or knocked onto them.
-| (The up-and-down ways, 9 or 10 second, AREA_SCREEN_COMPARATORS, two screens of Trunk, are not done.)
+| With the second block of property 9 or 10 it is an up-and-down way (vert_leave: AREA_SCREEN_COMPARATORS, Trunk screens 12 and 22).
 switch_check:
     movem.l %d0-%d3/%a0-%a1, -(%sp)
     move.w hero_y(%pc), %d1
@@ -3548,9 +3539,78 @@ switch_check:
     beq.s 9f
     move.b (%a0,%d3.w), %d0
     btst #4, (%a1,%d0.w)
+    bne.s 8f
+    btst #5, (%a1,%d0.w)
     beq.s 9f
-    bsr.w edge_leave
+    bsr.s vert_leave                        | the second block 9 or 10: an up-and-down way
+    bra.s 9f
+8:  bsr.w edge_leave
 9:  movem.l (%sp)+, %d0-%d3/%a0-%a1
+    rts
+
+| Player_CheckSwitchScreen's up-and-down way (the second block of property 9 or 10): the area's AREA_SCREEN_COMPARATORS record for this screen
+| (in the package's edges, the area with bit 7 set; only Trunk has them: screen 12 to 22 and back) puts him on another screen of the area through
+| Game_SetupEnterScreen: no fade, the picture black at once and for VERT_CUT VBLs (jsnes: 20 and 24), the song kept, and of the hero only x and y
+| change (his flags, climbing too, the ticks and the facing stay). Nothing when the screen has no record.
+vert_leave:
+    movem.l %d0-%d4/%a0-%a1, -(%sp)
+    movea.l pkg_ptr+PKG_EDGES(%pc), %a0
+    move.w pkg_ptr+PKG_EDGE_COUNT(%pc), %d4
+    beq.s 9f
+    subq.w #1, %d4
+    move.w cur_screen(%pc), %d0
+1:  cmp.b (%a0), %d0
+    bne.s 2f
+    tst.b 1(%a0)
+    bmi.s 3f
+2:  addq.l #EDGE_BYTES, %a0
+    dbra %d4, 1b
+    bra.s 9f
+3:  moveq #0, %d0
+    move.b 2(%a0), %d0                      | the screen
+    moveq #0, %d1
+    move.b 3(%a0), %d1                      | where he stands
+    moveq #0, %d3
+    move.b 4(%a0), %d3                      | the palette set (the area's own in the ROM's two records)
+    move.l frame_count(%pc), %d2
+    addi.l #VERT_CUT, %d2
+    lea cut_until(%pc), %a1
+    move.l %d2, (%a1)
+    movea.l #PALETTE, %a1                   | black at once: enter_screen's fade sees a black picture and does nothing
+    moveq #15, %d2
+4:  clr.w (%a1)+
+    dbra %d2, 4b
+    lea hero_frame+24(%pc), %a1             | hero_frame to hero_atk_phase (12 words) as they are
+    moveq #11, %d2
+5:  move.w -(%a1), -(%sp)
+    dbra %d2, 5b
+    cmp.w cur_pal(%pc), %d3
+    beq.s 6f
+    move.w cur_area(%pc), %d2
+    bsr.w enter_world
+    bra.s 7f
+6:  bsr.w enter_screen
+7:  lea hero_frame(%pc), %a1
+    moveq #11, %d2
+8:  move.w (%sp)+, (%a1)+
+    dbra %d2, 8b
+9:  movem.l (%sp)+, %d0-%d4/%a0-%a1
+    rts
+
+| enter_screen, before the colours come back: after an up-and-down way (vert_leave) the picture stays black until cut_until. Keeps every register.
+cut_wait:
+    move.l %d0, -(%sp)
+1:  move.l cut_until(%pc), %d0
+    beq.s 9f
+    cmp.l frame_count(%pc), %d0
+    bls.s 8f
+    bsr.w wait_vbl
+    bra.s 1b
+8:  move.l %a0, -(%sp)
+    lea cut_until(%pc), %a0
+    clr.l (%a0)
+    movea.l (%sp)+, %a0
+9:  move.l (%sp)+, %d0
     rts
     .text
 
@@ -3736,6 +3796,8 @@ keep_music:
     .word -1                                | load_package: the song of the package that was in use when the area stays the same, else -1
 camera_hold:
     .word 1                                 | camera_follow waits until the hero has left his start position (a test's CAMERA may not suit it)
+cut_until:
+    .long 0                                 | vert_leave: the VBL (frame_count) until which the picture stays black, 0 none (cut_wait)
 hud_states:                                 | last in .data, next to the code: the start-up code and the menus reach these from either end of .text
     .incbin "hud_states.bin"
 title_table:                                | PLAYER_TITLE_EXP_NEEDED (15 words), PLAYER_TITLE_GOLD (15 words)
@@ -3753,3 +3815,94 @@ sound_song:
     .even                                   | (sp must be even: the section is placed on an even address)
     .space 6144                             | run on this stack in supervisor mode and TOS 1.02 needs far more than the 638 bytes the game's own calls reach; at 2 KB a door crashed on the author's TOS
 stack_end:
+
+    .section .text.early,"ax"               | the scroll's wait: the last of .text.early, nearest to the code it calls (the main code has no room left: AGENTS.md 5i)
+    .even
+| The pass that runs him off the screen goes on in the ROM (AGENTS.md 5d, Scrolling between screens): the step that runs him off decodes the next screen's
+| blocks into the screen buffer (Area_LoadScrollData, 7 to 12 frames), then the sprites have this pass's update (Sprites_UpdateAll) against those blocks, one
+| update only, and are drawn; two frames later the sprites are gone (to the side the hero stays; up and down nothing is drawn) and the new screen's enemies are
+| put in the slots, which keep their x and y fractions (enemies_load). The picture moves about 8 frames after that (to the side; up and down later).
+| Here: the update at once (this pass's buttons, the blocks of the screen scrolled to), then the scroll's 14 frames: frames 1 to 9 the last picture, the
+| picture with the update in frames 10 and 11, then the hero alone (to the side) or no sprites (up and down) from frame 12. The main loop gives the new screen's enemies no update
+| in this pass (pass_enemies). d0 = 0 to the side, 1 up, 2 down (his y is the new screen's at once, $C0 or 0, as the ROM sets it before the update).
+| Keeps every register.
+scroll_wait:
+    movem.l %d0-%d7/%a0-%a3/%a5-%a6, -(%sp)
+    move.w %d0, %d6
+    beq.s 1f
+    lea hero_y(%pc), %a0
+    move.w #192, (%a0)                      | up: the bottom of the new screen
+    subq.w #1, %d0
+    beq.s 1f
+    clr.w (%a0)                             | down: its top
+1:  .ifndef NO_PHYSICS                     | the update first, with this pass's buttons (GetRandom reads them) and before the polls of the wait
+    lea cur_screen(%pc), %a0
+    move.w (%a0), %d5
+    move.w scroll_target(%pc), (%a0)        | (the update reads the blocks of the screen scrolled to: the ROM's screen buffer holds them)
+    .ifdef NPCS
+    bsr.w npc_update                        | (the people are the ROM's sprites too; they go with the screen)
+    .endif
+    bsr.w enemies_update
+    lea cur_screen(%pc), %a0
+    move.w %d5, (%a0)
+    .endif
+    moveq #9-1, %d7
+2:  bsr.w wait_vbl
+    bsr.w sw_poll
+    dbra %d7, 2b
+    bsr.w mattock_sprites                   | the last drawing in this screen put back, the people, the enemies and the hero drawn
+    bsr.w present_swap                      | on show in frames 10 and 11
+    bsr.w sw_poll
+    bsr.w wait_vbl
+    bsr.w sw_poll
+    lea rect_slots(%pc), %a0                | the other screen: its sprites put back
+    move.w slot_index(%pc), %d0
+    lsl.w #4, %d0
+    adda.w %d0, %a0
+    bsr.w restore_rect
+    lea 8(%a0), %a0
+    bsr.w restore_rect
+    clr.l (%a0)+
+    clr.l (%a0)
+    bsr.w enemies_erase
+    .ifdef NPCS
+    bsr.w npc_erase_boxes
+    .endif
+    tst.w %d6
+    bne.s 3f
+    bsr.w draw_hero                         | to the side: the hero alone
+3:  bsr.w present_swap                      | frames 12 to 14
+    bsr.w sw_poll
+    bsr.w wait_vbl
+    bsr.w sw_poll
+    bsr.w wait_vbl
+    bsr.w sw_poll
+    bsr.w enemies_clear                     | (and the people)
+    lea hero_dead(%pc), %a0
+    tst.w (%a0)
+    bne.s 4f                                | (killed in the update: the main loop gives the enemies no update anyway)
+    lea scroll_pass(%pc), %a0
+    move.w #1, (%a0)
+4:  movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5-%a6
+    rts
+sw_poll:
+    .ifdef JOYPAD
+    bra.w input_poll_game
+    .else
+    bra.w input_poll
+    .endif
+
+| The main loop's enemies_update, except in the pass that scrolled: that pass's update was the old screen's (scroll_wait). Keeps every register.
+pass_enemies:
+    move.l %a0, -(%sp)
+    lea scroll_pass(%pc), %a0
+    tst.w (%a0)
+    bne.s 1f
+    movea.l (%sp)+, %a0
+    bra.w enemies_update
+1:  clr.w (%a0)
+    movea.l (%sp)+, %a0
+    rts
+scroll_pass:
+    .word 0                                 | set by scroll_wait, cleared by pass_enemies
+    .even

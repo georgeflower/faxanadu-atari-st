@@ -125,7 +125,9 @@ class DiskTests(unittest.TestCase):
                 count += 1
                 why = f"an edge of {pkg.name} (screen {screen})"
                 self.assertLess(screen, pkg.screens, why)
-                target = self.need(area, palette, why)
+                if area & 0x80:                     # an up-and-down way (AREA_SCREEN_COMPARATORS): a screen of the same area
+                    self.assertEqual(area & 0x7F, pkg.area, why)
+                target = self.need(area & 0x7F, palette, why)
                 self.assertLess(dest_screen, target.screens, f"{why} leads to screen {dest_screen} of {target.name}, which has {target.screens}")
         self.assertGreater(count, 3)
 
@@ -139,7 +141,7 @@ class DiskTests(unittest.TestCase):
             if pkg.area == BUILDING_AREA:
                 continue
             self.assertEqual(len(pkg.doors), len(fm.doors(rom, fm.area(rom, pkg.area))), f"the doors of {name}")
-            self.assertEqual(len(pkg.edges), len(fm.edges(rom, pkg.area)), f"the edges of {name}")
+            self.assertEqual(len(pkg.edges), len(fm.edges(rom, pkg.area)) + len(fm.vertical_ways(rom, pkg.area)), f"the edges of {name}")
 
     def test_every_temple_spawn_point_has_its_outside_package(self) -> None:
         """src/flow.s temple_enter: the area and screen of each of the 8 spawn points, the palette set of the area; the screens are the ROM's numbers."""

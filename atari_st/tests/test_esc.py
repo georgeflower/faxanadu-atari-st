@@ -160,8 +160,9 @@ class EscMenuTests(unittest.TestCase):
         args = ["ALL=1", "AREA=0", "SCREEN=1", "VIEWER_DEFS=--defsym NEWGAME=1 --defsym MENU=1 --defsym NPCS=1 --defsym TITLE=3 --defsym HERO_X=1"]
         run = tf.Run(args, [(480, IN_QUIT, 255)], [470, 700], "shots_esc_title")
         title, gone = run.shots
-        self.assertNotEqual(title.video, title.at("orig_screen", 0, 4, False))
-        self.assertEqual(gone.video, gone.at("orig_screen", 0, 4, False))
+        orig = title.at("orig_screen", 0, 4, False)  # read while the program still owns its memory
+        self.assertNotEqual(title.video, orig)
+        self.assertEqual(gone.video, orig)
 
 
 if __name__ == "__main__":

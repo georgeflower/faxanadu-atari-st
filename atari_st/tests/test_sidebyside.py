@@ -82,16 +82,72 @@ class SideBySideTests(unittest.TestCase):
         self.assertEqual(sb.compare(rom, port)["first"], {}, sb.report(rom, port, pads))
 
     def test_after_a_scroll_to_the_left_he_stands_at_x_240(self) -> None:
-        """Eolis screen 4 to 5: Game_MovePlayerOnScrollLeft takes 16 off the 0 he ran off at (the port had 241). The enemies are compared only
-        before the scroll: the ROM's enemies go on moving in the frames before the picture moves and their fractions are left in the slots
-        (AGENTS.md 5k)."""
+        """Eolis screen 4 to 5: Game_MovePlayerOnScrollLeft takes 16 off the 0 he ran off at (the port had 241). And the enemies: the pass that scrolls
+        gives the old ones one update more (Sprites_UpdateAll runs after the hero's step) and the new screen's keep the slots' fractions (AGENTS.md 5k);
+        the port stopped them and cleared the fractions, and the new ones were a pixel off now and then."""
         pads, rom, port = self.play("eolis4_scroll_fight", 60)
         c = sb.compare(rom, port)
         k = next(i for i in range(1, len(rom)) if rom[i]["screen"] != rom[i - 1]["screen"])
         self.assertEqual((rom[k]["screen"], rom[k]["x"]), (5, 240))
-        hero = {f: v for f, v in c["first"].items() if not f.startswith("s")}
-        self.assertEqual(hero, {}, sb.report(rom, port, pads))
-        self.assertTrue(all(v[0] >= k for f, v in c["first"].items()), sb.report(rom, port, pads))
+        self.assertNotEqual(rom[k]["s7_xf"], 0, "a fraction the old enemy left")
+        self.assertEqual(c["first"], {}, sb.report(rom, port, pads))
+
+    def test_a_scroll_up_keeps_the_enemies_as_in_the_rom(self) -> None:
+        """Trunk screen 3, up the ladder to screen 4: the new screen's enemies keep the old ones' x and y fractions, and a hopper falls through the cells
+        under the 13 rows (row 13 of the screen buffer, en_low_bit: it gave "blocked" for any cell there, the flags of a move were read after a move.l,
+        and the words of screen n were looked for at n * 2, not n * 4)."""
+        pads, rom, port = self.play("trunk3_scroll_up")
+        c = sb.compare(rom, port)
+        self.assertEqual([rom[k]["screen"] for k in (0, -1)], [3, 4])
+        self.assertTrue(any(r["s7_ent"] == 0x2A and r["s7_y"] > 192 for r in rom), "the hopper falls under the 13 rows")
+        self.assertEqual(c["first"], {}, sb.report(rom, port, pads))
+
+    def test_a_scroll_to_the_right_keeps_the_enemies_as_in_the_rom(self) -> None:
+        pads, rom, port = self.play("eolis5_scroll_right")
+        self.assertEqual([rom[k]["screen"] for k in (0, -1)], [5, 4])
+        self.assertEqual(sb.compare(rom, port)["first"], {}, sb.report(rom, port, pads))
+
+    def test_a_scroll_down_keeps_the_enemies_as_in_the_rom(self) -> None:
+        """Mist screen 63, down a hole to screen 72. Only the enemies' fields: the hero's x, its fraction and acceleration are off from the pass that
+        scrolls (a fall into a scroll down; AGENTS.md 5k, Left)."""
+        pads, rom, port = self.play("mist63_scroll_down")
+        self.assertEqual([rom[k]["screen"] for k in (0, -1)], [63, 72])
+        enemies = {f: v for f, v in sb.compare(rom, port)["first"].items() if f.startswith("s")}
+        self.assertEqual(enemies, {}, sb.report(rom, port, pads))
+
+    def test_the_enemies_stay_on_the_picture_for_most_of_the_scrolls_wait(self) -> None:
+        """The ROM draws the sprites of the pass that scrolls about 8 frames into the wait (the new screen's blocks are decoded first) and clears them
+        two frames later; the hero stays (tools/refnes/botplay.mjs, UPDATES). The port: frames 1 to 11 with the enemies, 12 to 14 the hero alone, then
+        the picture moves. Captured every VBL from the pass that scrolls: the enemies' part of the playfield (x 64 on) differs from the bare screen,
+        then only the hero's does, for at least four VBLs before the first step."""
+        import faxanadu_rom as fr
+        import st_convert as sc
+        seg = json.loads((ROOT / "tools" / "segments" / "eolis4_scroll_fight.json").read_text(encoding="utf-8"))
+        seg["frames"] = 40
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / "segment.json").write_text(json.dumps(seg), encoding="utf-8")
+            pads, rom = sb.run_rom(out / "segment.json", out / "rom")
+            p = sb.Port(seg, pads, out / "hatari")
+            port, off = p.trace()
+            k = next(i for i in range(1, len(port)) if port[i]["screen"] != port[i - 1]["screen"])
+            v = port[k - 1]["vbl"] + off
+            caps = p.captures([v + d for d in range(22)], "wait")
+        r = fr.Rom(ROM)
+        seen = []
+        for ram, rows, _ in caps:
+            word = lambda name: int.from_bytes(ram[p.base + p.sym[name]:p.base + p.sym[name] + 2], "big")
+            if word("pending_offset"):
+                break
+            bare = sc.expected_screen(r, 0, 4, word("camera"))
+            far = any(rows[y][x] != bare[y][x] for y in range(200) for x in range(64, 288))
+            near = any(rows[y][x] != bare[y][x] for y in range(200) for x in range(32, 64))
+            seen.append((far, near))
+        self.assertTrue(all(near for _, near in seen), "the hero is on show all the time")
+        first = seen.index((False, True))
+        self.assertGreaterEqual(first, 9, seen)
+        self.assertTrue(all(not far for far, _ in seen[first:]), seen)
+        self.assertGreaterEqual(len(seen) - first, 4, seen)
 
     def test_ripasheiku_flies_shoots_and_dies_as_in_the_rom(self) -> None:
         """Mist screen 51. The port put the boss in step 1 at its placing and the first SWITCH_BEHAVIOR added one more: it fell, then stood and shot from

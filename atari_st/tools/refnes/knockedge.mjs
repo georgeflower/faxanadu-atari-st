@@ -3,7 +3,9 @@
 // every frame until the game is in play again and has stood for a while.
 //   node knockedge.mjs CASES.json OUT.json
 // CASES: [{area, region, screen, x, y, from: "left"|"right"}, ...]; "from" is the side the enemy hits him from (from the left he goes right).
-// A case with "walk": "left"|"right" instead holds that way on the stick for `hold` frames (default 160) and hits him not (the same edges walked to).
+// A case with "walk": "left"|"right"|"up"|"down" instead holds that way on the stick for `hold` frames (default 160) and hits him not (the same edges
+// walked to; up and down climb the ladders of the up-and-down ways, AREA_SCREEN_COMPARATORS). "frames" (default 160) is how long it records.
+// Each frame also has the music, the palette set, the first colours of the PPU's palette and how many pixels of the picture are not the backdrop.
 import {newOutside, BTN} from "./faxanadu.mjs";
 import fs from "fs";
 
@@ -21,15 +23,17 @@ for (const c of cases) {
   clear();
   g.run(1);
   const snap = () => ({x: g.rd("Player_PosX_Block"), y: g.rd("Player_PosY"), area: g.rd("Area_CurrentArea"), screen: g.rd("Area_CurrentScreen"),
-    scroll: g.rd("Screen_ScrollDirection"), flags: g.rd("Player_Flags"), status: g.rd("Player_StatusFlag"), invinc: g.rd("Player_InvincibilityPhase")});
+    scroll: g.rd("Screen_ScrollDirection"), flags: g.rd("Player_Flags"), status: g.rd("Player_StatusFlag"), invinc: g.rd("Player_InvincibilityPhase"),
+    music: g.rd("Music_Current"), palette: g.rd("Screen_PaletteIndex"), ppal: Array.from(g.nes.ppu.vramMem.slice(0x3F00, 0x3F04)),
+    lit: g.pixels ? g.pixels.reduce((n, p) => n + (p !== g.pixels[0] ? 1 : 0), 0) : 0});
   const frames = [snap()];
   // Player_SetDamagedBySprite: 60 frames, he faces the enemy (from the left: he faces left, the flip bit clear), the knock-back bit
-  const pad = c.walk ? (c.walk === "left" ? BTN.LEFT : BTN.RIGHT) : null;
+  const pad = c.walk ? {left: BTN.LEFT, right: BTN.RIGHT, up: BTN.UP, down: BTN.DOWN}[c.walk] : null;
   if (pad === null) {
     g.wr("Player_InvincibilityPhase", 0x3C); g.wr("Player_StatusFlag", g.rd("Player_StatusFlag") | 2);
     g.wr("Player_Flags", (g.rd("Player_Flags") & 0xBF) | (c.from === "left" ? 0 : 0x40));
   } else g.nes.buttonDown(1, pad);
-  for (let i = 0; i < 160; i++) { if (pad !== null && i === (c.hold ?? 160)) g.nes.buttonUp(1, pad); g.run(1); clear(); frames.push(snap()); }
+  for (let i = 0; i < (c.frames ?? 160); i++) { if (pad !== null && i === (c.hold ?? 160)) g.nes.buttonUp(1, pad); g.run(1); clear(); frames.push(snap()); }
   if (pad !== null) g.nes.buttonUp(1, pad);
   results.push({case: c, frames});
   const last = frames[frames.length - 1];

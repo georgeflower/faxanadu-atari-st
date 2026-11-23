@@ -7,7 +7,7 @@
 | the loop), then the pad of byte k replaces what the keys made. Past the end of the stream the pad is 0 and nothing is recorded.
 |
 | A record (big endian): hero x.w, y.w, facing.b (1: right), area.b, screen.b, power.b, magic.b, power fraction.b, experience.w, gold.l;
-| then the 8 enemy slots: entity, x, y, hit points (bytes); then the music.b, the spell's type.b ($FF: none), spell x.b, y.b, the VBL count of the poll.l (frame_count), the hero's x fraction.b, his acceleration.w, 5 bytes of 0.
+| then the 8 enemy slots: entity, x, y, hit points (bytes); then the music.b, the spell's type.b ($FF: none), spell x.b, y.b, the VBL count of the poll.l (frame_count), the hero's x fraction.b, his acceleration.w, the x fractions of slots 6 and 7.b, their y fractions.b, a byte of 0.
 | replay_count (a word) is the number of polls so far.
 
     .equ REPLAY_REC, 64
@@ -118,9 +118,9 @@ replay_step:
     lea enemies(%pc), %a0
     move.b 6*E_BYTES+E_XF(%a0), (%a1)+     | the x fractions of slots 6 and 7 (the slots a screen fills first)
     move.b 7*E_BYTES+E_XF(%a0), (%a1)+
-    moveq #2, %d2
-3:  clr.b (%a1)+
-    dbra %d2, 3b
+    move.b 6*E_BYTES+E_YF(%a0), (%a1)+     | and their y fractions (a scroll's new enemies keep them)
+    move.b 7*E_BYTES+E_YF(%a0), (%a1)+
+    clr.b (%a1)+
     .ifdef REPLAY_HEAL
     lea hud_state(%pc), %a0                 | (a segment's "heal": power under 40 is made 80 after the record, as botplay.mjs does it in the ROM)
     cmpi.b #40, (%a0)

@@ -88,12 +88,16 @@ def door_table(rom: fr.Rom, a: fm.Area, ids: list[int], palette_index: int, worl
 
 def edge_table(rom: fr.Rom, a: fm.Area, ids: list[int], world: dict[int, list[int]]) -> tuple[bytes, list[tuple]]:
     """Walking off a side of a screen that has no neighbour (`fm.edges`): screen, new area, new screen, start position, palette set; only those
-    that lead to an area in `world`."""
+    that lead to an area in `world`. Then the up-and-down ways of the area (`fm.vertical_ways`), the same five bytes with bit 7 set in the area."""
     out, targets = bytearray(), []
     for screen, dest, dest_screen, start, palette in fm.edges(rom, a.index):
         if screen in ids and dest in world and dest_screen in world[dest]:
             out += bytes([ids.index(screen), dest, world[dest].index(dest_screen), start, palette])
             targets.append((dest, palette))
+    for screen, dest_screen, start, palette in fm.vertical_ways(rom, a.index):     # the up-and-down ways (AREA_SCREEN_COMPARATORS): the area with bit 7
+        if screen in ids and dest_screen in ids:
+            out += bytes([ids.index(screen), a.index | 0x80, ids.index(dest_screen), start, palette])
+            targets.append((a.index, palette))
     return bytes(out), targets
 
 

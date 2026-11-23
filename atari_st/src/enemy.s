@@ -71,7 +71,8 @@ enemies_clear:
     movem.l (%sp)+, %d0/%a0
     rts
 
-| The enemies of the screen cur_screen, from the package, in the slots from 7 down (Screen_LoadSpriteInfo, Sprites_PopulateNextAvailableSprite).
+| The enemies of the screen cur_screen, from the package, in the slots from 7 down (Screen_LoadSpriteInfo, Sprites_PopulateNextAvailableSprite). The x and y
+| fractions are not set: a slot keeps what its last enemy left (after a scroll that is the old screen's enemy's, AGENTS.md 5k).
 enemies_load:
     movem.l %d0-%d4/%a0-%a3, -(%sp)
     lea game_start(%pc), %a0
@@ -107,10 +108,8 @@ enemies_load:
     bra.s 2b
 3:  move.b %d0, E_ENT(%a3)
     clr.b E_FLAGS(%a3)
-    move.b %d1, E_X(%a3)
-    clr.b E_XF(%a3)
+    move.b %d1, E_X(%a3)                    | (the fractions of x and y stay what the slot had: Sprites_PopulateNextAvailableSprite does not set them)
     move.b %d2, E_Y(%a3)
-    clr.b E_YF(%a3)
     clr.b E_PHASE(%a3)                      | (Ripasheiku too: the first op, SWITCH_BEHAVIOR, adds one, so its first update is step 1; it used to be put in
     move.b #0xFF, E_BEH(%a3)                | step 1 here as well, and the switch made that 2: it fell, then stood and shot, side by side with the ROM)
     clr.b E_ARG1(%a3)
@@ -2056,17 +2055,16 @@ en_low_bit:
     bcc.s 8f
     move.l %d1, -(%sp)
     move.w cur_screen(%pc), %d1
-    add.w %d1, %d1
-    add.w %d0, %d1
-    lsr.w #1, %d1                           | screen * 2 + 0 or 2: the word
-    add.w %d1, %d1
+    lsl.w #2, %d1                           | screen * 4: its two words (it was screen * 2, the words of another screen from screen 1 on)
+    lsr.w #1, %d0
+    add.w %d0, %d1                          | + 0 or 2: the word
     movea.l pkg_ptr+PKG_SCREEN_LOW(%pc), %a0
     move.w (%a0,%d1.w), %d0
     move.w %d5, %d1
     andi.w #15, %d1
     btst %d1, %d0
+    sne %d0                                 | (before the move: a move sets Z, and the answer was the saved d1's, not zero)
     move.l (%sp)+, %d1
-    sne %d0
     andi.w #1, %d0
     rts
 8:  movea.l pkg_ptr+PKG_BLOCK_FLAGS(%pc), %a0

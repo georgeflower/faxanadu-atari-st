@@ -47,7 +47,7 @@ def decode(trace: bytes) -> list[dict]:
         r = trace[k * REC:(k + 1) * REC]
         d = {"x": int.from_bytes(r[0:2], "big"), "y": int.from_bytes(r[2:4], "big"), "facing": r[4], "area": r[5], "screen": r[6], "hp": r[7], "mp": r[8],
              "hpl": r[9], "exp": int.from_bytes(r[10:12], "big"), "gold": int.from_bytes(r[12:16], "big"), "music": r[48], "spell": r[49],
-             "spell_x": r[50], "spell_y": r[51], "vbl": int.from_bytes(r[52:56], "big"), "xf": r[56], "acc": int.from_bytes(r[57:59], "big"), "s6_xf": r[59], "s7_xf": r[60]}
+             "spell_x": r[50], "spell_y": r[51], "vbl": int.from_bytes(r[52:56], "big"), "xf": r[56], "acc": int.from_bytes(r[57:59], "big"), "s6_xf": r[59], "s7_xf": r[60], "s6_yf": r[61], "s7_yf": r[62]}
         for i in range(8):
             for j, f in enumerate(SLOT_FIELDS):
                 d[f"s{i}_{f}"] = r[16 + i * 4 + j]
@@ -57,12 +57,12 @@ def decode(trace: bytes) -> list[dict]:
 
 # Fields compared, and what is let off: an empty slot's other bytes, the spell's place when there is none; the ROM's music byte is Music_Current, which
 # the ROM clears when a song ends, the port's the song it started (not compared); hpl is the power's fraction (compared).
-COMPARED = ["s6_xf", "s7_xf", "x", "xf", "acc", "y", "facing", "area", "screen", "hp", "mp", "hpl", "exp", "gold", "spell"] + [f"s{i}_{f}" for i in range(8) for f in SLOT_FIELDS]
+COMPARED = ["s6_xf", "s7_xf", "s6_yf", "s7_yf", "x", "xf", "acc", "y", "facing", "area", "screen", "hp", "mp", "hpl", "exp", "gold", "spell"] + [f"s{i}_{f}" for i in range(8) for f in SLOT_FIELDS]
 
 
 def value(rec: dict, field: str):
     if field.startswith("s") and field[1].isdigit():                    # (s6_xf and s7_xf: the fraction of slots 6 and 7, empty or not)
-        if field.endswith("_xf"):
+        if field.endswith("_xf") or field.endswith("_yf"):
             return rec[field]
         slot = field[:2]
         if rec[f"{slot}_ent"] == 255 and not field.endswith("_ent"):
