@@ -269,7 +269,8 @@ start:
     adda.l #START_SCREEN*208, %a5
     move.l %a4, -(%sp)
     movea.l pf_ptr(%pc), %a4
-    bsr.w draw_playfield                    | into the playfield buffer ...
+    bsr.w mattock_restore                   | (nothing to put back at the start; called as draw_playfield did, for the same cycles)
+    bsr.w draw_playfield_start              | into the playfield buffer ...
     movea.l (%sp)+, %a4
     bsr.w set_view
     moveq #0, %d0
@@ -636,13 +637,7 @@ restore_rect:
     lsl.w #3, %d0
     adda.w %d0, %a1
     lea -2*8(%a0,%d0.w), %a0
-5:  move.w %d1, %d0
-6:  move.l (%a0)+, (%a1)+
-    move.l (%a0)+, (%a1)+
-    dbra %d0, 6b
-    adda.w %d6, %a0
-    adda.w %d5, %a1
-    dbra %d3, 5b
+    bsr.w rect_copy
 9:  movem.l (%sp)+, %d0-%d6/%a0-%a3
     rts
 
@@ -2411,44 +2406,24 @@ draw_playfield:
     bsr.w mattock_restore                   | what the Mattock broke in this screen is whole again (items.s)
     movea.l pkg_ptr+PKG_BLOCK_INDEX(%pc), %a2
     movea.l pkg_ptr+PKG_BLOCKS(%pc), %a3
-    moveq #0, %d6                           | window line
-4:  move.w %d6, %d0                         | line of the playfield
-    move.w %d0, %d1
-    lsr.w #4, %d1                           | block row
-    andi.w #15, %d0                         | line inside the block
-    lsl.w #3, %d0                           | * 8 bytes a line
-    move.w %d1, %d2
-    andi.w #1, %d2
-    add.w %d2, %d2                          | the row's half of the corner (bit 1)
-    lsl.w #4, %d1
-    lea (%a5,%d1.w), %a1                    | the block ids of this row
-    move.w %d6, %d3
-    lsl.w #7, %d3                           | * PF_STRIDE
-    lea (%a4,%d3.w), %a0                    | where the line goes
-    moveq #0, %d4                           | block column
-5:  moveq #0, %d5
-    move.b (%a1,%d4.w), %d5                 | block id
-    lsl.w #2, %d5
-    move.w %d4, %d7
-    andi.w #1, %d7
-    or.w %d2, %d7                           | corner: column parity | row parity << 1
-    add.w %d7, %d5
-    add.w %d5, %d5
-    move.w (%a2,%d5.w), %d5                 | image number
-    moveq #0, %d7
-    move.w %d5, %d7
-    lsl.l #7, %d7                           | * 128 bytes
-    add.w %d0, %d7
-    lea (%a3,%d7.l), %a6
-    move.l (%a6)+, (%a0)+
-    move.l (%a6)+, (%a0)+
-    addq.w #1, %d4
-    cmpi.w #16, %d4
-    blt.s 5b
-    addq.w #1, %d6
-    cmpi.w #208, %d6
-    blt 4b
-    rts
+    moveq #0, %d6
+    moveq #13, %d5
+    bra.w pf_rows                           | (blit.s; about 210,000 cycles)
+| The same in two frames (rows 0-6, the VBL, rows 7-12) and a third that waits, for a door: the picture is black, and the door is as long as it was
+| when the whole draw (673,000 cycles) made three frames late.
+draw_playfield_w:
+    bsr.w mattock_restore
+    movea.l pkg_ptr+PKG_BLOCK_INDEX(%pc), %a2
+    movea.l pkg_ptr+PKG_BLOCKS(%pc), %a3
+    moveq #0, %d6
+    moveq #7, %d5
+    bsr.w pf_rows
+    bsr.w wait_vbl
+    moveq #7, %d6
+    moveq #6, %d5
+    bsr.w pf_rows
+    bsr.w wait_vbl
+    bra.w wait_vbl                          | (the old draw took 673,000 cycles and made three frames late: the door keeps its length)
 
 
 | What is on the screen a4 besides the blocks, as it stands (nothing moves while the game stands still, and the ROM's sprites stay on the screen): the boxes of the last drawing in
@@ -2583,24 +2558,18 @@ do_scroll:
     lea scroll_x0(%pc), %a0
     move.w hero_x(%pc), (%a0)+              | where he ran off (241 walking, up to 248 knocked back) and the way he faced
     move.w hero_flip(%pc), (%a0)
-    move.l %a4, -(%sp)
-    movea.l next_ptr(%pc), %a4              | the screen scrolled to, drawn once into its own buffer
-    mulu.w #208, %d0
-    movea.l pkg_ptr+PKG_SCREENS(%pc), %a5
-    adda.l %d0, %a5
-    bsr.w draw_playfield
-    movea.l (%sp)+, %a4
+    bsr.w pf_job_set                        | the screen scrolled to is drawn into next_ptr in the first frames of the wait
     moveq #0, %d0
     bsr.w scroll_wait                       | 14 frames: the enemies' update of this pass, drawn, then the hero alone
     moveq #1, %d7                           | the step: 1 to 16
 2:  move.w %d7, %d0
-    bsr.w scroll_bg_step
+    moveq #0, %d1
+    bsr.w scroll_copy_half
     bsr.w wait_vbl
-    moveq #0, %d0
-    bsr.w copy_window_half
+    move.w %d7, %d0
+    moveq #1, %d1
+    bsr.w scroll_copy_half
     bsr.w wait_vbl
-    moveq #1, %d0
-    bsr.w copy_window_half
     bsr.w wait_vbl
     move.w %d7, %d0
     bsr.w scroll_hero
@@ -2649,6 +2618,8 @@ do_vscroll:
     move.w %d1, (%a0)
     lea scroll_target(%pc), %a0
     move.w %d0, (%a0)
+    lea pf_job+4(%pc), %a0
+    clr.w (%a0)                             | (1: the old playfield is copied to the other region first, in the wait)
     | The playfields in the order the scroll needs: up: the new one at the lower address, down: the old one.
     move.l pf_ptr(%pc), %d2
     move.l next_ptr(%pc), %d3
@@ -2659,20 +2630,10 @@ do_vscroll:
     bra.s 3f
 1:  cmp.l %d3, %d2
     bcs.s 2f                                | down: the old one is the lower: right
-3:  movea.l %d2, %a0                        | on the wrong side: the old one moves to the other region
-    movea.l %d3, %a1
-    bsr.w copy_region
-    lea pf_ptr(%pc), %a0
-    move.l %d3, (%a0)+
-    move.l %d2, (%a0)
-2:  move.l %a4, -(%sp)
-    movea.l next_ptr(%pc), %a4
-    move.w scroll_target(%pc), %d0
-    mulu.w #208, %d0
-    movea.l pkg_ptr+PKG_SCREENS(%pc), %a5
-    adda.l %d0, %a5
-    bsr.w draw_playfield
-    movea.l (%sp)+, %a4
+3:  lea pf_job+4(%pc), %a0                 | on the wrong side: the old one moves to the other region (sw_chunk)
+    move.w #1, (%a0)
+2:  move.w scroll_target(%pc), %d0
+    bsr.w pf_job_set
     move.w vscroll_down(%pc), %d0
     addq.w #1, %d0
     bsr.w scroll_wait                       | 14 frames (1 up, 2 down): his y on the new screen, the enemies' update of this pass, drawn, then no sprites
@@ -2741,59 +2702,98 @@ do_vscroll:
     movem.l (%sp)+, %d0-%d7/%a0-%a3/%a5-%a6
     rts
 
-| a0 = the playfield to copy, a1 = where to (a whole region of 208 lines). Clobbers d0, a0-a1.
-copy_region:
-    move.w #(REGION_BYTES/16)-1, %d0
-1:  move.l (%a0)+, (%a1)+
-    move.l (%a0)+, (%a1)+
-    move.l (%a0)+, (%a1)+
-    move.l (%a0)+, (%a1)+
-    dbra %d0, 1b
+| d0 = the screen scrolled to: its block ids into pf_job (what the Mattock broke in it put back first); sw_chunk draws it into next_ptr in the
+| first frames of the scroll's wait (drawn at once it took 673,000 cycles, four frames, three of them late). Clobbers d0, a0, a5.
+pf_job_set:
+    mulu.w #208, %d0
+    movea.l pkg_ptr+PKG_SCREENS(%pc), %a5
+    adda.l %d0, %a5
+    bsr.w mattock_restore                   | (items.s)
+    lea pf_job(%pc), %a0
+    move.l %a5, (%a0)
     rts
 
-| d0 = the step (1-16): the clean background moves 16 pixels towards the screen it scrolls from, and the next group of the new screen
-| comes in at the other end.
-scroll_bg_step:
-    movem.l %d0-%d2/%d7/%a0-%a3, -(%sp)
-    move.w camera(%pc), %d2                 | the window's lines of the playfield: the others are not needed (the new playfield replaces it)
-    mulu.w #PF_STRIDE, %d2
+| A piece of the scroll's preparation in frame d7 = 8 (the first) down to 0 of scroll_wait's wait: frames 8 and 7 copy half the old playfield each to the other
+| region when pf_job+4 says so (up and down, the old one on the wrong side; then the two change places), frames 6, 5 and 4 draw rows 0-4, 5-8 and 9-12
+| of the screen scrolled to into next_ptr. Keeps every register.
+sw_chunk:
+    movem.l %d0-%d7/%a0-%a6, -(%sp)
+    move.l pf_job(%pc), %d0
+    beq.w 8f
+    cmpi.w #6, %d7
+    bgt.s 5f
+    movea.l pf_job(%pc), %a5
+    movea.l next_ptr(%pc), %a4
+    movea.l pkg_ptr+PKG_BLOCK_INDEX(%pc), %a2
+    movea.l pkg_ptr+PKG_BLOCKS(%pc), %a3
+    moveq #6, %d0
+    sub.w %d7, %d0                          | 0, 1, 2
+    moveq #4, %d5
+    move.w %d0, %d6
+    lsl.w #2, %d6
+    addq.w #1, %d6                          | rows 5 and 9 ...
+    tst.w %d0
+    bne.s 1f
+    moveq #5, %d5                           | ... and 0 to 4
+    moveq #0, %d6
+1:  move.w %d0, -(%sp)
+    bsr.w pf_rows
+    cmpi.w #2, (%sp)+
+    bne.s 8f
+    lea pf_job(%pc), %a0
+    clr.l (%a0)                             | done
+    bra.s 8f
+5:  lea pf_job+4(%pc), %a2
+    tst.w (%a2)
+    beq.s 8f
+    movea.l pf_ptr(%pc), %a0
+    movea.l next_ptr(%pc), %a1
+    cmpi.w #8, %d7
+    beq.s 6f
+    lea REGION_BYTES/2(%a0), %a0
+    lea REGION_BYTES/2(%a1), %a1
+6:  move.w #(REGION_BYTES/64)-1, %d0                | half the region
+7:  .rept 8
+    move.l (%a0)+, (%a1)+
+    .endr
+    dbra %d0, 7b
+    cmpi.w #8, %d7
+    beq.s 8f
+    clr.w (%a2)
+    bsr.w swap_playfields                   | the copy is the old playfield now, and its old place takes the new one
+8:  movem.l (%sp)+, %d0-%d7/%a0-%a6
+    rts
+
+| d0 = the step (1-16), d1 = the half of the window (0 top, 1 bottom): the window in screen a4 as the picture stands after the step, from the old playfield
+| (pf_ptr, moved 16 pixels a step) and the new one (next_ptr) side by side (copy_two). Keeps every register.
+scroll_copy_half:
+    movem.l %d0-%d3/%a0-%a3/%a5, -(%sp)
+    move.w camera(%pc), %d2
+    tst.w %d1
+    beq.s 1f
+    addi.w #WINDOW_LINES/2, %d2
+1:  mulu.w #PF_STRIDE, %d2
     movea.l pf_ptr(%pc), %a0
     adda.l %d2, %a0
-    movea.l next_ptr(%pc), %a1
-    adda.l %d2, %a1
-    move.w #WINDOW_LINES-1, %d7
-    move.w scroll_dir(%pc), %d1
-    beq.s 4f
-    move.w %d0, %d2                         | to the right: group m-1 of the new screen comes in at the right
-    subq.w #1, %d2
-    lsl.w #3, %d2
-1:  lea 8(%a0), %a2
-    movea.l %a0, %a3
-    .rept 30
-    move.l (%a2)+, (%a3)+
-    .endr
-    lea (%a1,%d2.w), %a2
-    move.l (%a2)+, (%a3)+
-    move.l (%a2)+, (%a3)+
-    lea PF_STRIDE(%a0), %a0
-    lea PF_STRIDE(%a1), %a1
-    dbra %d7, 1b
-    bra.s 9f
-4:  moveq #16, %d2                          | to the left: group 16-m of the new screen comes in at the left
+    movea.l next_ptr(%pc), %a2
+    adda.l %d2, %a2
+    lea WIN_TOP*STRIDE+LEFT_BYTES(%a4), %a1
+    tst.w %d1
+    beq.s 2f
+    adda.l #(WINDOW_LINES/2)*STRIDE, %a1
+2:  lsl.w #3, %d0                           | 8 m bytes have moved
+    move.w #PF_STRIDE, %d2
     sub.w %d0, %d2
-    lsl.w #3, %d2
-5:  lea 120(%a0), %a2                       | the groups move one place to the right, from the right
-    lea 128(%a0), %a3
-    .rept 30
-    move.l -(%a2), -(%a3)
-    .endr
-    lea (%a1,%d2.w), %a2
-    move.l (%a2)+, (%a0)
-    move.l (%a2)+, 4(%a0)
-    lea PF_STRIDE(%a0), %a0
-    lea PF_STRIDE(%a1), %a1
-    dbra %d7, 5b
-9:  movem.l (%sp)+, %d0-%d2/%d7/%a0-%a3
+    move.w scroll_dir(%pc), %d1
+    beq.s 3f
+    adda.w %d0, %a0                         | to the right: the old one from byte 8 m, then the new one from its start
+    bra.s 4f
+3:  exg %a0, %a2                            | to the left: the new one from byte 128 - 8 m, then the old one from its start
+    adda.w %d2, %a0
+    move.w %d0, %d2
+4:  lsr.w #2, %d2                           | the longs from a0
+    bsr.w copy_two
+    movem.l (%sp)+, %d0-%d3/%a0-%a3/%a5
     rts
 
 | d0 = 0: the top half of the window (100 lines), 1: the bottom half: copied from view_src (the window's first line in the playfield, or
@@ -3044,7 +3044,7 @@ enter_screen:
     mulu.w #208, %d3
     movea.l pkg_ptr+PKG_SCREENS(%pc), %a5
     adda.l %d3, %a5
-    bsr.w draw_playfield
+    bsr.w draw_playfield_w                  | (in two frames: the picture is black)
     movea.l (%sp)+, %a4
     lea camera(%pc), %a0                    | the camera for where he stands (the start camera's rule)
     move.w hero_y(%pc), %d1
@@ -3395,6 +3395,145 @@ hud_load_state:
 
     .section .text.early,"ax"
 early_base:                                 | the start of .text.early (tools/check_reach.py), where town.s and splash68.s put their code
+| ---- The playfield and the window (src/viewer.s: draw_playfield, sw_chunk, scroll_copy_half; first in .text.early: in .text.late
+| they pushed .rodata out of the reach of .text, and after the early code that calls into .text they pushed .text out of its reach; here everything moves together) ----
+| Rows of a screen's blocks into a playfield, a block at a time (16 lines of 8 bytes, two a turn): a5 = the screen's block ids (16 to a row), a4 = the playfield,
+| a2 = the package's block index (a word for each block id and corner), a3 = the block images (128 bytes each), d6 = the first row, d5 = how many (1 to 13).
+| Clobbers d0-d7, a0-a1, a6.
+pf_rows:
+    move.w %d6, %d0
+    lsl.w #4, %d0
+    lea (%a5,%d0.w), %a1                    | the row's block ids
+    move.w %d6, %d0
+    lsl.w #8, %d0
+    lsl.w #3, %d0                           | * 16 lines * PF_STRIDE
+    lea (%a4,%d0.w), %a0
+    subq.w #1, %d5
+1:  move.w %d6, %d2
+    andi.w #1, %d2
+    add.w %d2, %d2                          | the row's half of the corner (bit 1); bit 0, the column's parity, changes from block to block
+    moveq #15, %d7
+2:  moveq #0, %d0
+    move.b (%a1)+, %d0                      | block id
+    lsl.w #2, %d0
+    add.w %d2, %d0
+    add.w %d0, %d0
+    moveq #0, %d1
+    move.w (%a2,%d0.w), %d1                 | image number
+    lsl.l #7, %d1
+    lea (%a3,%d1.l), %a6
+    moveq #7, %d4
+3:  move.l (%a6)+, (%a0)+                   | two lines a turn
+    move.l (%a6)+, (%a0)
+    move.l (%a6)+, PF_STRIDE-4(%a0)
+    move.l (%a6)+, PF_STRIDE(%a0)
+    lea 2*PF_STRIDE-4(%a0), %a0
+    dbra %d4, 3b
+    lea 8-16*PF_STRIDE(%a0), %a0
+    eori.w #1, %d2
+    dbra %d7, 2b
+    lea 15*PF_STRIDE(%a0), %a0              | the next row of blocks
+    addq.w #1, %d6
+    dbra %d5, 1b
+    rts
+
+| The start-up's first picture, drawn line by line as draw_playfield did it before pf_rows: 673,000 cycles
+| where pf_rows takes 211,000. It is kept for the start-up alone, where nobody waits for it, so that a program started in Hatari reaches its frame
+| loop at the same VBL as before and the tests that capture at fixed VBLs see the same pictures. a5 = the block ids, a4 = the playfield. Clobbers d0-d7, a0-a3, a6.
+draw_playfield_start:
+    movea.l pkg_ptr+PKG_BLOCK_INDEX(%pc), %a2
+    movea.l pkg_ptr+PKG_BLOCKS(%pc), %a3
+    moveq #0, %d6                           | window line
+4:  move.w %d6, %d0                         | line of the playfield
+    move.w %d0, %d1
+    lsr.w #4, %d1                           | block row
+    andi.w #15, %d0                         | line inside the block
+    lsl.w #3, %d0                           | * 8 bytes a line
+    move.w %d1, %d2
+    andi.w #1, %d2
+    add.w %d2, %d2                          | the row's half of the corner (bit 1)
+    lsl.w #4, %d1
+    lea (%a5,%d1.w), %a1                    | the block ids of this row
+    move.w %d6, %d3
+    lsl.w #7, %d3                           | * PF_STRIDE
+    lea (%a4,%d3.w), %a0                    | where the line goes
+    moveq #0, %d4                           | block column
+5:  moveq #0, %d5
+    move.b (%a1,%d4.w), %d5                 | block id
+    lsl.w #2, %d5
+    move.w %d4, %d7
+    andi.w #1, %d7
+    or.w %d2, %d7                           | corner: column parity | row parity << 1
+    add.w %d7, %d5
+    add.w %d5, %d5
+    move.w (%a2,%d5.w), %d5                 | image number
+    moveq #0, %d7
+    move.w %d5, %d7
+    lsl.l #7, %d7                           | * 128 bytes
+    add.w %d0, %d7
+    lea (%a3,%d7.l), %a6
+    move.l (%a6)+, (%a0)+
+    move.l (%a6)+, (%a0)+
+    addq.w #1, %d4
+    cmpi.w #16, %d4
+    blt.s 5b
+    addq.w #1, %d6
+    cmpi.w #208, %d6
+    blt 4b
+    rts
+
+| restore_rect's copy: d3 + 1 lines of d1 + 1 groups (1 to 17) from a0 to a1, d6 and d5 added to them after each line; the groups of a line are an unrolled
+| run of moves entered by a jump (a loop over the groups cost a dbra each). Clobbers d0, d3, a0-a2.
+rect_copy:
+    move.w %d1, %d0
+    addq.w #1, %d0
+    lsl.w #2, %d0                           | two moves of 2 bytes a group
+    lea 9f(%pc), %a2
+    suba.w %d0, %a2
+1:  jmp (%a2)
+    .rept 17
+    move.l (%a0)+, (%a1)+
+    move.l (%a0)+, (%a1)+
+    .endr
+9:  adda.w %d6, %a0
+    adda.w %d5, %a1
+    dbra %d3, 1b
+    rts
+
+| Half the window (WINDOW_LINES/2 lines) from two playfields side by side, for the sideways scroll: each line is d2 longs from a0 and 32 - d2 from a2, into a1
+| (a screen line: the margins are not touched). a0 and a2 step PF_STRIDE a line, a1 STRIDE. (This replaced shifting the playfield by a group in place every
+| step, 141,000 cycles in one frame.) Clobbers d0-d3, a0-a3, a5.
+copy_two:
+    move.w %d2, %d0
+    add.w %d0, %d0                          | the bytes of code of the moves from a0 (a move is 2 bytes)
+    lea 10f(%pc), %a3
+    suba.w %d0, %a3
+    moveq #64, %d1
+    sub.w %d0, %d1
+    lea 20f(%pc), %a5
+    suba.w %d1, %a5
+    move.w #PF_STRIDE, %d3
+    add.w %d0, %d0                          | 4 * d2: what a0 moves in a line
+    move.w %d3, %d1
+    sub.w %d0, %d1                          | what a2 moves in a line
+    sub.w %d1, %d3                          | PF_STRIDE - that: a2's step after its moves
+    neg.w %d0
+    addi.w #PF_STRIDE, %d0                  | a0's step after its moves
+    move.w #(WINDOW_LINES/2)-1, %d2
+1:  jmp (%a3)
+    .rept PF_STRIDE/4
+    move.l (%a0)+, (%a1)+
+    .endr
+10: jmp (%a5)
+    .rept PF_STRIDE/4
+    move.l (%a2)+, (%a1)+
+    .endr
+20: adda.w %d0, %a0
+    adda.w %d3, %a2
+    lea STRIDE-PF_STRIDE(%a1), %a1
+    dbra %d2, 1b
+    rts
+
     .text
     .include "hud.s"
     .include "frame.s"
@@ -3798,6 +3937,9 @@ camera_hold:
     .word 1                                 | camera_follow waits until the hero has left his start position (a test's CAMERA may not suit it)
 cut_until:
     .long 0                                 | vert_leave: the VBL (frame_count) until which the picture stays black, 0 none (cut_wait)
+pf_job:
+    .long 0                                 | the block ids of the screen a scroll goes to while sw_chunk draws it in the wait (0: nothing to draw)
+    .word 0                                 | 1: first copy the old playfield to the other region (up and down)
 hud_states:                                 | last in .data, next to the code: the start-up code and the menus reach these from either end of .text
     .incbin "hud_states.bin"
 title_table:                                | PLAYER_TITLE_EXP_NEEDED (15 words), PLAYER_TITLE_GOLD (15 words)
@@ -3822,8 +3964,9 @@ stack_end:
 | blocks into the screen buffer (Area_LoadScrollData, 7 to 12 frames), then the sprites have this pass's update (Sprites_UpdateAll) against those blocks, one
 | update only, and are drawn; two frames later the sprites are gone (to the side the hero stays; up and down nothing is drawn) and the new screen's enemies are
 | put in the slots, which keep their x and y fractions (enemies_load). The picture moves about 8 frames after that (to the side; up and down later).
-| Here: the update at once (this pass's buttons, the blocks of the screen scrolled to), then the scroll's 14 frames: frames 1 to 9 the last picture, the
-| picture with the update in frames 10 and 11, then the hero alone (to the side) or no sprites (up and down) from frame 12. The main loop gives the new screen's enemies no update
+| Here: the update at once (this pass's buttons, the blocks of the screen scrolled to), then the scroll's frames: three idle ones (four when the old playfield
+| is copied first: the frames the old preparation made late, AGENTS.md 5i, Timing), nine more with the last picture, the picture with the update in the next
+| two, then the hero alone (to the side) or no sprites (up and down). The main loop gives the new screen's enemies no update
 | in this pass (pass_enemies). d0 = 0 to the side, 1 up, 2 down (his y is the new screen's at once, $C0 or 0, as the ROM sets it before the update).
 | Keeps every register.
 scroll_wait:
@@ -3846,9 +3989,19 @@ scroll_wait:
     lea cur_screen(%pc), %a0
     move.w %d5, (%a0)
     .endif
-    moveq #9-1, %d7
+    lea pf_job(%pc), %a0                    | the frames the old preparation made late (the next screen drawn at once, 673,000 cycles; up and down
+    tst.l (%a0)                             | often a copy of the old playfield first, 150,000): waited for without a poll, so that the scroll keeps
+    beq.s 31f                               | its length and every picture comes at the VBL it came at before
+    moveq #3-1, %d7
+    tst.w 4(%a0)
+    beq.s 30f
+    moveq #4-1, %d7
+30: bsr.w wait_vbl
+    dbra %d7, 30b
+31: moveq #9-1, %d7
 2:  bsr.w wait_vbl
     bsr.w sw_poll
+    bsr.w sw_chunk                          | (the screen scrolled to is drawn in frames 3 to 5, after the copy of the old one in 1 and 2 when there is one)
     dbra %d7, 2b
     bsr.w mattock_sprites                   | the last drawing in this screen put back, the people, the enemies and the hero drawn
     bsr.w present_swap                      | on show in frames 10 and 11

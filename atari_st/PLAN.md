@@ -81,7 +81,7 @@ The numbers are the order I intend to work in. A step is done when its tests pas
 
 ## Cross-cutting work
 
-- **Cycle budget** (rule 5) DONE (`AGENTS.md` 5i, `tools/profile_scene.py`): since `en_blit` none of the 68 enemy scenes is over a frame (the dearest 143,700 of 160,256); a scroll step peaks at 141,100.
+- **Cycle budget** (rule 5) DONE (`AGENTS.md` 5i, `tools/profile_scene.py`, `tests/test_cycles.py`): since `en_blit` none of the 68 enemy scenes is over a frame, and since 27 Nov 2026 none has a late frame: a scroll's dearest frame is 84,600 (it was 141,100 a step and three late frames at its start), a door has none (three), `draw_playfield` is 211,000 (673,000). The dearest passes left are Mist 64 (157,800) and Mist 38 (160,060, sprites behind the background): only the sprite blitter itself is left to make cheaper there (5i).
 - **Tests**: golden pictures (frame hashes) per screen and state, golden runs per behaviour, unit tests for decoders; `make check` runs all of it in a few minutes. Needs `TOS` (an EmuTOS image) and the ROM.
 - **Harness gaps** DONE: enemies (`enemyprobe.mjs`, `combatprobe.mjs`), shops and scripts (`iscriptprobe.mjs`), the title (`splashgolden.mjs`).
 - **Europe versus US**: whenever a table from banks 5, 12 or 13 is used, read it from the Europe ROM, not from the US offsets.

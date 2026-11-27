@@ -111,6 +111,7 @@ def main() -> None:
     parser.add_argument("--poke", action="append", default=[], help="VBL:KIND:VALUE")
     parser.add_argument("--top", type=int, default=14)
     parser.add_argument("--per-call", action="store_true", help="a table of the cost of one call (for a scroll, which has no passes of the frame loop)")
+    parser.add_argument("--frames", action="store_true", help="the busy cycles of every piece (with --step 1: of every frame), the dearest first")
     parser.add_argument("--name", default="shots_profile")
     parser.add_argument("make_args", nargs="*")
     args = parser.parse_args()
@@ -136,6 +137,13 @@ def main() -> None:
             s[1] += inc
             s[2] += exc
     print(f"passes {passes_total} in {end - start} VBLs, late frames {late[-1] - late[0]}")
+    if args.frames:
+        busy = [(p["total"] - p["routines"].get("wait_vbl", [0, 0, 0])[2], start + i * args.step,
+                 p["routines"].get("input_poll", [0])[0] + p["routines"].get("input_poll_game", [0])[0]) for i, p in enumerate(pieces)]
+        print(f"dearest pieces of {args.step} VBL(s) (busy cycles, VBL): " + ", ".join(f"{b:,} @{v}" for b, v, _ in sorted(busy, reverse=True)[:args.top]))
+        one = [b for b, _, n in busy if n == 1]
+        if one:
+            print(f"dearest piece with one pass of the loop: {max(one):,}")
     if busy_per_pass:
         mean = busy_total / max(passes_total, 1)
         print(f"busy cycles a pass over the window: {mean:,.0f} ({mean / FRAME * 100:.0f}% of a frame of {FRAME:,}); over {args.step} VBLs at a time: " + " ".join(f"{b:,.0f}" for b in busy_per_pass))
